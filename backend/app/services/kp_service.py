@@ -1,25 +1,68 @@
-"""Kp index service — live NOAA planetary K-index."""
+"""Kp index service — DB-backed reads with Redis cache and live fallback."""
 from datetime import datetime
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.cache import cache_get_json, cache_set_json
 from app.collectors.collect_kp import fetch_kp_json, parse_kp
+from app.models.timeseries import KpIndex
 from app.processing.geomag_scale import kp_storm_scale
-from app.schemas.geomagnetic_schema import KpPoint, KpLatest
+from app.repositories.timeseries_repo import (
+    safe_query_latest,
+    safe_query_range,
+    safe_upsert,
+)
+from app.schemas.geomagnetic_schema import KpLatest, KpPoint
+
+SOURCE = "noaa-swpc"
+_LATEST_TTL = 60
+_RANGE_TTL = 300
 
 
-async def get_kp(start: datetime, end: datetime) -> list[KpPoint]:
+async def fetch_live_records() -> list[dict]:
+    """Live NOAA Kp records ({time, kp}); the feed already is one row per time."""
     raw = await fetch_kp_json()
-    rows = parse_kp(raw)
-    return [
+    return parse_kp(raw)
+
+
+async def collect_recent_records() -> list[dict]:
+    return await fetch_live_records()
+
+
+async def get_kp(db: AsyncSession, start: datetime, end: datetime) -> list[KpPoint]:
+    key = f"geomag:kp:range:{start.isoformat()}:{end.isoformat()}"
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return [KpPoint.model_validate(d) for d in cached]
+
+    records = await safe_query_range(db, KpIndex, start, end)
+    if not records:
+        live = await fetch_live_records()
+        await safe_upsert(db, KpIndex, live, SOURCE)
+        records = [r for r in live if start <= r["time"] <= end]
+
+    points = [
         KpPoint(time=r["time"], kp=r["kp"])
-        for r in rows
-        if start <= r["time"] <= end
+        for r in sorted(records, key=lambda r: r["time"])
     ]
+    await cache_set_json(key, [p.model_dump(mode="json") for p in points], _RANGE_TTL)
+    return points
 
 
-async def get_kp_latest() -> KpLatest:
-    raw = await fetch_kp_json()
-    rows = parse_kp(raw)
-    if not rows:
+async def get_kp_latest(db: AsyncSession) -> KpLatest:
+    key = "geomag:kp:latest"
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return KpLatest.model_validate(cached)
+
+    row = await safe_query_latest(db, KpIndex)
+    if row is None:
+        live = await fetch_live_records()
+        await safe_upsert(db, KpIndex, live, SOURCE)
+        row = max(live, key=lambda r: r["time"]) if live else None
+    if row is None:
         return KpLatest()
-    last = max(rows, key=lambda r: r["time"])
-    return KpLatest(time=last["time"], kp=last["kp"], g_scale=kp_storm_scale(last["kp"]))
+
+    resp = KpLatest(time=row["time"], kp=row["kp"], g_scale=kp_storm_scale(row["kp"]))
+    await cache_set_json(key, resp.model_dump(mode="json"), _LATEST_TTL)
+    return resp

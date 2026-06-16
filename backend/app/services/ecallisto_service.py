@@ -14,17 +14,26 @@ from app.processing.dynamic_spectrum import process_fits
 from app.collectors.collect_ecallisto import (
     FitsFile,
     list_day_files,
+    files_for_station,
     latest_file_for_station,
     file_covering,
+    stations_on,
     download_fits,
+    fetch_fits_bytes,
 )
 from app.collectors.collect_burst_list import (
     BurstEvent,
+    fetch_burst_list_text,
+    parse_burst_list,
     get_latest_burst_events as fetch_latest_burst_events,
 )
 from app.schemas.radio_schema import (
     RadioStationResponse,
     RadioSpectrumResponse,
+    RadioArchiveStation,
+    RadioArchiveStationsResponse,
+    RadioArchiveFile,
+    RadioArchiveFilesResponse,
     BurstEventSummary,
     BurstEventsResponse,
     BurstSpectrumResponse,
@@ -42,9 +51,14 @@ _STATIONS: list[RadioStationResponse] = [
     RadioStationResponse(id="HUMAIN", name="Humain", location="Belgium", freq_min_mhz=45.0, freq_max_mhz=870.0, active=True),
 ]
 
+# Station ids we have catalog metadata for (the archive lists many more stations).
+_KNOWN_STATION_IDS = {s.id for s in _STATIONS}
+
 # Cached burst-event resolution (so /latest and /spectrum agree on indexing).
 _resolved_events: list["_ResolvedBurst"] = []
 _resolved_date: date | None = None
+# Same, keyed by explicit date for the archive (so list/spectrum agree per date).
+_resolved_by_date: dict[date, list["_ResolvedBurst"]] = {}
 
 # Processed-spectrum metadata cache, keyed by output PNG name (avoids re-downloading
 # a FITS file just to re-read its header once the PNG is already rendered).
@@ -81,6 +95,21 @@ def _cache_name(fits_filename: str) -> str:
 
 def _spectrum_url(image_filename: str) -> str:
     return f"/api/radio/spectra/{image_filename}"
+
+
+def _spectrum_response(
+    station: str, meta: dict, fits_filename: str | None = None
+) -> RadioSpectrumResponse:
+    return RadioSpectrumResponse(
+        station=station,
+        start_time=meta["start_time"],
+        end_time=meta["end_time"],
+        freq_min_mhz=meta["freq_min_mhz"],
+        freq_max_mhz=meta["freq_max_mhz"],
+        image_url=_spectrum_url(meta["image_filename"]),
+        processing_method=meta["processing_method"],
+        fits_filename=fits_filename,
+    )
 
 
 def process_fits_file(fits_path: Path, station: str) -> RadioSpectrumResponse:
@@ -163,58 +192,44 @@ def _candidates_for(event: BurstEvent, files: list[FitsFile]) -> list[tuple[str,
     return out
 
 
-async def get_latest_burst_events() -> BurstEventsResponse:
-    global _resolved_events, _resolved_date
-
-    latest_date, events = await fetch_latest_burst_events()
-    if latest_date is None:
-        _resolved_events, _resolved_date = [], None
-        return BurstEventsResponse()
-
+async def _resolve_events(d: date, events: list[BurstEvent]) -> list[_ResolvedBurst]:
+    """Pair each burst with the archive FITS candidates that can render it, and
+    cache the result by date so the list and the per-burst spectrum stay aligned."""
     try:
-        files = await list_day_files(latest_date)
+        files = await list_day_files(d)
     except Exception:
         files = []
+    resolved = [_ResolvedBurst(event=ev, candidates=_candidates_for(ev, files)) for ev in events]
+    _resolved_by_date[d] = resolved
+    return resolved
 
-    resolved: list[_ResolvedBurst] = []
-    summaries: list[BurstEventSummary] = []
-    for i, ev in enumerate(events):
-        rb = _ResolvedBurst(event=ev, candidates=_candidates_for(ev, files))
-        resolved.append(rb)
-        summaries.append(
-            BurstEventSummary(
-                index=i,
-                date=latest_date.isoformat(),
-                start=ev.start.strftime("%H:%M"),
-                end=ev.end.strftime("%H:%M"),
-                burst_type=ev.type,
-                stations=ev.stations,
-                station_used=rb.station_used,
-                has_fits=rb.has_fits,
-            )
+
+def _summarize(d: date, resolved: list[_ResolvedBurst]) -> BurstEventsResponse:
+    summaries = [
+        BurstEventSummary(
+            index=i,
+            date=d.isoformat(),
+            start=rb.event.start.strftime("%H:%M"),
+            end=rb.event.end.strftime("%H:%M"),
+            burst_type=rb.event.type,
+            stations=rb.event.stations,
+            station_used=rb.station_used,
+            has_fits=rb.has_fits,
         )
-
-    _resolved_events, _resolved_date = resolved, latest_date
-    sri_count = sum(1 for r in resolved if SRI_LANKA in r.event.stations)
+        for i, rb in enumerate(resolved)
+    ]
+    sri_count = sum(1 for rb in resolved if SRI_LANKA in rb.event.stations)
     return BurstEventsResponse(
-        date=latest_date.isoformat(),
-        count=len(summaries),
-        sri_lanka_count=sri_count,
-        events=summaries,
+        date=d.isoformat(), count=len(summaries), sri_lanka_count=sri_count, events=summaries
     )
 
 
-async def get_burst_spectrum(index: int) -> BurstSpectrumResponse | None:
-    # Resolve the event list if the cache is empty (e.g. first call after restart).
-    if not _resolved_events:
-        await get_latest_burst_events()
-    if index < 0 or index >= len(_resolved_events):
+async def _spectrum_from(resolved: list[_ResolvedBurst], index: int) -> BurstSpectrumResponse | None:
+    if index < 0 or index >= len(resolved):
         return None
-
-    rb = _resolved_events[index]
+    rb = resolved[index]
     if not rb.candidates:
         return None
-
     ev = rb.event
     # Try Sri Lanka first, falling back to other stations if a file is unreadable.
     for station, fits in rb.candidates:
@@ -236,5 +251,110 @@ async def get_burst_spectrum(index: int) -> BurstSpectrumResponse | None:
             freq_max_mhz=meta["freq_max_mhz"],
             image_url=_spectrum_url(meta["image_filename"]),
             processing_method=meta["processing_method"],
+            fits_filename=fits.filename,
         )
     return None
+
+
+# Latest burst list (used by the live solar-radio page).
+async def get_latest_burst_events() -> BurstEventsResponse:
+    global _resolved_events, _resolved_date
+
+    latest_date, events = await fetch_latest_burst_events()
+    if latest_date is None:
+        _resolved_events, _resolved_date = [], None
+        return BurstEventsResponse()
+
+    resolved = await _resolve_events(latest_date, events)
+    _resolved_events, _resolved_date = resolved, latest_date
+    return _summarize(latest_date, resolved)
+
+
+async def get_burst_spectrum(index: int) -> BurstSpectrumResponse | None:
+    # Resolve the event list if the cache is empty (e.g. first call after restart).
+    if not _resolved_events:
+        await get_latest_burst_events()
+    return await _spectrum_from(_resolved_events, index)
+
+
+# ─── Archive: explicit date + station ───────────────────────────────────────
+
+
+async def list_archive_stations(d: date) -> RadioArchiveStationsResponse:
+    """Stations that have data in the archive on a given UTC date."""
+    try:
+        files = await list_day_files(d)
+    except Exception:
+        files = []
+    stations = [
+        RadioArchiveStation(id=sid, has_metadata=sid in _KNOWN_STATION_IDS)
+        for sid in sorted(stations_on(files))
+    ]
+    return RadioArchiveStationsResponse(date=d.isoformat(), stations=stations)
+
+
+async def list_archive_files(d: date, station: str) -> RadioArchiveFilesResponse:
+    """The ~15-minute FITS segments available for a station on a given date."""
+    try:
+        files = await list_day_files(d)
+    except Exception:
+        files = []
+    sf = files_for_station(files, station)
+    return RadioArchiveFilesResponse(
+        date=d.isoformat(),
+        station=station,
+        files=[RadioArchiveFile(filename=f.filename, start_time=f.start) for f in sf],
+    )
+
+
+async def get_archive_spectrum(
+    d: date, station: str, filename: str | None
+) -> RadioSpectrumResponse | None:
+    """Render a dynamic spectrum for a station on a date. Without ``filename`` the
+    latest segment of the day is used."""
+    try:
+        files = await list_day_files(d)
+    except Exception:
+        return None
+    sf = files_for_station(files, station)
+    if not sf:
+        return None
+    target = next((f for f in sf if f.filename == filename), None) if filename else sf[-1]
+    if target is None:
+        return None
+    meta = await _render_archive_file(target)
+    return _spectrum_response(station, meta, fits_filename=target.filename)
+
+
+async def get_archive_fits(d: date, station: str, filename: str) -> tuple[bytes, str] | None:
+    """Raw .fit.gz bytes for a specific archive file, for client download."""
+    try:
+        files = await list_day_files(d)
+    except Exception:
+        return None
+    target = next(
+        (f for f in files_for_station(files, station) if f.filename == filename), None
+    )
+    if target is None:
+        return None
+    content = await fetch_fits_bytes(target.url)
+    return content, target.filename
+
+
+async def get_burst_events_for_date(d: date) -> BurstEventsResponse:
+    """Burst list for a specific UTC date (archive view)."""
+    try:
+        text = await fetch_burst_list_text(d.year, d.month)
+    except Exception:
+        return BurstEventsResponse(date=d.isoformat())
+    events = sorted((e for e in parse_burst_list(text) if e.date == d), key=lambda e: e.start)
+    resolved = await _resolve_events(d, events)
+    return _summarize(d, resolved)
+
+
+async def get_burst_spectrum_for_date(d: date, index: int) -> BurstSpectrumResponse | None:
+    resolved = _resolved_by_date.get(d)
+    if resolved is None:
+        await get_burst_events_for_date(d)
+        resolved = _resolved_by_date.get(d, [])
+    return await _spectrum_from(resolved, index)

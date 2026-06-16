@@ -39,3 +39,31 @@ def parse_goes_proton(raw: list[dict]) -> list[dict]:
         except (KeyError, ValueError):
             continue
     return out
+
+
+# Exact NOAA energy labels (avoid substring collisions like ">=10" in ">=100 MeV").
+_GT10 = ">=10 MeV"
+_GT50 = ">=50 MeV"
+_GT100 = ">=100 MeV"
+
+
+def records_from_raw(raw: list[dict]) -> list[dict]:
+    """Collapse the per-channel NOAA rows into one record per timestamp. Keys match
+    the ``goes_proton`` table. Ascending by time."""
+    buckets: dict[datetime, dict] = {}
+    for r in parse_goes_proton(raw):
+        t = r["time"]
+        b = buckets.setdefault(
+            t,
+            {"time": t, "satellite": None, "flux_gt10": None, "flux_gt50": None, "flux_gt100": None},
+        )
+        if b["satellite"] is None and r.get("satellite") is not None:
+            b["satellite"] = r["satellite"]
+        energy = r.get("energy", "")
+        if energy == _GT10:
+            b["flux_gt10"] = r["flux"]
+        elif energy == _GT50:
+            b["flux_gt50"] = r["flux"]
+        elif energy == _GT100:
+            b["flux_gt100"] = r["flux"]
+    return sorted(buckets.values(), key=lambda d: d["time"])

@@ -19,6 +19,28 @@ class RadioSpectrumResponse(BaseModel):
     freq_max_mhz: float
     image_url: str
     processing_method: str
+    fits_filename: str | None = None  # source archive file, for raw download
+
+
+class RadioArchiveStation(BaseModel):
+    id: str
+    has_metadata: bool = False   # True if this station is in the known station catalog
+
+
+class RadioArchiveStationsResponse(BaseModel):
+    date: str
+    stations: list[RadioArchiveStation] = []
+
+
+class RadioArchiveFile(BaseModel):
+    filename: str
+    start_time: datetime
+
+
+class RadioArchiveFilesResponse(BaseModel):
+    date: str
+    station: str
+    files: list[RadioArchiveFile] = []
 
 
 class BurstCandidateResponse(BaseModel):
@@ -64,3 +86,4 @@ class BurstSpectrumResponse(BaseModel):
     freq_max_mhz: float
     image_url: str
     processing_method: str
+    fits_filename: str | None = None  # source archive file, for raw download

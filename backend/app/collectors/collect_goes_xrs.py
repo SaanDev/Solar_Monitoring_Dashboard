@@ -40,3 +40,28 @@ def parse_goes_xrs(raw: list[dict]) -> list[dict]:
         except (KeyError, ValueError):
             continue
     return out
+
+
+# NOAA energy labels for the two XRS channels.
+_SHORT = "0.05-0.4nm"  # XRS-A (0.5-4 Angstrom)
+_LONG = "0.1-0.8nm"    # XRS-B (1-8 Angstrom, used for flare class)
+
+
+def records_from_raw(raw: list[dict]) -> list[dict]:
+    """Collapse the per-energy NOAA rows into one record per timestamp, with the
+    two channels as columns. Keys match the ``goes_xrs`` table. Ascending by time.
+    """
+    buckets: dict[datetime, dict] = {}
+    for r in parse_goes_xrs(raw):
+        t = r["time"]
+        b = buckets.setdefault(
+            t, {"time": t, "satellite": None, "short_channel": None, "long_channel": None}
+        )
+        if b["satellite"] is None and r.get("satellite") is not None:
+            b["satellite"] = r["satellite"]
+        energy = r.get("energy", "")
+        if energy == _SHORT:
+            b["short_channel"] = r["flux"]
+        elif energy == _LONG:
+            b["long_channel"] = r["flux"]
+    return sorted(buckets.values(), key=lambda d: d["time"])

@@ -122,6 +122,29 @@ export interface LascoMovie {
   timestamp: string;
 }
 
+export interface SolarArchiveImage {
+  id: string;
+  source: string;
+  instrument: string;
+  measurement: string;
+  label: string;
+  source_id: number;
+  supports_events: boolean;
+  time: string | null;
+  image_url: string;
+  png_download_url: string;
+  jp2_download_url: string;
+  fits_available: boolean;
+  fts_download_url: string | null;
+}
+
+export interface SolarArchiveResponse {
+  date: string;
+  time: string;
+  with_events: boolean;
+  images: SolarArchiveImage[];
+}
+
 // ─── Radio ───────────────────────────────────────────────────────────────────
 
 export interface RadioStation {
@@ -141,6 +164,28 @@ export interface RadioSpectrum {
   freq_max_mhz: number;
   image_url: string;
   processing_method: string;
+  fits_filename: string | null;
+}
+
+export interface RadioArchiveStation {
+  id: string;
+  has_metadata: boolean;
+}
+
+export interface RadioArchiveStationsResponse {
+  date: string;
+  stations: RadioArchiveStation[];
+}
+
+export interface RadioArchiveFile {
+  filename: string;
+  start_time: string;
+}
+
+export interface RadioArchiveFilesResponse {
+  date: string;
+  station: string;
+  files: RadioArchiveFile[];
 }
 
 export interface BurstEventSummary {
@@ -175,6 +220,7 @@ export interface BurstSpectrum {
   freq_max_mhz: number;
   image_url: string;
   processing_method: string;
+  fits_filename: string | null;
 }
 
 export interface BurstCandidate {

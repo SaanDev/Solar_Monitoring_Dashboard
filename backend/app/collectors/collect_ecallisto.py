@@ -83,11 +83,16 @@ def file_covering(files: list[FitsFile], station: str, target: datetime) -> Fits
     return min(sf, key=lambda f: abs((f.start - target).total_seconds()))
 
 
-async def download_fits(url: str) -> Path:
+async def fetch_fits_bytes(url: str) -> bytes:
+    """Raw .fit.gz content from the archive (used for client downloads)."""
     async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
         r = await client.get(url)
         r.raise_for_status()
-        content = r.content
+        return r.content
+
+
+async def download_fits(url: str) -> Path:
+    content = await fetch_fits_bytes(url)
     tmp = tempfile.NamedTemporaryFile(suffix=".fit.gz", delete=False)
     tmp.write(content)
     tmp.close()

@@ -1,9 +1,26 @@
-"""Dst index service — live Kyoto WDC real-time hourly Dst."""
-from datetime import datetime
+"""Dst index service — DB-backed reads with Redis cache and live fallback.
 
+Live source is Kyoto WDC's real-time (quicklook) Dst, so stored rows are tagged
+``kyoto-wdc`` to keep their provisional provenance explicit.
+"""
+from datetime import datetime, timezone
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.cache import cache_get_json, cache_set_json
 from app.collectors.collect_dst import fetch_dst_month, parse_dst
+from app.models.timeseries import DstIndex
 from app.processing.geomag_scale import dst_storm_level
-from app.schemas.geomagnetic_schema import DstPoint, DstLatest
+from app.repositories.timeseries_repo import (
+    safe_query_latest,
+    safe_query_range,
+    safe_upsert,
+)
+from app.schemas.geomagnetic_schema import DstLatest, DstPoint
+
+SOURCE = "kyoto-wdc"
+_LATEST_TTL = 60
+_RANGE_TTL = 300
 
 
 def _months_in_range(start: datetime, end: datetime) -> list[tuple[int, int]]:
@@ -17,7 +34,8 @@ def _months_in_range(start: datetime, end: datetime) -> list[tuple[int, int]]:
     return months
 
 
-async def _fetch_rows(start: datetime, end: datetime) -> list[dict]:
+async def _fetch_records(start: datetime, end: datetime) -> list[dict]:
+    """Live Kyoto records ({time, dst}) across the months spanning [start, end]."""
     rows: list[dict] = []
     for year, month in _months_in_range(start, end):
         try:
@@ -28,22 +46,46 @@ async def _fetch_rows(start: datetime, end: datetime) -> list[dict]:
     return rows
 
 
-async def get_dst(start: datetime, end: datetime) -> list[DstPoint]:
-    rows = await _fetch_rows(start, end)
-    return [
+async def collect_recent_records() -> list[dict]:
+    # The current month always contains the most recent hourly value.
+    now = datetime.now(timezone.utc)
+    return await _fetch_records(now.replace(day=1), now)
+
+
+async def get_dst(db: AsyncSession, start: datetime, end: datetime) -> list[DstPoint]:
+    key = f"geomag:dst:range:{start.isoformat()}:{end.isoformat()}"
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return [DstPoint.model_validate(d) for d in cached]
+
+    records = await safe_query_range(db, DstIndex, start, end)
+    if not records:
+        live = await _fetch_records(start, end)
+        await safe_upsert(db, DstIndex, live, SOURCE)
+        records = [r for r in live if start <= r["time"] <= end]
+
+    points = [
         DstPoint(time=r["time"], dst=r["dst"])
-        for r in sorted(rows, key=lambda r: r["time"])
-        if start <= r["time"] <= end
+        for r in sorted(records, key=lambda r: r["time"])
     ]
+    await cache_set_json(key, [p.model_dump(mode="json") for p in points], _RANGE_TTL)
+    return points
 
 
-async def get_dst_latest() -> DstLatest:
-    # The present month always contains the most recent hourly value.
-    now = datetime.utcnow()
-    rows = await _fetch_rows(now.replace(day=1), now)
-    if not rows:
+async def get_dst_latest(db: AsyncSession) -> DstLatest:
+    key = "geomag:dst:latest"
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return DstLatest.model_validate(cached)
+
+    row = await safe_query_latest(db, DstIndex)
+    if row is None:
+        live = await collect_recent_records()
+        await safe_upsert(db, DstIndex, live, SOURCE)
+        row = max(live, key=lambda r: r["time"]) if live else None
+    if row is None:
         return DstLatest()
-    last = max(rows, key=lambda r: r["time"])
-    return DstLatest(
-        time=last["time"], dst=last["dst"], storm_level=dst_storm_level(last["dst"])
-    )
+
+    resp = DstLatest(time=row["time"], dst=row["dst"], storm_level=dst_storm_level(row["dst"]))
+    await cache_set_json(key, resp.model_dump(mode="json"), _LATEST_TTL)
+    return resp

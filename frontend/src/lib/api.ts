@@ -12,8 +12,11 @@ import type {
   DstLatest,
   SolarImage,
   LascoMovie,
+  SolarArchiveResponse,
   RadioStation,
   RadioSpectrum,
+  RadioArchiveStationsResponse,
+  RadioArchiveFilesResponse,
   BurstEventsResponse,
   BurstSpectrum,
   Alert,
@@ -50,6 +53,10 @@ export const api = {
   dstLatest: () => get<DstLatest>("/api/geomagnetic/dst/latest"),
 
   solarImagesLatest: () => get<SolarImage[]>("/api/solar/images/latest"),
+  solarArchiveImages: (date: string, events: boolean, time = "12:00") =>
+    get<SolarArchiveResponse>(
+      `/api/solar/archive/images?date=${date}&time=${time}&events=${events}`
+    ),
   solarImages: (source: string, instrument: string, wavelength: string) =>
     get<SolarImage[]>(
       `/api/solar/images?source=${source}&instrument=${instrument}&wavelength=${wavelength}`
@@ -65,6 +72,23 @@ export const api = {
   burstsLatest: () => get<BurstEventsResponse>("/api/radio/bursts/latest"),
   burstSpectrum: (index: number) =>
     get<BurstSpectrum>(`/api/radio/bursts/${index}/spectrum`),
+
+  // Archive — browse e-CALLISTO by date + station
+  radioArchiveStations: (date: string) =>
+    get<RadioArchiveStationsResponse>(`/api/radio/archive/stations?date=${date}`),
+  radioArchiveFiles: (date: string, station: string) =>
+    get<RadioArchiveFilesResponse>(
+      `/api/radio/archive/files?date=${date}&station=${encodeURIComponent(station)}`
+    ),
+  radioArchiveSpectrum: (date: string, station: string, filename?: string) =>
+    get<RadioSpectrum>(
+      `/api/radio/archive/spectrum?date=${date}&station=${encodeURIComponent(station)}` +
+        (filename ? `&filename=${encodeURIComponent(filename)}` : "")
+    ),
+  radioBurstsByDate: (date: string) =>
+    get<BurstEventsResponse>(`/api/radio/bursts?date=${date}`),
+  radioBurstSpectrumByDate: (date: string, index: number) =>
+    get<BurstSpectrum>(`/api/radio/bursts/spectrum?date=${date}&index=${index}`),
 
   alertsLatest: () => get<Alert[]>("/api/alerts/latest"),
   events: (start: string, end: string) =>

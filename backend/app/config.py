@@ -16,12 +16,17 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://swdash:swdash@localhost:5432/swdash"
     redis_url: str = "redis://localhost:6379/0"
 
+    # Run the background ingestion scheduler on startup. Disable in tests/CI.
+    enable_scheduler: bool = True
+
     # Subdirectories are derived from data_dir (see properties below) so a single
     # DATA_DIR controls all file storage.
     data_dir: str = _DEFAULT_DATA_DIR
 
     noaa_base_url: str = "https://services.swpc.noaa.gov"
     helioviewer_base_url: str = "https://api.helioviewer.org"
+    # JSOC synoptic FITS archives (SDO/AIA + SDO/HMI) for raw downloads.
+    jsoc_base_url: str = "http://jsoc.stanford.edu"
 
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
