@@ -4,7 +4,7 @@ import useSWR from "swr";
 import { api } from "@/lib/api";
 import { formatUtcShort } from "@/lib/formatting";
 
-function LascoMovie({ camera }: { camera: "C2" | "C3" }) {
+export function LascoMovie({ camera }: { camera: "C2" | "C3" }) {
   const { data, isLoading } = useSWR(
     `lasco-movie-${camera}`,
     () => api.lascoMovie(camera),

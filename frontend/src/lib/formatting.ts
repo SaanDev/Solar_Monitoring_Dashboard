@@ -16,6 +16,16 @@ export function formatUtcShort(iso: string): string {
   return d.toISOString().slice(0, 19).replace("T", " ") + " UTC";
 }
 
+/**
+ * A rolling UTC [start, end] window ending "now", `hours` wide, as ISO strings.
+ * Computed at call time so the window advances on each SWR refresh.
+ */
+export function windowFor(hours: number): { start: string; end: string } {
+  const now = Date.now();
+  const iso = (ms: number) => new Date(ms).toISOString().slice(0, 19) + "Z";
+  return { start: iso(now - hours * 3600 * 1000), end: iso(now) };
+}
+
 export function flareClass(flux: number | null): string {
   if (flux === null) return "—";
   if (flux >= 1e-4) return "X" + (flux / 1e-4).toFixed(1);

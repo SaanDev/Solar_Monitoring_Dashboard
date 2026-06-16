@@ -2,26 +2,62 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Theme tokens as space-separated RGB channels so Tailwind can apply opacity
+ * via rgb(var(--x) / <alpha-value>). The `.dark` values reproduce the original
+ * dark palette exactly; `:root` (light) inverts the slate text scale so the
+ * same `text-slate-*` utilities stay legible on light surfaces.
+ */
 :root {
-  --bg: #0f1117;
-  --surface: #161b27;
-  --border: #1e2535;
-  --text: #e2e8f0;
-  --text-muted: #64748b;
+  color-scheme: light;
+
+  --surface: 241 245 249;        /* page bg  (slate-100) */
+  --surface-card: 255 255 255;   /* cards */
+  --surface-border: 226 232 240; /* slate-200 */
+  --surface-muted: 241 245 249;  /* slate-100 */
+
+  /* Slate scale inverted for light backgrounds (low = dark text). */
+  --slate-50: 15 23 42;
+  --slate-100: 30 41 59;
+  --slate-200: 30 41 59;
+  --slate-300: 51 65 85;
+  --slate-400: 71 85 105;
+  --slate-500: 100 116 139;
+  --slate-600: 100 116 139;
+  --slate-700: 148 163 184;
+  --slate-800: 203 213 225;
+  --slate-900: 226 232 240;
+  --slate-950: 241 245 249;
 }
 
-html {
+.dark {
   color-scheme: dark;
+
+  --surface: 15 17 23;        /* #0f1117 */
+  --surface-card: 22 27 39;   /* #161b27 */
+  --surface-border: 30 37 53; /* #1e2535 */
+  --surface-muted: 26 32 48;  /* #1a2030 */
+
+  /* Identity to Tailwind's slate scale (original dark look). */
+  --slate-50: 248 250 252;
+  --slate-100: 241 245 249;
+  --slate-200: 226 232 240;
+  --slate-300: 203 213 225;
+  --slate-400: 148 163 184;
+  --slate-500: 100 116 139;
+  --slate-600: 71 85 105;
+  --slate-700: 51 65 85;
+  --slate-800: 30 41 59;
+  --slate-900: 15 23 42;
+  --slate-950: 2 6 23;
 }
 
 body {
-  background-color: var(--bg);
-  color: var(--text);
   font-family: "Inter", system-ui, sans-serif;
 }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: var(--bg); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #2d3748; }
+::-webkit-scrollbar-track { background: rgb(var(--surface)); }
+::-webkit-scrollbar-thumb { background: rgb(var(--surface-border)); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--slate-700)); }
