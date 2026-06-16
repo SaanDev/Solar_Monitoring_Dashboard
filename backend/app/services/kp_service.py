@@ -1,10 +1,10 @@
 """Kp index service — DB-backed reads with Redis cache and live fallback."""
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cache import cache_get_json, cache_set_json
-from app.collectors.collect_kp import fetch_kp_json, parse_kp
+from app.collectors.collect_kp import fetch_kp_gfz, fetch_kp_json, parse_kp
 from app.models.timeseries import KpIndex
 from app.processing.geomag_scale import kp_storm_scale
 from app.repositories.timeseries_repo import (
@@ -17,6 +17,9 @@ from app.schemas.geomagnetic_schema import KpLatest, KpPoint
 SOURCE = "noaa-swpc"
 _LATEST_TTL = 60
 _RANGE_TTL = 300
+# Ranges reaching further back than this use the GFZ historical archive
+# (NOAA's live feed only covers recent days).
+_HISTORICAL_DAYS = 7
 
 
 async def fetch_live_records() -> list[dict]:
@@ -36,7 +39,18 @@ async def get_kp(db: AsyncSession, start: datetime, end: datetime) -> list[KpPoi
         return [KpPoint.model_validate(d) for d in cached]
 
     records = await safe_query_range(db, KpIndex, start, end)
-    if not records:
+    now = datetime.now(timezone.utc)
+    if start < now - timedelta(days=_HISTORICAL_DAYS):
+        # Historical range — GFZ covers the full record (the DB only holds the
+        # recent NOAA ingest). Served on demand (Redis-cached), not persisted,
+        # to avoid mixing GFZ + NOAA provenance under one source tag.
+        try:
+            live = await fetch_kp_gfz(start, end)
+        except Exception:
+            live = []
+        if live:
+            records = [r for r in live if start <= r["time"] <= end]
+    elif not records:
         live = await fetch_live_records()
         await safe_upsert(db, KpIndex, live, SOURCE)
         records = [r for r in live if start <= r["time"] <= end]

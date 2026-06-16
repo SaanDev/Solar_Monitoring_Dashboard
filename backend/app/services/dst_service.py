@@ -3,7 +3,7 @@
 Live source is Kyoto WDC's real-time (quicklook) Dst, so stored rows are tagged
 ``kyoto-wdc`` to keep their provisional provenance explicit.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,9 @@ from app.schemas.geomagnetic_schema import DstLatest, DstPoint
 SOURCE = "kyoto-wdc"
 _LATEST_TTL = 60
 _RANGE_TTL = 300
+# Ranges reaching further back than this re-fetch from Kyoto (final/provisional
+# tiers) so historical months are filled, not just the recently ingested data.
+_HISTORICAL_DAYS = 7
 
 
 def _months_in_range(start: datetime, end: datetime) -> list[tuple[int, int]]:
@@ -59,10 +62,15 @@ async def get_dst(db: AsyncSession, start: datetime, end: datetime) -> list[DstP
         return [DstPoint.model_validate(d) for d in cached]
 
     records = await safe_query_range(db, DstIndex, start, end)
-    if not records:
+    now = datetime.now(timezone.utc)
+    # Re-fetch from Kyoto when the range is historical (DB holds only recent
+    # ingest) or when the DB has nothing for it. Dst is single-source, so the
+    # fetched months are safe to persist for next time.
+    if start < now - timedelta(days=_HISTORICAL_DAYS) or not records:
         live = await _fetch_records(start, end)
-        await safe_upsert(db, DstIndex, live, SOURCE)
-        records = [r for r in live if start <= r["time"] <= end]
+        if live:
+            await safe_upsert(db, DstIndex, live, SOURCE)
+            records = [r for r in live if start <= r["time"] <= end]
 
     points = [
         DstPoint(time=r["time"], dst=r["dst"])

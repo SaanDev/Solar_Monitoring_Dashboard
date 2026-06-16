@@ -9,6 +9,7 @@ import { api } from "@/lib/api";
 import { DynamicSpectrumPanel } from "@/components/radio/DynamicSpectrumPanel";
 import { SolarArchive } from "./SolarArchive";
 import { XrayProtonArchive } from "./XrayProtonArchive";
+import { GeomagneticArchive } from "./GeomagneticArchive";
 import { formatUtcShort } from "@/lib/formatting";
 import type { BurstEventSummary } from "@/lib/types";
 
@@ -42,7 +43,7 @@ const INSTRUMENTS = [
   { key: "radio", label: "Radio Bursts (e-CALLISTO)", enabled: true },
   { key: "solar", label: "Solar Images", enabled: true },
   { key: "xray", label: "X-ray / Proton", enabled: true },
-  { key: "geomag", label: "Geomagnetic", enabled: false },
+  { key: "geomag", label: "Geomagnetic", enabled: true },
 ] as const;
 
 function utcDateOffset(days: number): string {
@@ -80,16 +81,20 @@ export function ArchiveClient() {
           ))}
         </div>
 
-        <label className="flex items-center gap-2 text-xs text-slate-500">
-          Date (UTC)
-          <input
-            type="date"
-            value={date}
-            max={utcDateOffset(0)}
-            onChange={(e) => setDate(e.target.value)}
-            className="rounded border border-surface-border bg-surface-muted px-2 py-1 text-xs text-slate-300 outline-none focus:border-accent-blue"
-          />
-        </label>
+        {/* Single-date picker for instruments keyed to one day; the geomagnetic
+            tab uses its own From/To date-range controls instead. */}
+        {instrument !== "geomag" && (
+          <label className="flex items-center gap-2 text-xs text-slate-500">
+            Date (UTC)
+            <input
+              type="date"
+              value={date}
+              max={utcDateOffset(0)}
+              onChange={(e) => setDate(e.target.value)}
+              className="rounded border border-surface-border bg-surface-muted px-2 py-1 text-xs text-slate-300 outline-none focus:border-accent-blue"
+            />
+          </label>
+        )}
       </div>
 
       {instrument === "radio" ? (
@@ -98,6 +103,8 @@ export function ArchiveClient() {
         <SolarArchive date={date} />
       ) : instrument === "xray" ? (
         <XrayProtonArchive date={date} />
+      ) : instrument === "geomag" ? (
+        <GeomagneticArchive date={date} />
       ) : (
         <div className="flex h-64 items-center justify-center rounded-lg border border-surface-border bg-surface-card text-sm text-slate-600">
           This instrument archive is coming soon.

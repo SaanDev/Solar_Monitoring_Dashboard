@@ -13,19 +13,44 @@ import httpx
 
 from app.config import settings
 
-_BASE = "https://wdc.kugi.kyoto-u.ac.jp/dst_realtime"
-# Matches "DST" + yy + mm + marker + dd, e.g. "DST2606*01" or "DST260601"
-_LINE_RE = re.compile(r"^DST(\d{2})(\d{2}).?(\d{2})RRX")
+_ROOT = "https://wdc.kugi.kyoto-u.ac.jp"
+# Kyoto serves Dst in three quality tiers (same WDC text format): real-time
+# quicklook (current months), provisional (recent past), final (older, definitive).
+_TIERS = ("dst_realtime", "dst_provisional", "dst_final")
+# Matches "DST" + yy + mm + marker + dd. The version field after the day differs
+# by tier (real-time "RRX020", final "  X220"), so we don't constrain it here; the
+# fixed 16-char header is skipped during parsing and the 25-number check rejects junk.
+_LINE_RE = re.compile(r"^DST(\d{2})(\d{2}).?(\d{2})")
 _MISSING = {9999, 99999, -9999}
 
 
-async def fetch_dst_month(year: int, month: int) -> str:
+def _dst_tiers_for(year: int, month: int) -> tuple[str, ...]:
+    """Order tiers by likelihood for the month's age: recent → real-time first,
+    older → final first. All tiers are tried as a fallback regardless."""
+    now = datetime.now(timezone.utc)
+    age_months = (now.year * 12 + now.month) - (year * 12 + month)
+    if age_months <= 2:
+        return ("dst_realtime", "dst_provisional", "dst_final")
+    return ("dst_final", "dst_provisional", "dst_realtime")
+
+
+def _dst_url(tier: str, year: int, month: int) -> str:
     yymm = f"{year % 100:02d}{month:02d}"
-    url = f"{_BASE}/{year}{month:02d}/dst{yymm}.for.request"
+    return f"{_ROOT}/{tier}/{year}{month:02d}/dst{yymm}.for.request"
+
+
+async def fetch_dst_month(year: int, month: int) -> str:
+    """Fetch a month of Dst, trying quality tiers until one returns WDC data."""
     async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(url)
-        r.raise_for_status()
-        return r.text
+        for tier in _dst_tiers_for(year, month):
+            try:
+                r = await client.get(_dst_url(tier, year, month))
+                r.raise_for_status()
+                if r.text.lstrip().startswith("DST"):  # valid WDC-format content
+                    return r.text
+            except Exception:
+                continue
+    raise RuntimeError(f"No Dst data available for {year}-{month:02d}")
 
 
 def parse_dst(text: str) -> list[dict]:

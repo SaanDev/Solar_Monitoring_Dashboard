@@ -34,3 +34,33 @@ def parse_kp(raw: list[dict]) -> list[dict]:
         except (KeyError, ValueError, TypeError):
             continue
     return out
+
+
+# ─── Historical Kp from GFZ Potsdam (full record since 1932) ─────────────────
+# JSON service: /app/json/?start=...&end=...&index=Kp
+# -> {"datetime": [ISO...], "Kp": [float...], "status": [...]}, interval-start times.
+
+
+def parse_kp_gfz(data: dict) -> list[dict]:
+    out: list[dict] = []
+    for dt, kp in zip(data.get("datetime", []), data.get("Kp", [])):
+        try:
+            ts = datetime.fromisoformat(str(dt).replace("Z", "+00:00"))
+            out.append({"time": ts, "kp": float(kp)})
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
+async def fetch_kp_gfz(start: datetime, end: datetime) -> list[dict]:
+    """Historical Kp records ({time, kp}) from GFZ for an arbitrary date range."""
+    params = {
+        "start": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "end": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "index": "Kp",
+    }
+    url = f"{settings.gfz_base_url}/app/json/"
+    async with httpx.AsyncClient(timeout=40, follow_redirects=True) as client:
+        r = await client.get(url, params=params)
+        r.raise_for_status()
+        return parse_kp_gfz(r.json())

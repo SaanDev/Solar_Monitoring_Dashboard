@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     helioviewer_base_url: str = "https://api.helioviewer.org"
     # JSOC synoptic FITS archives (SDO/AIA + SDO/HMI) for raw downloads.
     jsoc_base_url: str = "http://jsoc.stanford.edu"
+    # GFZ — historical Kp index (full record since 1932).
+    gfz_base_url: str = "https://kp.gfz.de"
 
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
