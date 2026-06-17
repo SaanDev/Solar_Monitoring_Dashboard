@@ -10,4 +10,7 @@ class SummaryLatest(BaseModel):
     kp_index: float | None = None
     dst_index: float | None = None
     solar_wind_speed: float | None = None
+    sunspot_number: float | None = None
+    imf_bz: float | None = None
+    imf_bt: float | None = None
     active_alerts: int = 0

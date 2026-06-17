@@ -28,6 +28,9 @@ export interface SummaryLatest {
   kp_index: number | null;
   dst_index: number | null;
   solar_wind_speed: number | null;
+  sunspot_number: number | null;
+  imf_bz: number | null;
+  imf_bt: number | null;
   active_alerts: number;
 }
 
@@ -248,9 +251,76 @@ export interface Alert {
 export interface SpaceWeatherEvent {
   id: string;
   type: string;
+  severity: string | null;
   start_time: string;
   end_time: string | null;
+  peak_time: string | null;
+  peak_value: number | null;
   description: string;
   related_event_ids: string[];
   source_url: string | null;
+}
+
+// ─── e-CALLISTO Analyzer ───────────────────────────────────────────────────────
+
+export type BgMethod = "mean" | "median" | "robust";
+export type IntensityUnit = "digits" | "db";
+export type TimeUnit = "seconds" | "utc";
+export type CombineMode = "time" | "frequency";
+
+export interface AnalyzerSession {
+  id: string;
+  station: string;
+  filename: string;
+  n_freq: number;
+  n_time: number;
+  freq_min_mhz: number;
+  freq_max_mhz: number;
+  start_time: string | null;
+  end_time: string | null;
+  duration_s: number;
+}
+
+export interface AnalyzerStats {
+  data_min: number;
+  data_max: number;
+  vmin: number;
+  vmax: number;
+}
+
+export interface AnalyzerOptions {
+  colormaps: string[];
+  methods: BgMethod[];
+  intensity_units: IntensityUnit[];
+  time_units: TimeUnit[];
+}
+
+export interface RenderParams {
+  method: BgMethod;
+  intensity_unit: IntensityUnit;
+  time_unit: TimeUnit;
+  cmap: string;
+  vmin: number | null;
+  vmax: number | null;
+  rfi_enabled: boolean;
+  rfi_low: number;
+  rfi_high: number;
+  station: string;
+}
+
+export interface ProjectSettings {
+  method: BgMethod;
+  intensity_unit: IntensityUnit;
+  time_unit: TimeUnit;
+  cmap: string;
+  vmin: number | null;
+  vmax: number | null;
+  rfi_enabled: boolean;
+  rfi_low: number;
+  rfi_high: number;
+}
+
+export interface ProjectOpenResponse {
+  session: AnalyzerSession;
+  settings: ProjectSettings;
 }

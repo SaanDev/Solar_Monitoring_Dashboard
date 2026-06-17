@@ -14,6 +14,7 @@ from app.api.routes_geomagnetic import router as geomagnetic_router
 from app.api.routes_solar_images import router as solar_router
 from app.api.routes_radio import router as radio_router
 from app.api.routes_alerts import router as alerts_router
+from app.api.routes_analyzer import router as analyzer_router
 
 logger = logging.getLogger(__name__)
 
@@ -60,3 +61,4 @@ app.include_router(geomagnetic_router)
 app.include_router(solar_router)
 app.include_router(radio_router)
 app.include_router(alerts_router)
+app.include_router(analyzer_router)

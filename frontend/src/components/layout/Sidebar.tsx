@@ -13,6 +13,7 @@ import {
   Bell,
   Archive,
   Settings,
+  SlidersHorizontal,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -23,6 +24,7 @@ import type { SummaryLatest } from "@/lib/types";
 const NAV = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
   { href: "/solar-radio", label: "Solar Radio", icon: Radio },
+  { href: "/e-callisto-analyzer", label: "e-CALLISTO Analyzer", icon: SlidersHorizontal },
   { href: "/solar-images", label: "Solar Images", icon: Image },
   { href: "/xray-proton", label: "X-ray & Proton", icon: Activity },
   { href: "/coronagraph", label: "Coronagraph", icon: Telescope },
@@ -90,13 +92,13 @@ export function Sidebar() {
 }
 
 function QuickLook({ summary }: { summary?: SummaryLatest }) {
-  const wind =
-    summary?.solar_wind_speed != null ? `${summary.solar_wind_speed} km/s` : "—";
+  const num = (v: number | null | undefined, unit: string, digits = 0) =>
+    v != null ? `${v.toFixed(digits)}${unit}` : "—";
   const rows: [string, string][] = [
-    ["Sunspot Number", "—"],
-    ["Solar Wind Speed", wind],
-    ["IMF Bz", "—"],
-    ["IMF Bt", "—"],
+    ["Sunspot Number", num(summary?.sunspot_number, "", 0)],
+    ["Solar Wind Speed", num(summary?.solar_wind_speed, " km/s", 0)],
+    ["IMF Bz", num(summary?.imf_bz, " nT", 1)],
+    ["IMF Bt", num(summary?.imf_bt, " nT", 1)],
   ];
   const updated = summary?.timestamp
     ? new Date(summary.timestamp).toISOString().slice(11, 16) + " UTC"

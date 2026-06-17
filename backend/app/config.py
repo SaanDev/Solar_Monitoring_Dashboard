@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     jsoc_base_url: str = "http://jsoc.stanford.edu"
     # GFZ — historical Kp index (full record since 1932).
     gfz_base_url: str = "https://kp.gfz.de"
+    # SILSO (SIDC, Royal Observatory of Belgium) — daily estimated sunspot number.
+    silso_base_url: str = "https://www.sidc.be"
 
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
@@ -49,11 +51,22 @@ class Settings(BaseSettings):
         return str(Path(self.data_dir) / "lasco")
 
     @property
+    def analyzer_dir(self) -> str:
+        # Uploaded / archive-imported FITS for the interactive e-CALLISTO Analyzer.
+        return str(Path(self.data_dir) / "analyzer")
+
+    @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",")]
 
     def ensure_dirs(self) -> None:
-        for d in (self.fits_dir, self.spectra_dir, self.solar_images_dir, self.lasco_dir):
+        for d in (
+            self.fits_dir,
+            self.spectra_dir,
+            self.solar_images_dir,
+            self.lasco_dir,
+            self.analyzer_dir,
+        ):
             Path(d).mkdir(parents=True, exist_ok=True)
 
 

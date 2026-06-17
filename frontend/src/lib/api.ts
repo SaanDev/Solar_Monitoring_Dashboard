@@ -21,9 +21,20 @@ import type {
   BurstSpectrum,
   Alert,
   SpaceWeatherEvent,
+  AnalyzerSession,
+  AnalyzerStats,
+  AnalyzerOptions,
+  RenderParams,
+  CombineMode,
+  ProjectOpenResponse,
 } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+/** Absolute URL for a backend path (for <img src> / <a href> to backend assets). */
+export function apiUrl(path: string): string {
+  return `${BASE}${path}`;
+}
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { cache: "no-store" });
@@ -31,6 +42,36 @@ async function get<T>(path: string): Promise<T> {
     throw new Error(`API error ${res.status}: ${path}`);
   }
   return res.json() as Promise<T>;
+}
+
+async function postForm<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, { method: "POST", body: form });
+  if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
+  return res.json() as Promise<T>;
+}
+
+async function postNoBody<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, { method: "POST" });
+  if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
+  return res.json() as Promise<T>;
+}
+
+/** Query string shared by /render and /export (vmin/vmax omitted when null). */
+function analyzerQuery(id: string, p: RenderParams): string {
+  const q = new URLSearchParams({
+    id,
+    method: p.method,
+    intensity_unit: p.intensity_unit,
+    time_unit: p.time_unit,
+    cmap: p.cmap,
+    rfi_enabled: String(p.rfi_enabled),
+    rfi_low: String(p.rfi_low),
+    rfi_high: String(p.rfi_high),
+    station: p.station ?? "",
+  });
+  if (p.vmin != null) q.set("vmin", String(p.vmin));
+  if (p.vmax != null) q.set("vmax", String(p.vmax));
+  return q.toString();
 }
 
 export const api = {
@@ -93,4 +134,40 @@ export const api = {
   alertsLatest: () => get<Alert[]>("/api/alerts/latest"),
   events: (start: string, end: string) =>
     get<SpaceWeatherEvent[]>(`/api/events?start=${start}&end=${end}`),
+
+  // e-CALLISTO Analyzer
+  analyzerOptions: () => get<AnalyzerOptions>("/api/analyzer/colormaps"),
+  analyzerUpload: (file: File, station: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("station", station);
+    return postForm<AnalyzerSession>("/api/analyzer/upload", form);
+  },
+  analyzerFromArchive: (date: string, station: string, filename: string) =>
+    postNoBody<AnalyzerSession>(
+      `/api/analyzer/from-archive?date=${date}&station=${encodeURIComponent(
+        station
+      )}&filename=${encodeURIComponent(filename)}`
+    ),
+  analyzerCombine: (ids: string[], mode: CombineMode) => {
+    const q = new URLSearchParams({ mode });
+    ids.forEach((id) => q.append("ids", id));
+    return postNoBody<AnalyzerSession>(`/api/analyzer/combine?${q.toString()}`);
+  },
+  analyzerStats: (id: string, p: RenderParams) =>
+    get<AnalyzerStats>(
+      `/api/analyzer/stats?id=${id}&method=${p.method}&intensity_unit=${p.intensity_unit}` +
+        `&rfi_enabled=${p.rfi_enabled}&rfi_low=${p.rfi_low}&rfi_high=${p.rfi_high}`
+    ),
+  analyzerRenderUrl: (id: string, p: RenderParams) =>
+    apiUrl(`/api/analyzer/render?${analyzerQuery(id, p)}`),
+  analyzerExportUrl: (id: string, p: RenderParams, format: "png" | "fits") =>
+    apiUrl(`/api/analyzer/export?${analyzerQuery(id, p)}&format=${format}`),
+  analyzerProjectUrl: (id: string, p: RenderParams) =>
+    apiUrl(`/api/analyzer/project?${analyzerQuery(id, p)}`),
+  analyzerOpenProject: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return postForm<ProjectOpenResponse>("/api/analyzer/open-project", form);
+  },
 };

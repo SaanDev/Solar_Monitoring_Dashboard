@@ -9,6 +9,9 @@ from app.services.goes_xrs_service import get_goes_xrs_latest
 from app.services.goes_proton_service import get_goes_proton_latest
 from app.services.kp_service import get_kp_latest
 from app.services.dst_service import get_dst_latest
+from app.services.event_service import get_latest_alerts
+from app.services.solar_wind_service import get_solar_wind_latest
+from app.services.sunspot_service import get_sunspot_latest
 
 router = APIRouter(prefix="/api/summary", tags=["summary"])
 
@@ -42,6 +45,24 @@ async def get_summary_latest(db: AsyncSession = Depends(get_db)) -> SummaryLates
     except Exception:
         dst = None
 
+    try:
+        sw = await get_solar_wind_latest()
+        wind_speed, imf_bz, imf_bt = sw.speed, sw.bz, sw.bt
+    except Exception:
+        wind_speed = imf_bz = imf_bt = None
+
+    try:
+        sunspot = (await get_sunspot_latest()).number
+    except Exception:
+        sunspot = None
+
+    try:
+        active_alerts = len(await get_latest_alerts(db))
+    except Exception:
+        # Fall back to the proton flag so a stale/empty events table doesn't
+        # under-report an in-progress radiation storm.
+        active_alerts = 1 if proton_event else 0
+
     return SummaryLatest(
         timestamp=datetime.now(timezone.utc),
         goes_xray_class=xray_class,
@@ -49,6 +70,9 @@ async def get_summary_latest(db: AsyncSession = Depends(get_db)) -> SummaryLates
         proton_flux_10mev=proton_flux,
         kp_index=kp,
         dst_index=dst,
-        solar_wind_speed=420.0,
-        active_alerts=1 if proton_event else 0,
+        solar_wind_speed=wind_speed,
+        sunspot_number=sunspot,
+        imf_bz=imf_bz,
+        imf_bt=imf_bt,
+        active_alerts=active_alerts,
     )
