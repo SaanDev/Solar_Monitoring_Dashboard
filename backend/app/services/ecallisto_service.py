@@ -15,6 +15,8 @@ from app.collectors.collect_ecallisto import (
     FitsFile,
     list_day_files,
     files_for_station,
+    files_for_station_focus,
+    focuses_for_station,
     latest_file_for_station,
     file_covering,
     stations_on,
@@ -30,6 +32,8 @@ from app.collectors.collect_burst_list import (
 from app.schemas.radio_schema import (
     RadioStationResponse,
     RadioSpectrumResponse,
+    RadioLiveStation,
+    RadioLiveStationsResponse,
     RadioArchiveStation,
     RadioArchiveStationsResponse,
     RadioArchiveFile,
@@ -140,19 +144,14 @@ async def _render_archive_file(f: FitsFile) -> dict:
     return meta
 
 
-# ─── Live Sri Lanka ────────────────────────────────────────────────────────────
+# ─── Live dynamic spectrum (any station / focus) ─────────────────────────────
 
-# How many days back to search when recent days have no Sri Lanka data.
+# How many days back to search when recent days have no data.
 _LIVE_LOOKBACK_DAYS = 21
 
 
-async def get_sri_lanka_live() -> RadioSpectrumResponse | None:
-    """Latest available SRI-Lanka dynamic spectrum.
-
-    Tries today and walks backwards until a day with SRI-Lanka data is found,
-    so the panel always shows the most recent spectrum even if the station has
-    been offline for a while.
-    """
+async def _latest_day_with_data() -> tuple[date, list[FitsFile]] | None:
+    """Most recent day (within the lookback window) that has any archive files."""
     now = datetime.now(timezone.utc)
     for back in range(_LIVE_LOOKBACK_DAYS + 1):
         day = (now - timedelta(days=back)).date()
@@ -160,20 +159,57 @@ async def get_sri_lanka_live() -> RadioSpectrumResponse | None:
             files = await list_day_files(day)
         except Exception:
             continue
-        latest = latest_file_for_station(files, SRI_LANKA)
+        if files:
+            return day, files
+    return None
+
+
+async def get_live_stations() -> RadioLiveStationsResponse:
+    """Stations (with their focus codes) available on the most recent day with
+    data — drives the homepage station/focus selectors."""
+    result = await _latest_day_with_data()
+    if result is None:
+        return RadioLiveStationsResponse()
+    day, files = result
+    stations = [
+        RadioLiveStation(
+            id=sid,
+            has_metadata=sid in _KNOWN_STATION_IDS,
+            focuses=focuses_for_station(files, sid),
+        )
+        for sid in sorted(stations_on(files))
+    ]
+    return RadioLiveStationsResponse(date=day.isoformat(), stations=stations)
+
+
+async def get_live_spectrum(
+    station: str, focus: str | None = None
+) -> RadioSpectrumResponse | None:
+    """Latest available dynamic spectrum for ``station`` (optionally a specific
+    ``focus`` code). Walks backwards day-by-day so the panel always shows the
+    most recent spectrum even if the station has been offline for a while."""
+    now = datetime.now(timezone.utc)
+    for back in range(_LIVE_LOOKBACK_DAYS + 1):
+        day = (now - timedelta(days=back)).date()
+        try:
+            files = await list_day_files(day)
+        except Exception:
+            continue
+        if focus:
+            sf = files_for_station_focus(files, station, focus)
+            latest = sf[-1] if sf else None
+        else:
+            latest = latest_file_for_station(files, station)
         if not latest:
             continue
         meta = await _render_archive_file(latest)
-        return RadioSpectrumResponse(
-            station=SRI_LANKA,
-            start_time=meta["start_time"],
-            end_time=meta["end_time"],
-            freq_min_mhz=meta["freq_min_mhz"],
-            freq_max_mhz=meta["freq_max_mhz"],
-            image_url=_spectrum_url(meta["image_filename"]),
-            processing_method=meta["processing_method"],
-        )
+        return _spectrum_response(station, meta, fits_filename=latest.filename)
     return None
+
+
+async def get_sri_lanka_live() -> RadioSpectrumResponse | None:
+    """Backwards-compatible helper: latest SRI-Lanka spectrum."""
+    return await get_live_spectrum(SRI_LANKA)
 
 
 # ─── Burst events ──────────────────────────────────────────────────────────────

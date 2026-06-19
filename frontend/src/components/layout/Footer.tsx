@@ -19,7 +19,7 @@ export function Footer() {
         </span>
       ))}
       <span className="ml-auto text-slate-600">
-        All times in UTC · © 2025 Space Weather Dashboard
+        All times in UTC · © 2026 Sahan S Liyanage
       </span>
     </footer>
   );

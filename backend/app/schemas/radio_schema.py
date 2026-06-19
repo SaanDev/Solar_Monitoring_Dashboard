@@ -22,6 +22,17 @@ class RadioSpectrumResponse(BaseModel):
     fits_filename: str | None = None  # source archive file, for raw download
 
 
+class RadioLiveStation(BaseModel):
+    id: str
+    has_metadata: bool = False   # True if this station is in the known station catalog
+    focuses: list[str] = []      # available focus codes for this station on the live day
+
+
+class RadioLiveStationsResponse(BaseModel):
+    date: str | None = None      # the most recent day with data (ISO), or None
+    stations: list[RadioLiveStation] = []
+
+
 class RadioArchiveStation(BaseModel):
     id: str
     has_metadata: bool = False   # True if this station is in the known station catalog

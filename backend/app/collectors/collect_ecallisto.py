@@ -13,7 +13,8 @@ import tempfile
 import httpx
 
 _ARCHIVE = "https://soleil.i4ds.ch/solarradio/data/2002-20yy_Callisto"
-_FILE_RE = re.compile(r'href="(([A-Za-z0-9\-]+)_(\d{8})_(\d{6})_\d+\.fit\.gz)"')
+# Capture: full filename, station, YYYYMMDD, HHMMSS, focus code (trailing _NN).
+_FILE_RE = re.compile(r'href="(([A-Za-z0-9\-]+)_(\d{8})_(\d{6})_(\d+)\.fit\.gz)"')
 _FILE_DURATION = timedelta(minutes=15)
 
 # Per-day directory listing cache: date -> (fetched_epoch, list[FitsFile])
@@ -27,6 +28,7 @@ class FitsFile:
     start: datetime
     filename: str
     url: str
+    focus: str = ""  # trailing _NN focus/instrument code from the filename
 
 
 def _day_url(d: date) -> str:
@@ -45,12 +47,14 @@ async def list_day_files(d: date) -> list[FitsFile]:
         text = r.text
 
     files: list[FitsFile] = []
-    for fname, station, ymd, hms in _FILE_RE.findall(text):
+    for fname, station, ymd, hms, focus in _FILE_RE.findall(text):
         try:
             start = datetime.strptime(ymd + hms, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
         except ValueError:
             continue
-        files.append(FitsFile(station=station, start=start, filename=fname, url=base + fname))
+        files.append(
+            FitsFile(station=station, start=start, filename=fname, url=base + fname, focus=focus)
+        )
 
     _listing_cache[d] = (_time.time(), files)
     return files
@@ -62,6 +66,20 @@ def stations_on(files: list[FitsFile]) -> set[str]:
 
 def files_for_station(files: list[FitsFile], station: str) -> list[FitsFile]:
     return sorted((f for f in files if f.station == station), key=lambda f: f.start)
+
+
+def focuses_for_station(files: list[FitsFile], station: str) -> list[str]:
+    """Distinct focus codes a station observed with on this day, ascending."""
+    return sorted({f.focus for f in files if f.station == station}, key=lambda c: (len(c), c))
+
+
+def files_for_station_focus(
+    files: list[FitsFile], station: str, focus: str
+) -> list[FitsFile]:
+    return sorted(
+        (f for f in files if f.station == station and f.focus == focus),
+        key=lambda f: f.start,
+    )
 
 
 def latest_file_for_station(files: list[FitsFile], station: str) -> FitsFile | None:

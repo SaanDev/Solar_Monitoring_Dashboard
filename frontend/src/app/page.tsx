@@ -6,7 +6,7 @@ import { OverviewKpChart, OverviewDstChart } from "./OverviewGeomagnetic";
 import { OverviewSolarImages } from "./OverviewSolarImages";
 import { OverviewAlertsPanel } from "./OverviewAlertsPanel";
 import { LascoMovie } from "@/components/coronagraph/LascoPanel";
-import { SriLankaLivePanel } from "@/components/radio/SriLankaLivePanel";
+import { LiveRadioPanel } from "@/components/radio/LiveRadioPanel";
 
 export default function OverviewPage() {
   return (
@@ -18,7 +18,7 @@ export default function OverviewPage() {
         {/* Row 2 — radio dynamic spectrum + GOES X-ray + GOES proton */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
           <div className="flex flex-col lg:col-span-5">
-            <SriLankaLivePanel heightClass="flex-1 min-h-[18rem]" />
+            <LiveRadioPanel heightClass="flex-1 min-h-[18rem]" />
           </div>
           <div className="flex flex-col lg:col-span-4">
             <OverviewXrayChart />

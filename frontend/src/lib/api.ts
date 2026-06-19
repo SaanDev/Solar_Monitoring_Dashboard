@@ -15,6 +15,7 @@ import type {
   SolarArchiveResponse,
   RadioStation,
   RadioSpectrum,
+  RadioLiveStationsResponse,
   RadioArchiveStationsResponse,
   RadioArchiveFilesResponse,
   BurstEventsResponse,
@@ -110,6 +111,15 @@ export const api = {
 
   radioStations: () => get<RadioStation[]>("/api/radio/stations"),
   sriLankaLive: () => get<RadioSpectrum>("/api/radio/sri-lanka/live"),
+
+  // Live dynamic spectrum — pick any station + focus code with current data.
+  radioLiveStations: () =>
+    get<RadioLiveStationsResponse>("/api/radio/live/stations"),
+  radioLiveSpectrum: (station: string, focus?: string) =>
+    get<RadioSpectrum>(
+      `/api/radio/live/spectrum?station=${encodeURIComponent(station)}` +
+        (focus ? `&focus=${encodeURIComponent(focus)}` : "")
+    ),
   burstsLatest: () => get<BurstEventsResponse>("/api/radio/bursts/latest"),
   burstSpectrum: (index: number) =>
     get<BurstSpectrum>(`/api/radio/bursts/${index}/spectrum`),

@@ -170,6 +170,17 @@ export interface RadioSpectrum {
   fits_filename: string | null;
 }
 
+export interface RadioLiveStation {
+  id: string;
+  has_metadata: boolean;
+  focuses: string[];
+}
+
+export interface RadioLiveStationsResponse {
+  date: string | null;
+  stations: RadioLiveStation[];
+}
+
 export interface RadioArchiveStation {
   id: string;
   has_metadata: boolean;

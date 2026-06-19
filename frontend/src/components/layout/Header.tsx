@@ -9,7 +9,7 @@ import { api } from "@/lib/api";
 import { useApp } from "@/components/providers";
 import { ThemeToggle } from "./ThemeToggle";
 
-const BRAND = "Space Weather Monitoring Dashboard";
+const BRAND = "ACCIMT Space Weather Dashboard";
 
 function StatusBadge({ label, value, ok }: { label: string; value: string; ok: boolean }) {
   return (

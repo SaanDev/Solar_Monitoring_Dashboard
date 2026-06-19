@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from app.schemas.radio_schema import (
     RadioStationResponse,
     RadioSpectrumResponse,
+    RadioLiveStationsResponse,
     RadioArchiveStationsResponse,
     RadioArchiveFilesResponse,
     BurstEventsResponse,
@@ -18,6 +19,8 @@ from app.services.ecallisto_service import (
     list_stations,
     process_fits_file,
     get_sri_lanka_live,
+    get_live_stations,
+    get_live_spectrum,
     get_latest_burst_events,
     get_burst_spectrum,
     list_archive_stations,
@@ -49,6 +52,24 @@ async def sri_lanka_live() -> RadioSpectrumResponse:
     result = await get_sri_lanka_live()
     if result is None:
         raise HTTPException(status_code=503, detail="No recent SRI-Lanka data available")
+    return result
+
+
+@router.get("/live/stations", response_model=RadioLiveStationsResponse)
+async def live_stations() -> RadioLiveStationsResponse:
+    """Stations + focus codes available on the most recent day with data."""
+    return await get_live_stations()
+
+
+@router.get("/live/spectrum", response_model=RadioSpectrumResponse)
+async def live_spectrum(
+    station: str = Query(...),
+    focus: str | None = Query(None, description="Focus code; latest of any focus if omitted"),
+) -> RadioSpectrumResponse:
+    """Latest available dynamic spectrum for a station (and optional focus code)."""
+    result = await get_live_spectrum(station, focus)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No recent data for {station}")
     return result
 
 
