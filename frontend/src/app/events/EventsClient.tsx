@@ -13,6 +13,8 @@ const RANGES = [
   { key: "7d", label: "7 days", hours: 168 },
   { key: "30d", label: "30 days", hours: 720 },
   { key: "90d", label: "90 days", hours: 2160 },
+  // "All": a window wide enough to cover the entire event record.
+  { key: "all", label: "All", hours: 24 * 366 * 30 },
 ] as const;
 
 type RangeKey = (typeof RANGES)[number]["key"];
@@ -39,17 +41,19 @@ export function EventsClient() {
       {/* Active alerts */}
       <aside className="rounded-lg border border-surface-border bg-surface-card p-4 lg:col-span-1">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-xs uppercase tracking-wider text-slate-500">Active Alerts</h2>
+          <h2 className="text-xs uppercase tracking-wider text-slate-500">Alerts</h2>
           {alerts && alerts.length > 0 && (
-            <span className="rounded bg-accent-red/20 px-2 py-0.5 text-xs font-semibold text-accent-red">
+            <span className="rounded bg-surface-muted px-2 py-0.5 text-xs font-semibold text-slate-400">
               {alerts.length}
             </span>
           )}
         </div>
-        <AlertFeed alerts={alerts ?? []} />
+        <div className="max-h-[36rem] overflow-y-auto">
+          <AlertFeed alerts={alerts ?? []} />
+        </div>
         <p className="mt-3 text-[11px] leading-relaxed text-slate-600">
-          Derived from GOES X-ray &amp; proton flux and Kp/Dst geomagnetic indices.
-          Times are UTC.
+          Full history, newest first. Derived from GOES X-ray &amp; proton flux,
+          Kp/Dst geomagnetic indices, and e-CALLISTO radio bursts. Times are UTC.
         </p>
       </aside>
 

@@ -19,6 +19,37 @@ class Settings(BaseSettings):
     # Run the background ingestion scheduler on startup. Disable in tests/CI.
     enable_scheduler: bool = True
 
+    # Apply Alembic migrations (upgrade to head) on startup so a fresh or
+    # out-of-date database always has the current schema (e.g. after pulling new
+    # migrations, or on a second machine). Disable in tests/CI.
+    auto_migrate: bool = True
+
+    # ── ML radio-burst detection ──────────────────────────────────────────────
+    # The trained burst classifier runs in a separate microservice (the Burst
+    # Identifier project). The backend polls e-CALLISTO for new files and scores
+    # them via this service, raising `radio_burst` events from positive hits.
+    ml_inference_url: str = "http://localhost:9000"
+    radio_burst_enabled: bool = True
+    # How often to scan the archive for new files (seconds). Files are ~15 min.
+    radio_burst_scan_interval: int = 600
+    # Only score files whose start time is within this many hours of now (bounds
+    # the first-run backlog and keeps alerting focused on recent activity).
+    radio_burst_max_age_hours: int = 3
+    # Minimum burst probability for a detection to contribute to an alert/event.
+    radio_burst_alert_min_probability: float = 0.595
+    # Corroboration filter for raising a burst ALERT: a 15-min window only becomes
+    # a radio_burst event when at least this many distinct stations detected the
+    # burst, with at least this many of them above the high-confidence probability.
+    radio_burst_min_stations: int = 4
+    radio_burst_min_high_conf_stations: int = 2
+    radio_burst_high_conf_probability: float = 0.9
+    # Max concurrent scoring requests to the inference service per scan.
+    radio_burst_concurrency: int = 4
+    # Optional safety cap on files scored in one on-demand "Burst Predictor" run.
+    # 0 (default) = no limit: process every available segment for the day across
+    # all selected stations. Set a positive value only to bound a very large run.
+    radio_burst_predict_max_files: int = 0
+
     # Subdirectories are derived from data_dir (see properties below) so a single
     # DATA_DIR controls all file storage.
     data_dir: str = _DEFAULT_DATA_DIR

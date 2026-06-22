@@ -46,8 +46,10 @@ export default function OverviewPage() {
             <OverviewSolarImages />
           </div>
 
-          <div className="lg:col-span-3">
-            <OverviewAlertsPanel className="h-full" />
+          {/* Relative wrapper + absolute panel (on lg) so the feed fills — but
+              never exceeds — the height of the left column, scrolling internally. */}
+          <div className="lg:relative lg:col-span-3">
+            <OverviewAlertsPanel className="h-full lg:absolute lg:inset-0" limit={5} />
           </div>
         </div>
       </div>

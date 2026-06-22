@@ -56,6 +56,19 @@ export function ArchiveClient() {
   // to the previous day; the user can pick any date up to today.
   const [date, setDate] = useState<string>(utcDateOffset(-1));
 
+  // Deep-link from an alert/event: ?instrument=xray|geomag|…&date=YYYY-MM-DD
+  // pre-selects the tab and date so the click lands on that event's data.
+  // Read once on mount (window.location, like the Burst Predictor) to avoid the
+  // useSearchParams() Suspense requirement.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const ins = params.get("instrument");
+    const d = params.get("date");
+    if (ins && INSTRUMENTS.some((i) => i.key === ins && i.enabled)) setInstrument(ins);
+    if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) setDate(d);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-surface-border bg-surface-card p-4">

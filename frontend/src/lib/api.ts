@@ -20,6 +20,8 @@ import type {
   RadioArchiveFilesResponse,
   BurstEventsResponse,
   BurstSpectrum,
+  BurstPredictionJob,
+  BurstPredictionResult,
   Alert,
   SpaceWeatherEvent,
   AnalyzerSession,
@@ -53,6 +55,16 @@ async function postForm<T>(path: string, form: FormData): Promise<T> {
 
 async function postNoBody<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { method: "POST" });
+  if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
+  return res.json() as Promise<T>;
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
   return res.json() as Promise<T>;
 }
@@ -136,10 +148,26 @@ export const api = {
       `/api/radio/archive/spectrum?date=${date}&station=${encodeURIComponent(station)}` +
         (filename ? `&filename=${encodeURIComponent(filename)}` : "")
     ),
+  // Spectrum for the segment covering a given HH:MM (preview an official event's station).
+  radioArchiveSpectrumAt: (date: string, station: string, time: string) =>
+    get<RadioSpectrum>(
+      `/api/radio/archive/spectrum-at?date=${date}&station=${encodeURIComponent(
+        station
+      )}&time=${encodeURIComponent(time)}`
+    ),
   radioBurstsByDate: (date: string) =>
     get<BurstEventsResponse>(`/api/radio/bursts?date=${date}`),
   radioBurstSpectrumByDate: (date: string, index: number) =>
     get<BurstSpectrum>(`/api/radio/bursts/spectrum?date=${date}&index=${index}`),
+
+  // Burst Predictor — run the model over a day and compare with the official list
+  startBurstPrediction: (date: string, stations: string[]) =>
+    postJson<BurstPredictionJob>("/api/radio/predict", { date, stations }),
+  burstPredictionJob: (jobId: string) =>
+    get<BurstPredictionJob>(`/api/radio/predict/${jobId}`),
+  // Result assembled from already-stored detections for a date (no re-scoring).
+  burstPredictionStored: (date: string) =>
+    get<BurstPredictionResult>(`/api/radio/predict/stored?date=${date}`),
 
   alertsLatest: () => get<Alert[]>("/api/alerts/latest"),
   events: (start: string, end: string) =>

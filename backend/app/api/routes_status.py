@@ -22,6 +22,7 @@ _KNOWN_SOURCES = [
     "SDO-AIA",
     "SOHO-LASCO",
     "e-CALLISTO",
+    "Radio-Burst-Scan",
 ]
 
 

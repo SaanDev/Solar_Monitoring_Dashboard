@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -94,20 +94,25 @@ async def query_range(db: AsyncSession, start: datetime, end: datetime) -> list[
     return [_to_dict(o) for o in res.scalars().all()]
 
 
-async def query_active_or_recent(db: AsyncSession, since: datetime) -> list[dict]:
-    """Ongoing events, or those that ended on/after ``since`` — newest first.
-
-    These are what the alert feed surfaces (current and just-subsided conditions).
-    """
-    stmt = (
-        select(SpaceWeatherEvent)
-        .where(
-            or_(
-                SpaceWeatherEvent.end_time.is_(None),
-                SpaceWeatherEvent.end_time >= since,
-            )
-        )
-        .order_by(SpaceWeatherEvent.start_time.desc())
-    )
+async def query_all(db: AsyncSession) -> list[dict]:
+    """Every event, newest first — the full historical alert/event feed."""
+    stmt = select(SpaceWeatherEvent).order_by(SpaceWeatherEvent.start_time.desc())
     res = await db.execute(stmt)
     return [_to_dict(o) for o in res.scalars().all()]
+
+
+async def delete_events_of_type_since(
+    db: AsyncSession, event_type: str, since: datetime, keep_starts: set[datetime]
+) -> int:
+    """Delete events of ``event_type`` with ``start_time >= since`` whose start is
+    not in ``keep_starts``. Lets a re-derivation drop events that no longer qualify
+    (e.g. windows that fail the corroboration filter, or pre-filter leftovers)."""
+    conds = [
+        SpaceWeatherEvent.type == event_type,
+        SpaceWeatherEvent.start_time >= since,
+    ]
+    if keep_starts:
+        conds.append(SpaceWeatherEvent.start_time.not_in(list(keep_starts)))
+    res = await db.execute(delete(SpaceWeatherEvent).where(*conds))
+    await db.commit()
+    return res.rowcount or 0

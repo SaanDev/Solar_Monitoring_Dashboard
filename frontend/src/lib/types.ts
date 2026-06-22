@@ -248,6 +248,63 @@ export interface BurstCandidate {
   status: "pending" | "accepted" | "rejected";
 }
 
+// ─── Burst Predictor (ML daily prediction vs official burst list) ─────────────
+
+export interface PredictedDetection {
+  station: string;
+  focus: string;
+  filename: string;
+  time: string; // HH:MM:SS UTC
+  probability: number;
+  alert_level: string;
+}
+
+export interface PredictedEvent {
+  index: number;
+  start: string; // HH:MM UTC
+  end: string;
+  start_seconds: number;
+  end_seconds: number;
+  n_stations: number;
+  n_detections: number;
+  stations: string[];
+  max_probability: number;
+  alert_level: string;
+  matched_official: boolean;
+  detections: PredictedDetection[];
+}
+
+export interface OfficialBurstCompare {
+  start: string;
+  end: string;
+  burst_type: string;
+  stations: string[];
+  matched_prediction: boolean;
+}
+
+export interface BurstPredictionResult {
+  date: string;
+  stations: string[];
+  total_files: number;
+  burst_count: number;
+  event_count: number;
+  events: PredictedEvent[];
+  official_events: OfficialBurstCompare[];
+  official_count: number;
+  matched_count: number;
+}
+
+export interface BurstPredictionJob {
+  job_id: string;
+  status: "running" | "done" | "error";
+  scanned: number;
+  total: number;
+  date: string;
+  stations: string[];
+  error: string | null;
+  result: BurstPredictionResult | null;
+}
+
 // ─── Alerts & Events ─────────────────────────────────────────────────────────
 
 export interface Alert {

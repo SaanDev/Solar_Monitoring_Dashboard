@@ -35,8 +35,18 @@ DST_MAX_GAP = timedelta(hours=3)
 # Detection thresholds (onset of the lowest NOAA/scientific class for each).
 FLARE_MIN_FLUX = 1e-6   # >= C1.0 GOES long-channel flux (W/m^2); below this is quiet.
 PROTON_MIN_PFU = 10.0   # NOAA SEP / S1 onset (>=10 MeV >= 10 pfu).
-KP_MIN_STORM = 5.0      # NOAA G1 onset.
+KP_MIN_STORM = 5.0      # NOAA G1 onset (confirmed geomagnetic storm).
 DST_MAX_NT = -50.0      # moderate-storm onset (Dst <= -50 nT).
+
+# "Possible geomagnetic storm" (watch) onsets: elevated, pre-storm activity that
+# may develop into a storm. A geomagnetic span is now flagged from these lower
+# thresholds; whether it is reported as a *possible* storm or a confirmed one is
+# decided by the peak value reached (see detect_kp_storms / detect_dst_storms).
+KP_WATCH_MIN = 4.0      # active conditions (Kp 4) — below the G1 storm onset.
+DST_WATCH_MAX = -30.0   # weak disturbance (Dst <= -30 nT) — above moderate-storm onset.
+
+# Severity label for the pre-storm "possible storm" band.
+POSSIBLE_STORM = "Possible storm"
 
 Sample = tuple[datetime, Optional[float]]
 
@@ -131,14 +141,26 @@ def detect_proton_events(points: list[dict]) -> list[dict]:
 
 
 def detect_kp_storms(points: list[dict]) -> list[dict]:
+    """Geomagnetic activity from Kp. Spans are flagged from the watch onset
+    (Kp >= KP_WATCH_MIN); a span whose peak reaches the G1 onset is a confirmed
+    storm (G-scale), otherwise it is a *possible* storm (active conditions)."""
     samples = [(p["time"], p.get("kp")) for p in points]
     out = []
-    for s in _spans(samples, lambda v: v >= KP_MIN_STORM, KP_MAX_GAP):
-        scale = kp_storm_scale(s["peak_value"])
+    for s in _spans(samples, lambda v: v >= KP_WATCH_MIN, KP_MAX_GAP):
+        scale = kp_storm_scale(s["peak_value"])  # None when peak < KP_MIN_STORM
+        if scale:
+            severity = scale
+            description = f"Geomagnetic storm {scale} - Kp peaked at {s['peak_value']:.1f}"
+        else:
+            severity = POSSIBLE_STORM
+            description = (
+                "Possible geomagnetic storm - Kp peaked at "
+                f"{s['peak_value']:.1f} (active conditions)"
+            )
         out.append({
             "type": "geomagnetic_storm_kp",
-            "severity": scale,
-            "description": f"Geomagnetic storm {scale} - Kp peak {s['peak_value']:.1f}",
+            "severity": severity,
+            "description": description,
             "source_url": _KP_URL,
             **s,
         })
@@ -146,14 +168,25 @@ def detect_kp_storms(points: list[dict]) -> list[dict]:
 
 
 def detect_dst_storms(points: list[dict]) -> list[dict]:
+    """Geomagnetic activity from Dst. Spans are flagged from the watch onset
+    (Dst <= DST_WATCH_MAX); a span whose minimum reaches the moderate-storm onset
+    is a confirmed storm (Dst intensity level), otherwise a *possible* storm."""
     samples = [(p["time"], p.get("dst")) for p in points]
     out = []
-    for s in _spans(samples, lambda v: v <= DST_MAX_NT, DST_MAX_GAP, peak_is_min=True):
-        level = dst_storm_level(s["peak_value"])
+    for s in _spans(samples, lambda v: v <= DST_WATCH_MAX, DST_MAX_GAP, peak_is_min=True):
+        if s["peak_value"] <= DST_MAX_NT:
+            severity = dst_storm_level(s["peak_value"])  # Moderate / Intense / Super
+            description = f"{severity} - Dst minimum {s['peak_value']:.0f} nT"
+        else:
+            severity = POSSIBLE_STORM
+            description = (
+                "Possible geomagnetic storm - Dst dropped to "
+                f"{s['peak_value']:.0f} nT (weak disturbance)"
+            )
         out.append({
             "type": "geomagnetic_storm_dst",
-            "severity": level,
-            "description": f"{level} - Dst minimum {s['peak_value']:.0f} nT",
+            "severity": severity,
+            "description": description,
             "source_url": _DST_URL,
             **s,
         })

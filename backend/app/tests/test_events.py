@@ -89,6 +89,26 @@ def test_dst_storm_uses_minimum_as_peak():
     assert events[0]["severity"] == "Intense storm"
 
 
+def test_kp_possible_storm_below_g1():
+    # Kp peaks at 4.3 (active conditions, below the G1 onset) -> a possible storm.
+    pts = [{"time": _T0 + timedelta(hours=h), "kp": v} for h, v in enumerate([2.0, 4.3, 2.0])]
+    events = detect_kp_storms(pts)
+    assert len(events) == 1
+    assert events[0]["type"] == "geomagnetic_storm_kp"
+    assert events[0]["severity"] == "Possible storm"
+    assert "Possible geomagnetic storm" in events[0]["description"]
+
+
+def test_dst_possible_storm_above_moderate():
+    # Dst bottoms at -40 nT (weak disturbance, above the moderate-storm onset).
+    pts = [{"time": _T0 + timedelta(hours=h), "dst": v} for h, v in enumerate([-10, -40, -10])]
+    events = detect_dst_storms(pts)
+    assert len(events) == 1
+    assert events[0]["severity"] == "Possible storm"
+    assert events[0]["peak_value"] == -40
+    assert "Possible geomagnetic storm" in events[0]["description"]
+
+
 # ── detect_and_store + repository ────────────────────────────────────────────
 
 
@@ -122,15 +142,43 @@ async def test_alerts_surface_ongoing_event(db_session):
     assert "in progress" in flare_alerts[0].message
 
 
-async def test_old_subsided_event_not_alerted_but_still_listed(db_session):
-    base = _recent(600)  # ~10h ago, beyond the 6h alert linger
+async def test_possible_geomagnetic_storm_surfaces_as_watch(db_session):
+    base = _recent(180)
+    kp = [{"time": base + h * timedelta(hours=1), "kp": v} for h, v in enumerate([2.0, 4.5, 2.0])]
+    await upsert_points(db_session, KpIndex, kp, "gfz")
+    await detect_and_store(db_session)
+
+    alerts = [a for a in await get_latest_alerts(db_session) if a.type == "geomagnetic_storm_kp"]
+    assert len(alerts) == 1
+    assert alerts[0].severity == "watch"              # possible storm -> watch
+    assert "Possible geomagnetic storm" in alerts[0].message
+
+
+async def test_old_subsided_event_kept_in_feed(db_session):
+    # The alert feed keeps the full history now: even a long-subsided event stays
+    # in the feed (newest first) rather than dropping off after a few hours.
+    base = _recent(600)  # ~10h ago
     await upsert_points(db_session, GoesXrs, _xrs(base, [1e-7, 2e-6, 8e-6, 3e-6, 1e-7]), "noaa-swpc")
     await detect_and_store(db_session)
 
-    assert [a for a in await get_latest_alerts(db_session) if a.type == "xray_flare"] == []
+    flare_alerts = [a for a in await get_latest_alerts(db_session) if a.type == "xray_flare"]
+    assert len(flare_alerts) == 1
+    assert "subsided" in flare_alerts[0].message
 
     events = await get_events(db_session, base - timedelta(days=1), datetime.now(timezone.utc) + _MIN)
     assert any(e.type == "xray_flare" for e in events)
+
+
+async def test_alert_feed_is_full_history_newest_first(db_session):
+    older = _recent(600)  # ~10h ago
+    newer = _recent(90)   # ~1.5h ago
+    await upsert_points(db_session, GoesXrs, _xrs(older, [1e-7, 2e-6, 8e-6, 1e-7]), "noaa-swpc")
+    await upsert_points(db_session, GoesXrs, _xrs(newer, [1e-7, 2e-5, 1e-7]), "noaa-swpc")
+    await detect_and_store(db_session)
+
+    flares = [a for a in await get_latest_alerts(db_session) if a.type == "xray_flare"]
+    assert len(flares) == 2                              # both kept (no age cutoff)
+    assert flares[0].timestamp >= flares[1].timestamp    # recent one at the top
 
 
 # ── API endpoints ────────────────────────────────────────────────────────────

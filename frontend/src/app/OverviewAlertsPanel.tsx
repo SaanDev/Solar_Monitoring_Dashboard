@@ -2,32 +2,19 @@
 
 import useSWR from "swr";
 import Link from "next/link";
-import { Activity, Bell, Compass, Radio, Sun, Wind, Zap } from "lucide-react";
 import { clsx } from "clsx";
 
 import { api } from "@/lib/api";
-import { formatUtcShort } from "@/lib/formatting";
-import type { Alert } from "@/lib/types";
+import { AlertFeed } from "@/components/alerts/AlertFeed";
 
-const sevColor = {
-  info: "text-accent-blue",
-  watch: "text-accent-yellow",
-  warning: "text-accent-orange",
-  critical: "text-accent-red",
-} as const;
-
-function iconFor(a: Alert) {
-  const t = `${a.type} ${a.message}`.toLowerCase();
-  if (t.includes("radio")) return Radio;
-  if (t.includes("flare") || t.includes("x-ray") || t.includes("xray")) return Zap;
-  if (t.includes("cme") || t.includes("lasco") || t.includes("coronal")) return Sun;
-  if (t.includes("geomag") || t.includes("kp") || t.includes("dst")) return Compass;
-  if (t.includes("proton")) return Activity;
-  if (t.includes("wind")) return Wind;
-  return Bell;
-}
-
-export function OverviewAlertsPanel({ className }: { className?: string }) {
+export function OverviewAlertsPanel({
+  className,
+  limit,
+}: {
+  className?: string;
+  /** Cap the rows shown in each dedicated area (full history is on the Events page). */
+  limit?: number;
+}) {
   const { data, isLoading } = useSWR("alerts-latest", api.alertsLatest, {
     refreshInterval: 60000,
   });
@@ -54,35 +41,8 @@ export function OverviewAlertsPanel({ className }: { className?: string }) {
               <div key={i} className="h-12 animate-pulse rounded bg-surface-muted" />
             ))}
           </div>
-        ) : alerts.length === 0 ? (
-          <div className="flex h-32 items-center justify-center text-xs text-slate-600">
-            No active alerts
-          </div>
         ) : (
-          <ul className="space-y-1">
-            {alerts.map((a) => {
-              const Icon = iconFor(a);
-              return (
-                <li
-                  key={a.id}
-                  className="flex items-start gap-2 rounded px-2 py-2 hover:bg-surface-muted"
-                >
-                  <Icon className={clsx("mt-0.5 h-4 w-4 shrink-0", sevColor[a.severity])} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className={clsx("truncate text-xs font-semibold", sevColor[a.severity])}>
-                        {a.type}
-                      </span>
-                      <span className="shrink-0 text-[10px] text-slate-600">
-                        {formatUtcShort(a.timestamp).slice(11)}
-                      </span>
-                    </div>
-                    <p className="truncate text-xs text-slate-400">{a.message}</p>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+          <AlertFeed alerts={alerts} perCategoryLimit={limit} />
         )}
       </div>
     </div>

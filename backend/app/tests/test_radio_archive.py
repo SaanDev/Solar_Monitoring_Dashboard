@@ -29,10 +29,11 @@ def test_archive_filename_regex():
     html = '<a href="SRI-Lanka_20260615_050431_59.fit.gz">x</a>'
     m = _FILE_RE.findall(html)
     assert m
-    fname, station, ymd, hms = m[0]
+    fname, station, ymd, hms, focus = m[0]
     assert station == "SRI-Lanka"
     assert ymd == "20260615"
     assert hms == "050431"
+    assert focus == "59"
 
 
 def test_file_covering_picks_window():

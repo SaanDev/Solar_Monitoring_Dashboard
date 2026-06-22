@@ -67,6 +67,9 @@ def process_fits(
             out_path=out_path,
             station=station,
             obs_start=obs_start,
+            # Wall-clock UTC ticks on the x-axis (falls back to seconds if the
+            # observation start time can't be parsed from the FITS header).
+            time_unit="utc",
         )
 
     end_time = (

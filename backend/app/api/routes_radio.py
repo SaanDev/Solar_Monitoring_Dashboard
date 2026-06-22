@@ -3,9 +3,14 @@ import tempfile
 from datetime import date as date_cls, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Response
-from fastapi.responses import FileResponse
+from datetime import timedelta, timezone
 
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Response, Depends
+from fastapi.responses import FileResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.repositories.radio_detection_repo import detections_for_range
 from app.schemas.radio_schema import (
     RadioStationResponse,
     RadioSpectrumResponse,
@@ -14,7 +19,13 @@ from app.schemas.radio_schema import (
     RadioArchiveFilesResponse,
     BurstEventsResponse,
     BurstSpectrumResponse,
+    RadioBurstDetectionResponse,
+    RadioBurstDetectionsResponse,
+    BurstPredictionRequest,
+    BurstPredictionJob,
+    BurstPredictionResult,
 )
+from app.services import burst_predictor_service as predictor
 from app.services.ecallisto_service import (
     list_stations,
     process_fits_file,
@@ -26,6 +37,7 @@ from app.services.ecallisto_service import (
     list_archive_stations,
     list_archive_files,
     get_archive_spectrum,
+    get_archive_spectrum_at,
     get_archive_fits,
     get_burst_events_for_date,
     get_burst_spectrum_for_date,
@@ -78,6 +90,91 @@ async def bursts_latest() -> BurstEventsResponse:
     return await get_latest_burst_events()
 
 
+@router.get("/bursts/detections", response_model=RadioBurstDetectionsResponse)
+async def burst_detections(
+    date: str = Query(..., description="UTC date YYYY-MM-DD"),
+    db: AsyncSession = Depends(get_db),
+) -> RadioBurstDetectionsResponse:
+    """Per-file ML burst-classifier results for a UTC date (audit / inspection)."""
+    day = _parse_date(date)
+    start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+    rows = await detections_for_range(db, start, start + timedelta(days=1))
+    detections = [
+        RadioBurstDetectionResponse(
+            filename=r["filename"],
+            station=r["station"],
+            start_time=r["start_time"],
+            probability=r["probability"],
+            predicted_label=r["predicted_label"],
+            alert_level=r["alert_level"],
+        )
+        for r in rows
+    ]
+    burst_count = sum(1 for d in detections if d.predicted_label == "Burst")
+    return RadioBurstDetectionsResponse(
+        date=day.isoformat(),
+        count=len(detections),
+        burst_count=burst_count,
+        detections=detections,
+    )
+
+
+@router.post("/predict", response_model=BurstPredictionJob)
+async def start_prediction(req: BurstPredictionRequest) -> BurstPredictionJob:
+    """Kick off a background model run over a day's e-CALLISTO segments.
+
+    Poll ``GET /api/radio/predict/{job_id}`` for progress and the result.
+    """
+    day = _parse_date(req.date)
+    if day > datetime.now(timezone.utc).date():
+        raise HTTPException(status_code=400, detail="date is in the future")
+    stations = [s for s in (req.stations or []) if s]
+    job_id = predictor.start_prediction(day, stations)
+    job = predictor.get_job(job_id)
+    return BurstPredictionJob(**{k: job[k] for k in ("job_id", "status", "scanned", "total", "date", "stations", "error")})
+
+
+@router.get("/predict/stored", response_model=BurstPredictionResult)
+async def prediction_stored(
+    date: str = Query(..., description="UTC date YYYY-MM-DD"),
+    db: AsyncSession = Depends(get_db),
+) -> BurstPredictionResult:
+    """Burst-prediction result assembled from already-stored real-time detections
+    for a date (no re-scoring) — backs the 'view bursts' link from an alert.
+
+    Declared before ``/predict/{job_id}`` so that path param doesn't capture it.
+    """
+    day = _parse_date(date)
+    start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+    rows = await detections_for_range(db, start, start + timedelta(days=1))
+    result = await predictor.assemble_result(rows, day)
+    return BurstPredictionResult(**result)
+
+
+@router.get("/predict/{job_id}", response_model=BurstPredictionJob)
+async def prediction_status(job_id: str) -> BurstPredictionJob:
+    """Progress for a prediction job; includes the full result once done."""
+    job = predictor.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="prediction job not found")
+    result = None
+    if job["status"] == "done":
+        day = _parse_date(job["date"])
+        result = BurstPredictionResult(
+            **await predictor.assemble_result(job["rows"], day, job["stations"])
+        )
+    return BurstPredictionJob(
+        job_id=job["job_id"],
+        status=job["status"],
+        scanned=job["scanned"],
+        total=job["total"],
+        date=job["date"],
+        stations=job["stations"],
+        error=job["error"],
+        result=result,
+    )
+
+
 @router.get("/bursts/{index}/spectrum", response_model=BurstSpectrumResponse)
 async def burst_spectrum(index: int) -> BurstSpectrumResponse:
     result = await get_burst_spectrum(index)
@@ -114,6 +211,22 @@ async def archive_spectrum(
     if result is None:
         raise HTTPException(
             status_code=404, detail=f"No spectrum available for {station} on {date}"
+        )
+    return result
+
+
+@router.get("/archive/spectrum-at", response_model=RadioSpectrumResponse)
+async def archive_spectrum_at(
+    date: str = Query(..., description="UTC date YYYY-MM-DD"),
+    station: str = Query(...),
+    time: str = Query(..., description="HH:MM UTC inside the event window"),
+) -> RadioSpectrumResponse:
+    """Dynamic spectrum for the segment covering a given time — used to preview an
+    official burst-list event's station (which has a time, not a filename)."""
+    result = await get_archive_spectrum_at(_parse_date(date), station, time)
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"No spectrum for {station} at {time} on {date}"
         )
     return result
 

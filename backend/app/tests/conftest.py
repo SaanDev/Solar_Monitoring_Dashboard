@@ -16,6 +16,8 @@ from app.main import app
 
 # The scheduler must never start during tests (no network, no real DB).
 settings.enable_scheduler = False
+# Tests build the schema with create_all (SQLite); never run alembic/Postgres.
+settings.auto_migrate = False
 
 
 @pytest_asyncio.fixture

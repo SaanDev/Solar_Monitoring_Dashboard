@@ -12,7 +12,7 @@ import type { AnalyzerSession, ProjectOpenResponse, RenderParams } from "@/lib/t
 const DEFAULT_PARAMS: RenderParams = {
   method: "median",
   intensity_unit: "db",
-  time_unit: "seconds",
+  time_unit: "utc",
   cmap: "magma",
   vmin: null,
   vmax: null,

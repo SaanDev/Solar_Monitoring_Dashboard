@@ -9,9 +9,9 @@ from app.services.event_service import get_events, get_latest_alerts
 
 router = APIRouter(prefix="/api", tags=["alerts"])
 
-# Events are sparse and worth browsing over long spans (storm history), so the
-# window is far more generous than the 7-day cap on the dense numeric feeds.
-_MAX_RANGE_DAYS = 366
+# Events are sparse and worth browsing over the full record, so the window is
+# effectively unbounded (decades) unlike the 7-day cap on the dense numeric feeds.
+_MAX_RANGE_DAYS = 366 * 50
 
 
 def _parse_range(start: str | None, end: str | None) -> tuple[datetime, datetime]:

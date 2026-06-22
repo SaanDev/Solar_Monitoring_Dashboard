@@ -89,7 +89,8 @@ def list_stations() -> list[RadioStationResponse]:
 
 
 # Bump when the rendering changes so stale cached PNGs are regenerated.
-_RENDER_VERSION = "v3"
+# v4: x-axis ticks switched from seconds-from-start to wall-clock UTC.
+_RENDER_VERSION = "v4"
 
 
 def _cache_name(fits_filename: str) -> str:
@@ -360,6 +361,31 @@ async def get_archive_spectrum(
         return None
     meta = await _render_archive_file(target)
     return _spectrum_response(station, meta, fits_filename=target.filename)
+
+
+async def get_archive_spectrum_at(
+    d: date, station: str, hhmm: str
+) -> RadioSpectrumResponse | None:
+    """Render the ~15-min segment for ``station`` covering ``hhmm`` (HH:MM UTC).
+
+    Used to preview an official burst-list event, which gives a time + station
+    rather than a specific file: the covering segment is located with
+    ``file_covering`` (falling back to the nearest segment) and rendered."""
+    try:
+        files = await list_day_files(d)
+    except Exception:
+        return None
+    try:
+        target = datetime.combine(
+            d, datetime.strptime(hhmm, "%H:%M").time(), tzinfo=timezone.utc
+        )
+    except ValueError:
+        return None
+    target_file = file_covering(files, station, target)
+    if target_file is None:
+        return None
+    meta = await _render_archive_file(target_file)
+    return _spectrum_response(station, meta, fits_filename=target_file.filename)
 
 
 async def get_archive_fits(d: date, station: str, filename: str) -> tuple[bytes, str] | None:

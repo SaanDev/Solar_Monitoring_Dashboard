@@ -20,7 +20,7 @@ from app.cache import cache_get_json, cache_set_json
 from app.models.timeseries import DstIndex, GoesProton, GoesXrs, KpIndex
 from app.processing.event_detection import detect_events
 from app.repositories.event_repo import (
-    query_active_or_recent,
+    query_all,
     query_range,
     upsert_events,
 )
@@ -33,8 +33,6 @@ logger = logging.getLogger(__name__)
 # event whose onset predates the last pass is still re-evaluated (and its
 # end_time/peak updated) rather than missed.
 LOOKBACK_DAYS = 3
-# An alert stays in the feed while ongoing or until it has been over for this long.
-ALERT_LINGER = timedelta(hours=6)
 
 _EVENTS_TTL = 60
 _ALERTS_TTL = 30
@@ -102,7 +100,15 @@ _DST_LEVEL = {
     "Super storm": "critical",
     "Intense storm": "warning",
     "Moderate storm": "watch",
+    "Possible storm": "watch",   # pre-storm "possible geomagnetic storm" (Dst <= -30)
     "Weak storm": "info",
+}
+# Radio-burst severity mirrors the model's probability bands (see the inference
+# service's ``probability_to_alert_level``).
+_RADIO_LEVEL = {
+    "High-confidence burst": "warning",
+    "Likely burst": "watch",
+    "Possible burst": "info",
 }
 
 
@@ -121,6 +127,8 @@ def _alert_level(event_type: str, severity: str | None) -> str:
         return "critical" if n >= 4 else "warning" if n == 3 else "watch"
     if event_type == "geomagnetic_storm_dst":
         return _DST_LEVEL.get(severity, "info")
+    if event_type == "radio_burst":
+        return _RADIO_LEVEL.get(severity, "info")
     return "info"
 
 
@@ -145,13 +153,13 @@ def _to_alert_response(e: dict) -> AlertResponse:
 
 
 async def get_latest_alerts(db: AsyncSession) -> list[AlertResponse]:
+    """The full alert/event history, newest first (nothing is dropped by age)."""
     key = "alerts:latest"
     cached = await cache_get_json(key)
     if cached is not None:
         return [AlertResponse.model_validate(d) for d in cached]
 
-    since = datetime.now(timezone.utc) - ALERT_LINGER
-    rows = await query_active_or_recent(db, since)
+    rows = await query_all(db)
     alerts = [_to_alert_response(r) for r in rows]
     await cache_set_json(key, [a.model_dump(mode="json") for a in alerts], _ALERTS_TTL)
     return alerts
