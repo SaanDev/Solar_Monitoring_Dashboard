@@ -7,6 +7,7 @@ import { Bell, Calendar, Circle, Menu, Search } from "lucide-react";
 
 import { api } from "@/lib/api";
 import { useApp } from "@/components/providers";
+import { useUnreadAlerts, unreadBadgeText } from "@/lib/useUnreadAlerts";
 import { ThemeToggle } from "./ThemeToggle";
 
 const BRAND = "ACCIMT Space Weather Dashboard";
@@ -28,6 +29,7 @@ export function Header({ title }: { title?: string }) {
   const { data: summary } = useSWR("summary-latest", api.summaryLatest, {
     refreshInterval: 60000,
   });
+  const { unreadCount } = useUnreadAlerts();
 
   useEffect(() => {
     const tick = () => setUtc(new Date().toISOString().slice(0, 19).replace("T", " "));
@@ -36,7 +38,7 @@ export function Header({ title }: { title?: string }) {
     return () => clearInterval(id);
   }, []);
 
-  const alerts = summary?.active_alerts ?? 0;
+  const activeAlerts = summary?.active_alerts ?? 0;
   const today = new Date().toISOString().slice(0, 10);
 
   return (
@@ -78,17 +80,21 @@ export function Header({ title }: { title?: string }) {
         </div>
 
         <StatusBadge label="Data Feed" value="LIVE" ok />
-        <StatusBadge label="SWPC Status" value={alerts === 0 ? "Normal" : "Active"} ok={alerts === 0} />
+        <StatusBadge
+          label="SWPC Status"
+          value={activeAlerts === 0 ? "Normal" : "Active"}
+          ok={activeAlerts === 0}
+        />
 
         <Link
           href="/events"
-          aria-label="Alerts"
+          aria-label={unreadCount > 0 ? `Alerts (${unreadCount} unread)` : "Alerts"}
           className="relative flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-surface-muted hover:text-slate-200"
         >
           <Bell className="h-4 w-4" />
-          {alerts > 0 && (
+          {unreadCount > 0 && (
             <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-red px-1 text-[10px] font-bold text-white">
-              {alerts}
+              {unreadBadgeText(unreadCount)}
             </span>
           )}
         </Link>
