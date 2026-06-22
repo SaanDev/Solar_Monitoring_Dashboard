@@ -129,7 +129,7 @@ async def start_prediction(req: BurstPredictionRequest) -> BurstPredictionJob:
     if day > datetime.now(timezone.utc).date():
         raise HTTPException(status_code=400, detail="date is in the future")
     stations = [s for s in (req.stations or []) if s]
-    job_id = predictor.start_prediction(day, stations)
+    job_id = predictor.start_prediction(day, stations, req.raw)
     job = predictor.get_job(job_id)
     return BurstPredictionJob(**{k: job[k] for k in ("job_id", "status", "scanned", "total", "date", "stations", "error")})
 
@@ -137,6 +137,11 @@ async def start_prediction(req: BurstPredictionRequest) -> BurstPredictionJob:
 @router.get("/predict/stored", response_model=BurstPredictionResult)
 async def prediction_stored(
     date: str = Query(..., description="UTC date YYYY-MM-DD"),
+    raw: bool = Query(
+        False,
+        description="True = raw model detections (skip corroboration); "
+        "False = event-selection criteria (default).",
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> BurstPredictionResult:
     """Burst-prediction result assembled from already-stored real-time detections
@@ -147,12 +152,21 @@ async def prediction_stored(
     day = _parse_date(date)
     start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
     rows = await detections_for_range(db, start, start + timedelta(days=1))
-    result = await predictor.assemble_result(rows, day)
+    result = await predictor.assemble_result(rows, day, raw=raw)
     return BurstPredictionResult(**result)
 
 
 @router.get("/predict/{job_id}", response_model=BurstPredictionJob)
-async def prediction_status(job_id: str) -> BurstPredictionJob:
+async def prediction_status(
+    job_id: str,
+    raw: bool | None = Query(
+        None,
+        description="Override the event-selection mode for assembling the result: "
+        "true = raw model detections (skip corroboration), false = criteria. "
+        "Defaults to the mode the job was started with. Re-assembles from the "
+        "already-scored rows, so toggling never re-scores.",
+    ),
+) -> BurstPredictionJob:
     """Progress for a prediction job; includes the full result once done."""
     job = predictor.get_job(job_id)
     if job is None:
@@ -160,8 +174,9 @@ async def prediction_status(job_id: str) -> BurstPredictionJob:
     result = None
     if job["status"] == "done":
         day = _parse_date(job["date"])
+        effective_raw = job.get("raw", False) if raw is None else raw
         result = BurstPredictionResult(
-            **await predictor.assemble_result(job["rows"], day, job["stations"])
+            **await predictor.assemble_result(job["rows"], day, job["stations"], effective_raw)
         )
     return BurstPredictionJob(
         job_id=job["job_id"],

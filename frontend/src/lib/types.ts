@@ -284,6 +284,7 @@ export interface OfficialBurstCompare {
 
 export interface BurstPredictionResult {
   date: string;
+  raw: boolean; // true = raw model output (corroboration filter skipped)
   stations: string[];
   total_files: number;
   burst_count: number;

@@ -135,8 +135,13 @@ def _evict_old_jobs() -> None:
         _JOBS.pop(jid, None)
 
 
-def start_prediction(day: date_cls, stations: list[str]) -> str:
-    """Create a prediction job and kick off scoring in the background."""
+def start_prediction(day: date_cls, stations: list[str], raw: bool = False) -> str:
+    """Create a prediction job and kick off scoring in the background.
+
+    ``raw`` records the job's default event-selection mode (see
+    :func:`assemble_result`). It only affects result assembly, not scoring — the
+    same scored rows can be re-assembled in either mode without re-scoring.
+    """
     job_id = uuid4().hex
     _JOBS[job_id] = {
         "job_id": job_id,
@@ -145,6 +150,7 @@ def start_prediction(day: date_cls, stations: list[str]) -> str:
         "total": 0,
         "date": day.isoformat(),
         "stations": stations,
+        "raw": raw,
         "error": None,
         "rows": [],
         "finished_at": None,
@@ -249,7 +255,7 @@ def _build_predicted_event(index: int, detections: list[dict]) -> dict:
 
 
 async def assemble_result(
-    rows: list[dict], day: date_cls, stations: list[str] | None = None
+    rows: list[dict], day: date_cls, stations: list[str] | None = None, raw: bool = False
 ) -> dict:
     """Build the prediction result from the scored rows + the official burst list.
 
@@ -257,16 +263,30 @@ async def assemble_result(
     events are filtered to those that involve at least one selected station, so the
     comparison is scoped to what the user asked to predict. An empty/None selection
     (= all stations) keeps every official event.
+
+    ``raw`` chooses how scored detections become predicted events:
+      * ``False`` (event-selection criteria, default) — the live-alert filter: a
+        detection must clear the alert probability minimum and a clustered event is
+        kept only when corroborated across enough stations (see ``_is_corroborated``).
+      * ``True`` (raw model output) — every segment the model labelled ``Burst`` is
+        clustered into an event with no corroboration requirement. Use this when a
+        narrow station selection can't meet the multi-station minimum, so genuine
+        bursts would otherwise be hidden.
     """
-    min_prob = settings.radio_burst_alert_min_probability
+    # Raw mode takes the model's own Burst decision as-is (its decision threshold
+    # already gates the label); criteria mode additionally enforces the alert
+    # probability minimum.
+    min_prob = 0.0 if raw else settings.radio_burst_alert_min_probability
     bursts = [
         _detection_dict(r)
         for r in rows
         if r["predicted_label"] == "Burst" and float(r["probability"]) >= min_prob
     ]
     events = cluster_events(bursts, EVENT_GAP_MINUTES)
-    # Predict only corroborated events (same criteria as the live alert filter).
-    events = [ev for ev in events if _is_corroborated(ev)]
+    # Criteria mode keeps only corroborated events (same as the live alert filter);
+    # raw mode keeps every clustered event so nothing the model flagged is dropped.
+    if not raw:
+        events = [ev for ev in events if _is_corroborated(ev)]
     predicted = [_build_predicted_event(i + 1, ev) for i, ev in enumerate(events)]
 
     # Official e-CALLISTO burst list for the day, with two-way match flags. Scope
@@ -298,6 +318,7 @@ async def assemble_result(
     matched_predicted = sum(1 for pe in predicted if pe["matched_official"])
     return {
         "date": day.isoformat(),
+        "raw": raw,
         "stations": sorted({r["station"] for r in rows}),
         "total_files": len(rows),
         "burst_count": len(bursts),

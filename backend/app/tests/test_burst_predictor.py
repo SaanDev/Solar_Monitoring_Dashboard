@@ -137,6 +137,23 @@ async def test_assemble_filters_uncorroborated_events(monkeypatch):
     assert (await bps.assemble_result(low_conf, _D))["event_count"] == 0
 
 
+async def test_raw_mode_keeps_uncorroborated_events(monkeypatch):
+    monkeypatch.setattr(bps, "get_burst_events_for_date", _empty_official)
+
+    # A single-station burst: dropped by the corroboration criteria (needs >= 4
+    # stations), but kept in raw mode so the burst is never hidden.
+    rows = [_row("INDIA-OOTY", 9, 30, 0.96, "Burst", "High-confidence burst")]
+
+    criteria = await bps.assemble_result(rows, _D)
+    assert criteria["raw"] is False
+    assert criteria["event_count"] == 0          # corroboration filter drops it
+
+    raw = await bps.assemble_result(rows, _D, raw=True)
+    assert raw["raw"] is True
+    assert raw["event_count"] == 1               # raw model output keeps it
+    assert raw["events"][0]["n_stations"] == 1
+
+
 async def test_match_uses_full_segment_window(monkeypatch):
     # A corroborated cluster at 09:30 (covers 09:30-09:45); an official burst at
     # 09:40 (inside the segment window) must still match.
@@ -244,6 +261,44 @@ async def test_predict_route_scopes_official_to_selected_stations(client, monkey
     official = body["result"]["official_events"]
     # Only the event involving a selected station is shown; the AUSTRIA one is dropped.
     assert [o["start"] for o in official] == ["02:00"]
+
+
+async def test_predict_status_raw_query_toggles_mode(client, monkeypatch):
+    # Two stations (< the 4-station corroboration minimum) -> the cluster is
+    # uncorroborated, so criteria mode hides it and raw mode surfaces it. The raw
+    # query re-assembles from the cached scores — no re-scoring.
+    files = [_fits(s, 2, 0) for s in ("A", "B")]
+
+    async def _list_day_files(day):
+        return files
+
+    async def _predict_url(url, filename=None):
+        return {"predicted_label": "Burst", "burst_probability": 0.95, "alert_level": "High-confidence burst"}
+
+    monkeypatch.setattr(bps, "list_day_files", _list_day_files)
+    monkeypatch.setattr(bps, "predict_url", _predict_url)
+    monkeypatch.setattr(bps, "get_burst_events_for_date", _empty_official)
+
+    start = await client.post("/api/radio/predict", json={"date": _DAY, "stations": ["A", "B"]})
+    job_id = start.json()["job_id"]
+
+    body = None
+    for _ in range(100):
+        r = await client.get(f"/api/radio/predict/{job_id}")
+        body = r.json()
+        if body["status"] != "running":
+            break
+        await asyncio.sleep(0.02)
+    assert body["status"] == "done"
+
+    # Default job mode is criteria -> the uncorroborated cluster is filtered out.
+    assert body["result"]["raw"] is False
+    assert body["result"]["event_count"] == 0
+
+    # Same job, raw override -> the burst surfaces without re-scoring.
+    raw_body = (await client.get(f"/api/radio/predict/{job_id}?raw=true")).json()
+    assert raw_body["result"]["raw"] is True
+    assert raw_body["result"]["event_count"] == 1
 
 
 async def _wait_done(job_id: str) -> None:

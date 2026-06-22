@@ -123,6 +123,10 @@ class RadioBurstDetectionsResponse(BaseModel):
 class BurstPredictionRequest(BaseModel):
     date: str                          # UTC date YYYY-MM-DD
     stations: list[str] = []           # empty = all stations recording that day
+    # False = event-selection criteria (multi-station corroboration, the live
+    # alert filter). True = raw model output: every segment the model labels
+    # "Burst" becomes an event, so a narrow station selection never hides bursts.
+    raw: bool = False
 
 
 class PredictedDetection(BaseModel):
@@ -159,6 +163,7 @@ class OfficialBurstCompare(BaseModel):
 
 class BurstPredictionResult(BaseModel):
     date: str
+    raw: bool = False                  # True = raw model output (no corroboration)
     stations: list[str]                # stations actually scored
     total_files: int                   # segments scored
     burst_count: int                   # files classified Burst

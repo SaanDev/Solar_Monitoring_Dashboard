@@ -160,14 +160,18 @@ export const api = {
   radioBurstSpectrumByDate: (date: string, index: number) =>
     get<BurstSpectrum>(`/api/radio/bursts/spectrum?date=${date}&index=${index}`),
 
-  // Burst Predictor — run the model over a day and compare with the official list
-  startBurstPrediction: (date: string, stations: string[]) =>
-    postJson<BurstPredictionJob>("/api/radio/predict", { date, stations }),
-  burstPredictionJob: (jobId: string) =>
-    get<BurstPredictionJob>(`/api/radio/predict/${jobId}`),
+  // Burst Predictor — run the model over a day and compare with the official list.
+  // `raw` selects the event mode: true = raw model output (no corroboration
+  // filter), false = event-selection criteria.
+  startBurstPrediction: (date: string, stations: string[], raw = false) =>
+    postJson<BurstPredictionJob>("/api/radio/predict", { date, stations, raw }),
+  // `raw` re-assembles a finished job from its cached scores in the chosen mode
+  // (no re-scoring), so toggling the mode is instant.
+  burstPredictionJob: (jobId: string, raw = false) =>
+    get<BurstPredictionJob>(`/api/radio/predict/${jobId}?raw=${raw}`),
   // Result assembled from already-stored detections for a date (no re-scoring).
-  burstPredictionStored: (date: string) =>
-    get<BurstPredictionResult>(`/api/radio/predict/stored?date=${date}`),
+  burstPredictionStored: (date: string, raw = false) =>
+    get<BurstPredictionResult>(`/api/radio/predict/stored?date=${date}&raw=${raw}`),
 
   alertsLatest: () => get<Alert[]>("/api/alerts/latest"),
   events: (start: string, end: string) =>
