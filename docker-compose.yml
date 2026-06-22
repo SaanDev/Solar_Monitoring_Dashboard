@@ -34,7 +34,10 @@ services:
       DATABASE_URL: postgresql+asyncpg://swdash:swdash@postgres:5432/swdash
       REDIS_URL: redis://redis:6379/0
       DATA_DIR: /data
-      ML_INFERENCE_URL: http://ml-inference:9000
+      # Burst inference runs natively inside this backend (PyTorch via the
+      # ".[ml]" extras baked into the image; checkpoint at ml_model/best.pt).
+      # Containers have no GPU/MPS, so force CPU.
+      ML_INFERENCE_DEVICE: cpu
     ports:
       - "8000:8000"
     volumes:
@@ -45,34 +48,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      ml-inference:
-        condition: service_started
-
-  # ML burst-classifier inference service. Built from the sibling Burst Identifier
-  # project (reuses its inference code); the 129 MB checkpoint is mounted at
-  # runtime rather than baked into the image.
-  ml-inference:
-    build:
-      context: "../Burst Identifier"
-      dockerfile: Dockerfile.serve
-    environment:
-      MODEL_CHECKPOINT: outputs/v2_resnet18/checkpoints/best.pt
-      MODEL_CONFIG: configs/v2_resnet18_rtx5060_8gb.yaml
-      INFERENCE_DEVICE: cpu
-    ports:
-      - "9000:9000"
-    volumes:
-      - "../Burst Identifier/outputs:/app/outputs:ro"
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9000/healthz').getcode()==200 else 1)
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 90s
 
   frontend:
     build: ./frontend

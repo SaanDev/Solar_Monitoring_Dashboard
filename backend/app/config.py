@@ -24,13 +24,10 @@ class Settings(BaseSettings):
     # migrations, or on a second machine). Disable in tests/CI.
     auto_migrate: bool = True
 
-    # ── ML radio-burst detection ──────────────────────────────────────────────
-    # The trained burst classifier runs in a separate microservice (the Burst
-    # Identifier project). The backend polls e-CALLISTO for new files and scores
-    # them via this service, raising `radio_burst` events from positive hits.
-    # Kept for Docker Compose backwards compatibility; no longer used by the backend
-    # now that inference runs natively (see app/ml/). Will be removed in a future release.
-    ml_inference_url: str = "http://localhost:9000"
+    # ── ML radio-burst detection (native, in-process) ─────────────────────────
+    # The trained burst classifier runs inside this backend (see app/ml/). The
+    # scheduler polls e-CALLISTO for new files, scores them in-process, and raises
+    # `radio_burst` events from positive hits. Device/model settings are below.
     radio_burst_enabled: bool = True
     # How often to scan the archive for new files (seconds). Files are ~15 min.
     radio_burst_scan_interval: int = 600

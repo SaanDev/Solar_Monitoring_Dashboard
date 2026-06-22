@@ -217,14 +217,14 @@ async def scan_and_detect_radio_bursts(db: AsyncSession) -> int:
         if written:
             logger.info("radio burst scan: %d burst window event(s)", written)
 
-        # If there were files to score but none succeeded, the inference service
-        # is almost certainly down — surface that, since it's why no alerts appear.
+        # If there were files to score but none succeeded, inference is failing —
+        # surface that, since it's why no alerts appear.
         if todo_count > 0 and scored == 0:
             await record_error(
                 db,
                 SOURCE_NAME,
-                f"inference service unreachable: scored 0/{todo_count} files "
-                f"(is the model microservice running at {settings.ml_inference_url}?)",
+                f"burst inference produced no results: scored 0/{todo_count} files "
+                f"(check PyTorch is installed and the checkpoint loaded — see logs)",
             )
         else:
             await record_success(db, SOURCE_NAME)

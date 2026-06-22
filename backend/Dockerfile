@@ -7,7 +7,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
-RUN pip install --no-cache-dir -e .
+# Install with the [ml] extras so the radio-burst classifier (PyTorch) runs
+# natively in this container. On linux/arm64 (Apple Silicon Macs) PyPI serves a
+# CPU-only wheel automatically; on linux/amd64 it serves the CUDA build, which
+# still runs on CPU inside the container (just a larger image).
+RUN pip install --no-cache-dir -e ".[ml]"
 
 COPY . .
 

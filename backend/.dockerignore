@@ -1,0 +1,21 @@
+# Virtualenvs — host-built, wrong platform/arch for the linux image
+.venv/
+venv/
+
+# Python caches & test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+*.egg-info/
+
+# Runtime data (downloaded FITS, spectra, solar images) — not app code
+data/
+
+# Local env / secrets — compose injects env at runtime via env_file
+.env
+
+# NOTE: ml_model/best.pt is intentionally NOT ignored — it is baked into the
+# image so native burst inference works even without the bind-mounted source.

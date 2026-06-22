@@ -1,0 +1,10 @@
+# Dependencies are reinstalled in the image (npm ci); never copy host modules
+# (wrong platform) or the build output.
+node_modules/
+.next/
+out/
+
+# Logs & local env
+npm-debug.log*
+yarn-error.log*
+.env
