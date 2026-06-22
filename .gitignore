@@ -27,6 +27,9 @@ data/
 *.fits
 *.FITS
 *.fts
+# Note: the ML checkpoint backend/ml_model/best.pt is intentionally NOT ignored —
+# it is committed via Git LFS (see .gitattributes). Other *.pt files under the
+# gitignored data/ and .venv/ trees are already excluded by those rules.
 
 # OS
 .DS_Store

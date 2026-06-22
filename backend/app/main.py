@@ -53,6 +53,13 @@ async def lifespan(app: FastAPI):
     settings.ensure_dirs()
     if settings.auto_migrate:
         await _apply_migrations()
+    # Load the burst classifier in a thread so startup isn't blocked on the
+    # forward-pass warm-up. A missing/undownloadable checkpoint is non-fatal:
+    # the scan will log a warning and skip scoring rather than crashing.
+    if settings.radio_burst_enabled:
+        import asyncio as _asyncio
+        from app.ml.inference import warm_up as _ml_warm_up
+        _asyncio.create_task(_asyncio.to_thread(_ml_warm_up))
     if settings.enable_scheduler:
         # Import here so the app (and tests) load without a scheduler/DB present.
         from app.scheduler import run_initial_ingest, shutdown_scheduler, start_scheduler
