@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import { clsx } from "clsx";
 import { api } from "@/lib/api";
+import { useApp } from "@/components/providers";
 import { windowFor } from "@/lib/formatting";
 import { alertsToReportEvents } from "@/lib/exportEvents";
 import { AlertFeed } from "@/components/alerts/AlertFeed";
@@ -26,11 +27,28 @@ export function EventsClient() {
   const hours = RANGES.find((r) => r.key === range)!.hours;
   const { start, end } = windowFor(hours);
 
+  const { markAlertsRead } = useApp();
   const { data: alerts } = useSWR("alerts-latest", api.alertsLatest, {
     refreshInterval: 30000,
   });
   // Categorized rows for the per-day .txt export (across the full alert history).
   const reportEvents = useMemo(() => alertsToReportEvents(alerts ?? []), [alerts]);
+
+  // Viewing this page is what "sees" the alerts: clear the unread badge by
+  // advancing the seen-marker to the newest alert, and keep it cleared as fresh
+  // alerts arrive while the page stays open.
+  const newestAlertAt = useMemo(
+    () =>
+      (alerts ?? []).reduce(
+        (max, a) =>
+          new Date(a.timestamp).getTime() > new Date(max || 0).getTime() ? a.timestamp : max,
+        ""
+      ),
+    [alerts]
+  );
+  useEffect(() => {
+    if (newestAlertAt) markAlertsRead(newestAlertAt);
+  }, [newestAlertAt, markAlertsRead]);
 
   const {
     data: events,

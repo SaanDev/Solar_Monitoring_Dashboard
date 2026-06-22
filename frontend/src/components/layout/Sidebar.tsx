@@ -20,6 +20,7 @@ import { clsx } from "clsx";
 
 import { api } from "@/lib/api";
 import { useApp } from "@/components/providers";
+import { useUnreadAlerts, unreadBadgeText } from "@/lib/useUnreadAlerts";
 import type { SummaryLatest } from "@/lib/types";
 
 const NAV = [
@@ -42,7 +43,7 @@ export function Sidebar() {
   const { data: summary } = useSWR("summary-latest", api.summaryLatest, {
     refreshInterval: 60000,
   });
-  const alerts = summary?.active_alerts ?? 0;
+  const { unreadCount } = useUnreadAlerts();
 
   return (
     <aside
@@ -73,9 +74,9 @@ export function Sidebar() {
             >
               <Icon className="h-4 w-4 shrink-0" />
               <span className="flex-1 truncate">{label}</span>
-              {badge && alerts > 0 && (
+              {badge && unreadCount > 0 && (
                 <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-red px-1 text-[10px] font-bold text-white">
-                  {alerts}
+                  {unreadBadgeText(unreadCount)}
                 </span>
               )}
             </Link>
