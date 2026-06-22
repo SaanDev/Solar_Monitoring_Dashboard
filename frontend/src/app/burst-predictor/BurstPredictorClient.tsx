@@ -6,6 +6,11 @@ import { clsx } from "clsx";
 import { Play, Loader2, Check, X, Radar, ChevronRight } from "lucide-react";
 
 import { api } from "@/lib/api";
+import {
+  alertsToReportEvents,
+  predictedToReportEvents,
+} from "@/lib/exportEvents";
+import { ExportEventsButton } from "@/components/events/ExportEventsButton";
 import type {
   PredictedDetection,
   PredictedEvent,
@@ -44,9 +49,13 @@ export function BurstPredictorClient() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [jobId, setJobId] = useState<string | null>(null);
   const [selectedDet, setSelectedDet] = useState<SelectedDet | null>(null);
-  // Result loaded from already-stored detections (deep-link from an alert), shown
-  // without re-scoring; cleared when the user changes date or runs a fresh scan.
-  const [storedResult, setStoredResult] = useState<BurstPredictionResult | null>(null);
+  // Event-selection mode. false = corroboration criteria (the live-alert filter);
+  // true = raw model output (every Burst-labelled segment). Toggling re-assembles
+  // from the already-scored rows server-side, so it never re-scores.
+  const [rawMode, setRawMode] = useState<boolean>(false);
+  // When set (deep-link from an alert: ?date=…), show that day's already-stored
+  // real-time detections without re-scoring, until a fresh scan is run.
+  const [deepLinkDate, setDeepLinkDate] = useState<string | null>(null);
 
   // Stations that recorded on the chosen day.
   const { data: stationsData, isLoading: stationsLoading } = useSWR(
@@ -60,32 +69,65 @@ export function BurstPredictorClient() {
     setJobId(null);
     setSelected(new Set());
     setSelectedDet(null);
-    setStoredResult(null);
   }, [date]);
 
-  // Deep-link from an alert: ?date=YYYY-MM-DD pre-fills the date and shows the
-  // already-stored real-time detections for that day (no re-scoring). Runs once.
+  // Deep-link from an alert: ?date=YYYY-MM-DD pre-fills the date and flags the day
+  // whose already-stored real-time detections should be shown (no re-scoring).
+  // The actual fetch is driven by the SWR hook below so the mode toggle applies.
   useEffect(() => {
     const d = new URLSearchParams(window.location.search).get("date");
     if (!d) return;
     setDate(d);
-    api.burstPredictionStored(d).then(setStoredResult).catch(() => setStoredResult(null));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setDeepLinkDate(d);
   }, []);
 
-  // Poll the prediction job while it runs.
+  // Poll the prediction job while it runs. rawMode is part of the key so toggling
+  // the mode re-fetches — the backend re-assembles from the cached scores in the
+  // chosen mode, so switching never re-scores.
   const { data: job } = useSWR(
-    jobId ? ["predict-job", jobId] : null,
-    () => api.burstPredictionJob(jobId as string),
+    jobId ? ["predict-job", jobId, rawMode] : null,
+    () => api.burstPredictionJob(jobId as string, rawMode),
     {
       refreshInterval: (latest) => (latest?.status === "running" ? 1500 : 0),
       revalidateOnFocus: false,
+      keepPreviousData: true,
     }
   );
   const running = job?.status === "running";
-  // Stored result (from an alert deep-link) takes precedence until the user runs
-  // a fresh prediction, which clears it so the job result shows instead.
-  const result = storedResult ?? (job?.status === "done" ? job?.result ?? null : null);
+
+  // Alert deep-link view: the day's already-stored detections, re-assembled in the
+  // chosen mode. Shown only before a fresh scan is started (jobId === null) and
+  // while the date still matches the deep-link.
+  const { data: storedResult } = useSWR(
+    deepLinkDate && date === deepLinkDate && jobId === null
+      ? ["pred-stored", deepLinkDate, rawMode]
+      : null,
+    () => api.burstPredictionStored(deepLinkDate as string, rawMode),
+    { revalidateOnFocus: false }
+  );
+
+  // A finished job's result supersedes the stored deep-link view.
+  const result =
+    (job?.status === "done" ? job?.result ?? null : null) ?? storedResult ?? null;
+
+  // Full alert/event history — the source of X-ray / SEP / geomagnetic rows for
+  // the per-day .txt export (shares SWR cache with the Events page).
+  const { data: alerts } = useSWR("alerts-latest", api.alertsLatest, {
+    refreshInterval: 60000,
+  });
+
+  // Rows for the day export: X-ray / SEP / geomagnetic from the alert history,
+  // and radio bursts from the current prediction result (so the export mirrors
+  // what's on screen) — falling back to alert-history radio bursts when no
+  // prediction for this date is loaded.
+  const reportEvents = useMemo(() => {
+    const fromAlerts = alertsToReportEvents(alerts ?? []);
+    const predicted =
+      result && result.date === date ? predictedToReportEvents(result) : [];
+    return predicted.length
+      ? [...fromAlerts.filter((e) => e.category !== "radio_burst"), ...predicted]
+      : fromAlerts;
+  }, [alerts, result, date]);
 
   // Auto-select the first detection for preview when a result arrives.
   useEffect(() => {
@@ -110,8 +152,8 @@ export function BurstPredictorClient() {
 
   const runPrediction = async () => {
     setSelectedDet(null);
-    setStoredResult(null); // a fresh scan supersedes any alert-linked stored view
-    const res = await api.startBurstPrediction(date, [...selected]);
+    // Starting a job (jobId set) supersedes any alert-linked stored view.
+    const res = await api.startBurstPrediction(date, [...selected], rawMode);
     setJobId(res.job_id);
   };
 
@@ -187,6 +229,19 @@ export function BurstPredictorClient() {
             )}
           </div>
 
+          <label
+            className="flex cursor-pointer select-none items-center gap-2 pb-1.5 text-xs text-slate-400"
+            title="Raw model output shows every segment the model flags as a burst. Event-selection criteria keeps only multi-station corroborated events (the live-alert filter), which can hide bursts when few stations are selected."
+          >
+            <input
+              type="checkbox"
+              checked={rawMode}
+              onChange={(e) => setRawMode(e.target.checked)}
+              className="h-3.5 w-3.5 accent-accent-blue"
+            />
+            Raw model output
+          </label>
+
           <button
             onClick={runPrediction}
             disabled={running || !stations.length}
@@ -200,7 +255,18 @@ export function BurstPredictorClient() {
             {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Radar className="h-4 w-4" />}
             {running ? "Predicting…" : "Predict bursts"}
           </button>
+
+          {/* Export this day's events (all types) as a .txt. Radio bursts come
+              from the current prediction; other types from the alert history. */}
+          <ExportEventsButton events={reportEvents} fixedDay={date} className="pb-0.5" />
         </div>
+
+        {/* Mode hint — explains what the Raw model output checkbox changes. */}
+        <p className="mt-2 text-[10px] text-slate-600">
+          {rawMode
+            ? "Raw mode: every segment the model labels a burst is shown — no multi-station corroboration filter, so nothing is dropped."
+            : "Criteria mode: only multi-station corroborated events are shown (the live-alert filter). Tick “Raw model output” to see every burst the model flags."}
+        </p>
 
         {/* Progress / status */}
         {job && (
@@ -317,12 +383,24 @@ function PredictedEvents({
 }) {
   return (
     <section className="flex flex-col rounded-lg border border-surface-border bg-surface-card p-4">
-      <h2 className="mb-3 text-xs uppercase tracking-wider text-slate-500">
+      <h2 className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wider text-slate-500">
         Predicted Bursts (model)
+        <span
+          className={clsx(
+            "rounded px-1.5 py-0.5 text-[10px] normal-case tracking-normal",
+            result.raw
+              ? "bg-accent-yellow/15 text-accent-yellow"
+              : "bg-surface-muted text-slate-400"
+          )}
+        >
+          {result.raw ? "raw" : "criteria"}
+        </span>
       </h2>
       {result.events.length === 0 ? (
-        <div className="flex h-32 items-center justify-center text-xs text-slate-600">
-          No bursts predicted for the selected stations.
+        <div className="flex h-32 items-center justify-center px-4 text-center text-xs text-slate-600">
+          {result.raw
+            ? "The model flagged no bursts for the selected stations."
+            : "No corroborated bursts for the selected stations. Tick “Raw model output” above to see every burst the model flagged."}
         </div>
       ) : (
         <ul className="max-h-[28rem] space-y-2 overflow-y-auto pr-1">
