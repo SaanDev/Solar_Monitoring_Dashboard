@@ -1,55 +1,73 @@
-"""Client for the ML burst-classifier microservice.
+"""In-process burst classifier client — replaces the HTTP microservice.
 
-The trained model runs in a separate service (the Burst Identifier project) so
-the backend needs neither PyTorch nor the 129 MB checkpoint. This module is a
-thin async wrapper over its HTTP API; the service is stateless and scores one
-e-CALLISTO ``.fit.gz`` file (given by URL) per call.
+The model runs natively inside the dashboard backend (no separate port 9000
+service). Inference is blocking (PyTorch forward pass); it runs in a thread
+pool via asyncio.to_thread so the event loop is never blocked.
+
+The rest of the backend (radio_burst_service, burst_predictor_service) calls
+predict_url() exactly as before — the HTTP-vs-native switch is transparent.
 """
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import httpx
 
-from app.config import settings
+from app.ml.inference import predict_bytes
 
 logger = logging.getLogger(__name__)
 
-# Generous timeout: the service downloads the FITS, preprocesses, and runs a
-# forward pass. Downloads from the e-CALLISTO archive dominate.
-_TIMEOUT = httpx.Timeout(90.0)
+# Download timeout: e-CALLISTO archive fetches dominate over inference time.
+_DOWNLOAD_TIMEOUT = httpx.Timeout(90.0)
 
 
 async def predict_url(url: str, filename: str | None = None) -> dict[str, Any] | None:
-    """Score the file at ``url``; returns the prediction record or None on error.
+    """Download the .fit.gz at ``url`` and return the in-process prediction.
 
-    The record matches the service's ``_prediction_record`` shape:
-    ``{file_name, file_path, predicted_label, burst_probability,
-    decision_threshold, confidence, alert_level}``.
+    Returns the prediction record dict (same shape as the old microservice
+    response) or None if download or inference failed.
     """
-    endpoint = f"{settings.ml_inference_url.rstrip('/')}/predict"
-    payload: dict[str, Any] = {"url": url}
-    if filename:
-        payload["filename"] = filename
+    name = filename or Path(url).name or "remote.fit.gz"
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.post(endpoint, json=payload)
+        async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT) as client:
+            resp = await client.get(url, follow_redirects=True)
             resp.raise_for_status()
-            return resp.json()
+            content = resp.content
     except httpx.HTTPError as exc:
-        logger.warning("burst inference failed for %s: %s", filename or url, exc)
+        logger.warning("burst inference: download failed for %s: %s", name, exc)
         return None
 
+    import asyncio
 
-async def health() -> dict[str, Any] | None:
-    """Return the service's health payload, or None if unreachable."""
-    endpoint = f"{settings.ml_inference_url.rstrip('/')}/healthz"
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-            resp = await client.get(endpoint)
-            resp.raise_for_status()
-            return resp.json()
-    except httpx.HTTPError as exc:
-        logger.warning("burst inference health check failed: %s", exc)
+        # Run the blocking torch forward pass off the event loop.
+        record = await asyncio.to_thread(predict_bytes, content, name)
+    except Exception as exc:
+        logger.warning("burst inference: scoring failed for %s: %s", name, exc)
         return None
+
+    return record
+
+
+async def health() -> dict[str, Any]:
+    """Return a health-like dict matching the old microservice /healthz shape."""
+    from app.ml.inference import _STATE
+    import torch
+
+    try:
+        torch_ok = True
+    except ImportError:
+        torch_ok = False
+
+    device = _STATE.get("device")
+    return {
+        "status": "ok" if _STATE.get("model") is not None else (
+            "unavailable" if not torch_ok else "loading"
+        ),
+        "model_loaded": _STATE.get("model") is not None,
+        "device": str(device) if device is not None else None,
+        "threshold": _STATE.get("threshold", 0.595),
+        "backend": "native",
+    }

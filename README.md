@@ -29,6 +29,10 @@ A web-based dashboard for monitoring and analyzing space-weather parameters, wit
 - Python 3.11+
 - Node.js 20+
 - Docker + Docker Compose
+- [Git LFS](https://git-lfs.com) — the radio-burst ML checkpoint (~128 MB) is
+  stored in the repo via LFS. Install it **before** cloning (or run
+  `git lfs install && git lfs pull` after) so `backend/ml_model/best.pt` is
+  fetched as the real file rather than a pointer.
 
 ### 1. Environment
 
@@ -62,6 +66,26 @@ Open [http://localhost:3000](http://localhost:3000).
 ```bash
 docker compose up postgres redis
 ```
+
+### 5. Radio-burst ML model (native inference)
+
+The solar radio-burst classifier (ResNet-18) runs **natively inside the backend**
+— no separate microservice. The trained checkpoint ships in the repo via Git LFS
+at `backend/ml_model/best.pt`.
+
+```bash
+# One-time per machine, then fetch the checkpoint:
+git lfs install
+git lfs pull
+
+# Install the PyTorch dependencies (CPU/CUDA/Apple-Silicon MPS auto-detected):
+cd backend
+pip install -e ".[ml]"
+```
+
+On Apple Silicon Macs, PyTorch automatically uses the MPS backend. The model is
+loaded once at startup; a missing checkpoint or missing PyTorch is non-fatal —
+burst detection is simply disabled and logged.
 
 ## Full stack with Docker
 

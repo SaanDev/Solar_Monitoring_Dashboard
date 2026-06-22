@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     # The trained burst classifier runs in a separate microservice (the Burst
     # Identifier project). The backend polls e-CALLISTO for new files and scores
     # them via this service, raising `radio_burst` events from positive hits.
+    # Kept for Docker Compose backwards compatibility; no longer used by the backend
+    # now that inference runs natively (see app/ml/). Will be removed in a future release.
     ml_inference_url: str = "http://localhost:9000"
     radio_burst_enabled: bool = True
     # How often to scan the archive for new files (seconds). Files are ~15 min.
@@ -65,6 +67,21 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
+    # ── Native ML inference (burst classifier) ────────────────────────────────
+    # Path to the ResNet-18 checkpoint. Relative paths are resolved from the
+    # backend package root. The checkpoint ships in the repo via Git LFS at
+    # backend/ml_model/best.pt, so a normal `git clone` + `git lfs pull` brings
+    # it down automatically — no manual download needed.
+    ml_model_path: str = "ml_model/best.pt"
+    # Optional direct download URL — only a fallback for environments without
+    # Git LFS (e.g. a GitHub "Download ZIP" that ships LFS pointer files).
+    # Set via ML_MODEL_URL in .env; leave empty to rely on the LFS copy.
+    ml_model_url: str = ""
+    # When True and the checkpoint is missing AND a URL is set, download on startup.
+    ml_model_auto_download: bool = True
+    # Device for torch inference: "auto" (CUDA > MPS > CPU), "cpu", "cuda", "mps".
+    ml_inference_device: str = "auto"
+
     @property
     def fits_dir(self) -> str:
         return str(Path(self.data_dir) / "fits")
@@ -90,6 +107,12 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",")]
 
+    @property
+    def ml_model_dir(self) -> str:
+        """Directory that holds the ML model checkpoint."""
+        p = Path(self.ml_model_path)
+        return str(p.parent if not p.is_absolute() else p.parent)
+
     def ensure_dirs(self) -> None:
         for d in (
             self.fits_dir,
@@ -99,6 +122,11 @@ class Settings(BaseSettings):
             self.analyzer_dir,
         ):
             Path(d).mkdir(parents=True, exist_ok=True)
+        # Model checkpoint directory (relative paths live inside the backend root).
+        ml_path = Path(self.ml_model_path)
+        if not ml_path.is_absolute():
+            ml_path = _BACKEND_ROOT / ml_path
+        ml_path.parent.mkdir(parents=True, exist_ok=True)
 
 
 settings = Settings()

@@ -28,6 +28,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Native ML burst detection — install with: pip install -e ".[ml]"
+# torch/torchvision are large (~700 MB); on Apple Silicon, pip selects the
+# arm64 wheel automatically. On CPU-only machines use:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+ml = [
+    "torch>=2.1",
+    "torchvision>=0.16",
+]
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
