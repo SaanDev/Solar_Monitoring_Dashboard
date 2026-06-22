@@ -8,10 +8,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY pyproject.toml .
 # Install with the [ml] extras so the radio-burst classifier (PyTorch) runs
-# natively in this container. On linux/arm64 (Apple Silicon Macs) PyPI serves a
-# CPU-only wheel automatically; on linux/amd64 it serves the CUDA build, which
-# still runs on CPU inside the container (just a larger image).
-RUN pip install --no-cache-dir -e ".[ml]"
+# natively in this container. Containers have no GPU, so prefer CPU-only torch:
+# on amd64 (Windows / Linux x86) pull the CPU wheel from PyTorch's index to skip
+# the ~2.5 GB CUDA build; on arm64 (Apple Silicon) PyPI already serves CPU-only.
+# TARGETARCH is auto-populated by BuildKit; if empty (classic builder) we fall
+# through to the default index, which still works.
+ARG TARGETARCH
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+        pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu; \
+    fi && \
+    pip install --no-cache-dir -e ".[ml]"
 
 COPY . .
 
