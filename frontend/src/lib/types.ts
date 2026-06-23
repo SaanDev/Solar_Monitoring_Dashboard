@@ -83,6 +83,76 @@ export interface GoesProtonLatest {
   event_in_progress: boolean;
 }
 
+// ─── GOES Electron ───────────────────────────────────────────────────────────
+
+export interface GoesElectronPoint {
+  time: string;
+  flux_ge2mev: number | null;
+}
+
+export interface GoesElectronResponse {
+  start: string;
+  end: string;
+  satellite: number | null;
+  data: GoesElectronPoint[];
+}
+
+export interface GoesElectronLatest {
+  time: string | null;
+  satellite: number | null;
+  flux_ge2mev: number | null;
+}
+
+// ─── GOES Magnetometer ───────────────────────────────────────────────────────
+
+export interface GoesMagnetometerPoint {
+  time: string;
+  hp: number | null;
+  he: number | null;
+  hn: number | null;
+  total: number | null;
+}
+
+export interface GoesMagnetometerResponse {
+  start: string;
+  end: string;
+  satellite: number | null;
+  data: GoesMagnetometerPoint[];
+}
+
+export interface GoesMagnetometerLatest {
+  time: string | null;
+  satellite: number | null;
+  hp: number | null;
+  he: number | null;
+  hn: number | null;
+  total: number | null;
+}
+
+// ─── Solar indices (sunspot progression + F10.7 radio flux) ──────────────────
+
+export interface SunspotSeriesPoint {
+  date: string;
+  number: number;
+  smoothed: number | null;
+}
+
+export interface SunspotSeriesResponse {
+  scope: "cycle" | "recent";
+  source: string;
+  data: SunspotSeriesPoint[];
+}
+
+export interface F107Point {
+  time: string;
+  flux: number;
+}
+
+export interface F107Response {
+  source: string;
+  data: F107Point[];
+}
+
 // ─── Geomagnetic ─────────────────────────────────────────────────────────────
 
 export interface KpPoint {
