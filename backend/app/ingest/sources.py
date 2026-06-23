@@ -8,9 +8,18 @@ logic; ingestion just persists what they return.
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
-from app.models.timeseries import DstIndex, GoesProton, GoesXrs, KpIndex
+from app.models.timeseries import (
+    DstIndex,
+    GoesElectron,
+    GoesMagnetometer,
+    GoesProton,
+    GoesXrs,
+    KpIndex,
+)
 from app.services import (
     dst_service,
+    goes_electron_service,
+    goes_magnetometer_service,
     goes_proton_service,
     goes_xrs_service,
     kp_service,
@@ -29,6 +38,8 @@ class IngestSource:
 SOURCES: list[IngestSource] = [
     IngestSource("GOES-XRS", GoesXrs, goes_xrs_service.SOURCE, goes_xrs_service.collect_recent_records, 300),
     IngestSource("GOES-Proton", GoesProton, goes_proton_service.SOURCE, goes_proton_service.collect_recent_records, 300),
+    IngestSource("GOES-Electron", GoesElectron, goes_electron_service.SOURCE, goes_electron_service.collect_recent_records, 300),
+    IngestSource("GOES-Magnetometer", GoesMagnetometer, goes_magnetometer_service.SOURCE, goes_magnetometer_service.collect_recent_records, 300),
     IngestSource("Kp-Index", KpIndex, kp_service.SOURCE, kp_service.collect_recent_records, 3600),
     IngestSource("Dst-Index", DstIndex, dst_service.SOURCE, dst_service.collect_recent_records, 3600),
 ]

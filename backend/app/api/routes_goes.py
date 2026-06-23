@@ -12,9 +12,18 @@ from app.schemas.goes_schema import (
     GoesProtonResponse,
     GoesXrsLatest,
     GoesProtonLatest,
+    GoesElectronResponse,
+    GoesElectronLatest,
+    GoesMagnetometerResponse,
+    GoesMagnetometerLatest,
 )
 from app.services.goes_xrs_service import get_goes_xrs, get_goes_xrs_latest
 from app.services.goes_proton_service import get_goes_proton, get_goes_proton_latest
+from app.services.goes_electron_service import get_goes_electron, get_goes_electron_latest
+from app.services.goes_magnetometer_service import (
+    get_goes_magnetometer,
+    get_goes_magnetometer_latest,
+)
 
 router = APIRouter(prefix="/api/goes", tags=["goes"])
 
@@ -157,3 +166,85 @@ async def proton_plot(
     png = render_proton_png(resp.data)
     headers = _attach(f"goes_proton_{_stamp(t_start, t_end)}.png") if download else {}
     return Response(content=png, media_type="image/png", headers=headers)
+
+
+# ─── GOES electron flux (>=2 MeV) ────────────────────────────────────────────
+
+
+@router.get("/electrons/latest", response_model=GoesElectronLatest)
+async def goes_electrons_latest(db: AsyncSession = Depends(get_db)) -> GoesElectronLatest:
+    return await get_goes_electron_latest(db)
+
+
+@router.get("/electrons", response_model=GoesElectronResponse)
+async def goes_electrons(
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+) -> GoesElectronResponse:
+    t_start, t_end = _parse_range(start, end)
+    return await get_goes_electron(db, t_start, t_end)
+
+
+@router.get("/electrons/download")
+async def electrons_download(
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    t_start, t_end = _parse_range(start, end)
+    resp = await get_goes_electron(db, t_start, t_end)
+    if format == "json":
+        return Response(
+            content=resp.model_dump_json(indent=2),
+            media_type="application/json",
+            headers=_attach(f"goes_electrons_{_stamp(t_start, t_end)}.json"),
+        )
+    rows = [[p.time.isoformat(), p.flux_ge2mev] for p in resp.data]
+    body = _csv(["time", "flux_ge2mev"], rows)
+    return Response(
+        content=body, media_type="text/csv",
+        headers=_attach(f"goes_electrons_{_stamp(t_start, t_end)}.csv"),
+    )
+
+
+# ─── GOES magnetometer (Hp / He / Hn + total, nT) ────────────────────────────
+
+
+@router.get("/magnetometer/latest", response_model=GoesMagnetometerLatest)
+async def goes_magnetometer_latest(db: AsyncSession = Depends(get_db)) -> GoesMagnetometerLatest:
+    return await get_goes_magnetometer_latest(db)
+
+
+@router.get("/magnetometer", response_model=GoesMagnetometerResponse)
+async def goes_magnetometer(
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+) -> GoesMagnetometerResponse:
+    t_start, t_end = _parse_range(start, end)
+    return await get_goes_magnetometer(db, t_start, t_end)
+
+
+@router.get("/magnetometer/download")
+async def magnetometer_download(
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    t_start, t_end = _parse_range(start, end)
+    resp = await get_goes_magnetometer(db, t_start, t_end)
+    if format == "json":
+        return Response(
+            content=resp.model_dump_json(indent=2),
+            media_type="application/json",
+            headers=_attach(f"goes_magnetometer_{_stamp(t_start, t_end)}.json"),
+        )
+    rows = [[p.time.isoformat(), p.hp, p.he, p.hn, p.total] for p in resp.data]
+    body = _csv(["time", "hp_nt", "he_nt", "hn_nt", "total_nt"], rows)
+    return Response(
+        content=body, media_type="text/csv",
+        headers=_attach(f"goes_magnetometer_{_stamp(t_start, t_end)}.csv"),
+    )

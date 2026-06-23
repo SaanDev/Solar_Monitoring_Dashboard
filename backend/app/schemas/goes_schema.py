@@ -45,3 +45,45 @@ class GoesProtonLatest(BaseModel):
     flux_gt100: float | None = None
     storm_scale: str | None = None
     event_in_progress: bool = False
+
+
+class GoesElectronPoint(BaseModel):
+    time: datetime
+    flux_ge2mev: float | None = None
+
+
+class GoesElectronResponse(BaseModel):
+    start: datetime
+    end: datetime
+    satellite: int | None = None
+    data: list[GoesElectronPoint]
+
+
+class GoesElectronLatest(BaseModel):
+    time: datetime | None = None
+    satellite: int | None = None
+    flux_ge2mev: float | None = None
+
+
+class GoesMagnetometerPoint(BaseModel):
+    time: datetime
+    hp: float | None = None
+    he: float | None = None
+    hn: float | None = None
+    total: float | None = None
+
+
+class GoesMagnetometerResponse(BaseModel):
+    start: datetime
+    end: datetime
+    satellite: int | None = None
+    data: list[GoesMagnetometerPoint]
+
+
+class GoesMagnetometerLatest(BaseModel):
+    time: datetime | None = None
+    satellite: int | None = None
+    hp: float | None = None
+    he: float | None = None
+    hn: float | None = None
+    total: float | None = None

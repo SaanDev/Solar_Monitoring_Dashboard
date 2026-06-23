@@ -6,6 +6,8 @@ from app.models.source_status import SourceStatus
 from app.models.timeseries import (
     HYPERTABLES,
     DstIndex,
+    GoesElectron,
+    GoesMagnetometer,
     GoesProton,
     GoesXrs,
     KpIndex,
@@ -14,6 +16,8 @@ from app.models.timeseries import (
 __all__ = [
     "GoesXrs",
     "GoesProton",
+    "GoesElectron",
+    "GoesMagnetometer",
     "KpIndex",
     "DstIndex",
     "SourceStatus",

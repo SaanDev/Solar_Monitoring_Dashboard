@@ -45,6 +45,29 @@ class GoesProton(_IngestMixin, Base):
     flux_gt100: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
+class GoesElectron(_IngestMixin, Base):
+    __tablename__ = "goes_electron"
+
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    satellite: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Integral electron flux >=2 MeV (electrons / cm^2 s sr). NOAA's primary feed
+    # exposes only this energy band.
+    flux_ge2mev: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class GoesMagnetometer(_IngestMixin, Base):
+    __tablename__ = "goes_magnetometer"
+
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    satellite: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Geomagnetic field components at the satellite (nT): Hp (northward),
+    # He (earthward), Hn (eastward), and the total field magnitude.
+    hp: Mapped[float | None] = mapped_column(Float, nullable=True)
+    he: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hn: Mapped[float | None] = mapped_column(Float, nullable=True)
+    total: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
 class KpIndex(_IngestMixin, Base):
     __tablename__ = "kp_index"
 
@@ -60,4 +83,11 @@ class DstIndex(_IngestMixin, Base):
 
 
 # Tables that should become TimescaleDB hypertables (partitioned on ``time``).
-HYPERTABLES = ("goes_xrs", "goes_proton", "kp_index", "dst_index")
+HYPERTABLES = (
+    "goes_xrs",
+    "goes_proton",
+    "goes_electron",
+    "goes_magnetometer",
+    "kp_index",
+    "dst_index",
+)

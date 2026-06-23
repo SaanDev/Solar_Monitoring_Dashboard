@@ -6,6 +6,12 @@ import type {
   GoesXrsLatest,
   GoesProtonResponse,
   GoesProtonLatest,
+  GoesElectronResponse,
+  GoesElectronLatest,
+  GoesMagnetometerResponse,
+  GoesMagnetometerLatest,
+  SunspotSeriesResponse,
+  F107Response,
   KpPoint,
   DstPoint,
   KpLatest,
@@ -98,6 +104,18 @@ export const api = {
   goesProton: (start: string, end: string) =>
     get<GoesProtonResponse>(`/api/goes/proton?start=${start}&end=${end}`),
   goesProtonLatest: () => get<GoesProtonLatest>("/api/goes/proton/latest"),
+  goesElectrons: (start: string, end: string) =>
+    get<GoesElectronResponse>(`/api/goes/electrons?start=${start}&end=${end}`),
+  goesElectronsLatest: () => get<GoesElectronLatest>("/api/goes/electrons/latest"),
+  goesMagnetometer: (start: string, end: string) =>
+    get<GoesMagnetometerResponse>(`/api/goes/magnetometer?start=${start}&end=${end}`),
+  goesMagnetometerLatest: () =>
+    get<GoesMagnetometerLatest>("/api/goes/magnetometer/latest"),
+
+  // Slow solar-activity indices (live-cached, no DB).
+  sunspotSeries: (scope: "cycle" | "recent") =>
+    get<SunspotSeriesResponse>(`/api/indices/sunspot?scope=${scope}`),
+  f107: () => get<F107Response>("/api/indices/f107"),
 
   kp: (start: string, end: string) =>
     get<KpPoint[]>(`/api/geomagnetic/kp?start=${start}&end=${end}`),
