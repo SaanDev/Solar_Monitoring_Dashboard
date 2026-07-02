@@ -9,6 +9,7 @@ class AlertResponse(BaseModel):
     message: str
     timestamp: datetime
     source: str
+    related_event_ids: list[str] = []
 
 
 class EventResponse(BaseModel):

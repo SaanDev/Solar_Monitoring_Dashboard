@@ -94,9 +94,10 @@ export function ArchiveClient() {
           ))}
         </div>
 
-        {/* Single-date picker for instruments keyed to one day; the geomagnetic
-            tab uses its own From/To date-range controls instead. */}
-        {instrument !== "geomag" && (
+        {/* Single-date picker for instruments keyed to one day. The geomagnetic
+            tab (From/To range) and the solar tab (defaults to the latest, with its
+            own date control) manage their own dates instead. */}
+        {instrument !== "geomag" && instrument !== "solar" && (
           <label className="flex items-center gap-2 text-xs text-slate-500">
             Date (UTC)
             <input
@@ -113,7 +114,7 @@ export function ArchiveClient() {
       {instrument === "radio" ? (
         <RadioArchive date={date} />
       ) : instrument === "solar" ? (
-        <SolarArchive date={date} />
+        <SolarArchive />
       ) : instrument === "xray" ? (
         <XrayProtonArchive date={date} />
       ) : instrument === "geomag" ? (

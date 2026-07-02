@@ -36,6 +36,10 @@ import type {
   RenderParams,
   CombineMode,
   ProjectOpenResponse,
+  AnalysisSession,
+  AnalysisOptions,
+  AnalysisJobStatus,
+  PlotParams,
 } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -73,6 +77,58 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   });
   if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
   return res.json() as Promise<T>;
+}
+
+/** Query string for the Data Analysis /render endpoint (vmin/vmax omitted when null). */
+function analysisPlotQuery(session: string, frame: number, p: PlotParams): string {
+  const q = new URLSearchParams({
+    session,
+    frame: String(frame),
+    cmap: p.cmap,
+    scale: p.scale,
+    clip_low: String(p.clip_low),
+    clip_high: String(p.clip_high),
+    crop: String(p.crop),
+    bl_x: String(p.bl_x),
+    bl_y: String(p.bl_y),
+    tr_x: String(p.tr_x),
+    tr_y: String(p.tr_y),
+    draw_limb: String(p.draw_limb),
+    draw_grid: String(p.draw_grid),
+    colorbar: String(p.colorbar),
+  });
+  if (p.vmin != null) q.set("vmin", String(p.vmin));
+  if (p.vmax != null) q.set("vmax", String(p.vmax));
+  return q.toString();
+}
+
+/** Query string for the Data Analysis /difference endpoint. */
+function analysisDiffQuery(
+  session: string,
+  frame: number,
+  diffType: string,
+  baseIndex: number,
+  p: PlotParams
+): string {
+  const q = new URLSearchParams({
+    session,
+    frame: String(frame),
+    diff_type: diffType,
+    base_index: String(baseIndex),
+    cmap: p.cmap,
+    clip_high: String(p.clip_high),
+    crop: String(p.crop),
+    bl_x: String(p.bl_x),
+    bl_y: String(p.bl_y),
+    tr_x: String(p.tr_x),
+    tr_y: String(p.tr_y),
+    draw_limb: String(p.draw_limb),
+    draw_grid: String(p.draw_grid),
+    colorbar: String(p.colorbar),
+  });
+  if (p.vmin != null) q.set("vmin", String(p.vmin));
+  if (p.vmax != null) q.set("vmax", String(p.vmax));
+  return q.toString();
 }
 
 /** Query string shared by /render and /export (vmin/vmax omitted when null). */
@@ -125,9 +181,9 @@ export const api = {
   dstLatest: () => get<DstLatest>("/api/geomagnetic/dst/latest"),
 
   solarImagesLatest: () => get<SolarImage[]>("/api/solar/images/latest"),
-  solarArchiveImages: (date: string, events: boolean, time = "12:00") =>
+  solarArchiveImages: (date: string, events: boolean, time = "12:00", latest = false) =>
     get<SolarArchiveResponse>(
-      `/api/solar/archive/images?date=${date}&time=${time}&events=${events}`
+      `/api/solar/archive/images?date=${date}&time=${time}&events=${events}&latest=${latest}`
     ),
   solarImages: (source: string, instrument: string, wavelength: string) =>
     get<SolarImage[]>(
@@ -230,4 +286,107 @@ export const api = {
     form.append("file", file);
     return postForm<ProjectOpenResponse>("/api/analyzer/open-project", form);
   },
+
+  // Data Analysis (SDO/AIA via SunPy)
+  analysisOptions: () => get<AnalysisOptions>("/api/analysis/options"),
+  analysisUpload: (files: File[]) => {
+    const form = new FormData();
+    files.forEach((f) => form.append("files", f));
+    return postForm<AnalysisSession>("/api/analysis/source/upload", form);
+  },
+  analysisSession: (id: string) =>
+    get<AnalysisSession>(`/api/analysis/session/${id}`),
+  analysisFetch: (wavelength: string, time: string, prep: boolean) =>
+    postJson<AnalysisJobStatus>("/api/analysis/source/fetch", { wavelength, time, prep }),
+  analysisArchive: (date: string, time: string, wavelength: string) =>
+    postJson<AnalysisSession>("/api/analysis/source/archive", { date, time, wavelength }),
+  analysisSequence: (
+    date: string,
+    start_time: string,
+    step_min: number,
+    n_frames: number,
+    wavelength: string
+  ) =>
+    postJson<AnalysisJobStatus>("/api/analysis/source/sequence", {
+      date,
+      start_time,
+      step_min,
+      n_frames,
+      wavelength,
+    }),
+  analysisDifferenceUrl: (
+    session: string,
+    frame: number,
+    diffType: string,
+    baseIndex: number,
+    p: PlotParams
+  ) => apiUrl(`/api/analysis/difference?${analysisDiffQuery(session, frame, diffType, baseIndex, p)}`),
+  analysisDifferenceDownloadUrl: (
+    session: string,
+    frame: number,
+    diffType: string,
+    baseIndex: number,
+    p: PlotParams
+  ) =>
+    apiUrl(
+      `/api/analysis/difference?${analysisDiffQuery(session, frame, diffType, baseIndex, p)}&download=true`
+    ),
+  analysisRenderUrl: (session: string, frame: number, p: PlotParams) =>
+    apiUrl(`/api/analysis/render?${analysisPlotQuery(session, frame, p)}`),
+  analysisDownloadUrl: (session: string, frame: number, p: PlotParams) =>
+    apiUrl(`/api/analysis/render?${analysisPlotQuery(session, frame, p)}&download=true`),
+  analysisCompositeUrl: (session: string, frame: number, contourLevel: number, p: PlotParams) =>
+    apiUrl(
+      `/api/analysis/composite?${analysisPlotQuery(session, frame, p)}&contour_level=${contourLevel}`
+    ),
+  analysisCompositeDownloadUrl: (session: string, frame: number, contourLevel: number, p: PlotParams) =>
+    apiUrl(
+      `/api/analysis/composite?${analysisPlotQuery(session, frame, p)}&contour_level=${contourLevel}&download=true`
+    ),
+  analysisActiveRegionsUrl: (
+    session: string,
+    frame: number,
+    method: string,
+    thresholdPct: number,
+    p: PlotParams
+  ) =>
+    apiUrl(
+      `/api/analysis/active-regions?${analysisPlotQuery(session, frame, p)}&method=${method}&threshold_pct=${thresholdPct}`
+    ),
+  analysisActiveRegionsDownloadUrl: (
+    session: string,
+    frame: number,
+    method: string,
+    thresholdPct: number,
+    p: PlotParams
+  ) =>
+    apiUrl(
+      `/api/analysis/active-regions?${analysisPlotQuery(session, frame, p)}&method=${method}&threshold_pct=${thresholdPct}&download=true`
+    ),
+  analysisMovie: (
+    session: string,
+    fmt: "mp4" | "gif",
+    fps: number,
+    mode: "plot" | "difference",
+    p: PlotParams
+  ) =>
+    postJson<AnalysisJobStatus>("/api/analysis/movie", {
+      session,
+      fmt,
+      fps,
+      mode,
+      cmap: p.cmap,
+      scale: p.scale,
+      clip_low: p.clip_low,
+      clip_high: p.clip_high,
+      crop: p.crop,
+      bl_x: p.bl_x,
+      bl_y: p.bl_y,
+      tr_x: p.tr_x,
+      tr_y: p.tr_y,
+    }),
+  analysisJob: (jobId: string) =>
+    get<AnalysisJobStatus>(`/api/analysis/jobs/${jobId}`),
+  analysisResultUrl: (jobId: string, download = false) =>
+    apiUrl(`/api/analysis/result/${jobId}${download ? "?download=true" : ""}`),
 };

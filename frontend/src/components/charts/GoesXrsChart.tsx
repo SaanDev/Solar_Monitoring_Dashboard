@@ -3,40 +3,47 @@
 import dynamic from "next/dynamic";
 import type { GoesXrsPoint } from "@/lib/types";
 import { toPlotlyUtc } from "@/lib/formatting";
+import { usePlotlyTheme, type PlotlyTheme } from "./plotlyTheme";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
-const DARK_LAYOUT: Partial<Plotly.Layout> = {
-  paper_bgcolor: "transparent",
-  plot_bgcolor: "#0a0d14",
-  font: { color: "#94a3b8", size: 11 },
-  xaxis: {
-    color: "#475569",
-    gridcolor: "#1e2535",
-    title: { text: "Time (UTC)", font: { size: 10 } },
-    hoverformat: "%Y-%m-%d %H:%M UTC",
-  },
-  yaxis: {
-    type: "log" as const,
-    color: "#475569",
-    gridcolor: "#1e2535",
-    title: { text: "Flux (W/m²)", font: { size: 10 } },
-    range: [-9, -3],
-    dtick: 1,
-  },
-  margin: { t: 20, r: 80, b: 40, l: 70 },
-  legend: { x: 0, y: 1, bgcolor: "transparent", font: { size: 10 } },
-  shapes: _flareShapes(),
-  annotations: _flareAnnotations(),
+function _layout(theme: PlotlyTheme): Partial<Plotly.Layout> {
+  return {
+    ...theme.layout,
+    xaxis: {
+      ...theme.axis,
+      title: { text: "Time (UTC)", font: { size: 10 } },
+      hoverformat: "%Y-%m-%d %H:%M UTC",
+    },
+    yaxis: {
+      type: "log" as const,
+      ...theme.axis,
+      title: { text: "Flux (W/m²)", font: { size: 10 } },
+      range: [-9, -3],
+      dtick: 1,
+    },
+    margin: { t: 20, r: 80, b: 40, l: 70 },
+    legend: { x: 0, y: 1, bgcolor: "transparent", font: { size: 10 } },
+    shapes: _flareShapes(theme.dark),
+    annotations: _flareAnnotations(),
+  };
+}
+
+// Flare-class decade bands, tinted increasingly "hot" toward X; each theme
+// needs its own shades for the tint to stay subtle against the plot bg.
+const _BAND_COLORS = {
+  dark: ["#334155", "#3b4a5e", "#374151", "#44394d", "#4c2626"],
+  light: ["#e2e8f0", "#dbeafe", "#e5e7eb", "#e9d5ff", "#fecaca"],
 };
 
-function _flareShapes(): Partial<Plotly.Shape>[] {
+function _flareShapes(dark: boolean): Partial<Plotly.Shape>[] {
+  const colors = dark ? _BAND_COLORS.dark : _BAND_COLORS.light;
   const classes = [
-    { y: 1e-8, color: "#334155" },
-    { y: 1e-7, color: "#3b4a5e" },
-    { y: 1e-6, color: "#374151" },
-    { y: 1e-5, color: "#44394d" },
-    { y: 1e-4, color: "#4c2626" },
+    { y: 1e-8, color: colors[0] },
+    { y: 1e-7, color: colors[1] },
+    { y: 1e-6, color: colors[2] },
+    { y: 1e-5, color: colors[3] },
+    { y: 1e-4, color: colors[4] },
   ];
   return classes.map(({ y, color }) => ({
     type: "rect",
@@ -80,6 +87,7 @@ interface Props {
 }
 
 export function GoesXrsChart({ data, loading }: Props) {
+  const theme = usePlotlyTheme();
   if (loading) {
     return <div className="h-full animate-pulse rounded bg-surface-muted" />;
   }
@@ -113,7 +121,7 @@ export function GoesXrsChart({ data, loading }: Props) {
           line: { color: "#3b82f6", width: 1.5 },
         },
       ]}
-      layout={DARK_LAYOUT as Plotly.Layout}
+      layout={_layout(theme) as Plotly.Layout}
       config={{ displayModeBar: false, responsive: true }}
       style={{ width: "100%", height: "100%" }}
       useResizeHandler

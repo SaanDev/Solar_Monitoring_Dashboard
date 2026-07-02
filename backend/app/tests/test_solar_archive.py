@@ -62,6 +62,75 @@ async def test_archive_images_list(client):
     assert "NOAA_SWPC_Observer" not in by_id["lascoc2"]["image_url"]
 
 
+_DATED_BROWSE = """
+20260630_195022_2048_0171.jpg
+20260630_200522_2048_0171.jpg
+20260630_201022_2048_0171.jpg
+20260630_200000_2048_HMIB.jpg
+20260630_200000_2048_HMIBC.jpg
+20260630_200000_2048_HMIIC.jpg
+"""
+
+
+async def test_historical_uses_sdo_dated_browse_not_helioviewer(client):
+    # The reported bug: browsing 2026-06-30 20:00 returned a 2026-06-29 Helioviewer
+    # frame. It must now return a real 2026-06-30 frame from SDO's dated archive,
+    # nearest the requested time, with downloads targeting that shown frame.
+    stale = datetime(2026, 6, 29, 20, 0, tzinfo=timezone.utc)  # Helioviewer lag
+    with patch.object(sa, "_cached_listing", new=AsyncMock(return_value=_DATED_BROWSE)), patch.object(
+        sa, "_closest_time", new=AsyncMock(return_value=stale)
+    ):
+        r = await client.get("/api/solar/archive/images?date=2026-06-30&time=20:00")
+    assert r.status_code == 200
+    by = {i["id"]: i for i in r.json()["images"]}
+
+    aia = by["aia171"]
+    assert aia["image_url"].startswith("https://sdo.gsfc.nasa.gov/assets/img/browse/2026/06/30/")
+    assert "20260630_200522_2048_0171.jpg" in aia["image_url"]  # nearest to 20:00
+    assert aia["time"].startswith("2026-06-30T20:05")           # real frame time, not 06-29
+    assert "date=2026-06-30" in aia["png_download_url"]          # download = shown frame
+    assert "helioviewer" not in aia["image_url"]
+    # Code match is exact: HMIB must not pick up HMIBC.
+    assert "20260630_200000_2048_HMIB.jpg" in by["hmib"]["image_url"]
+    # LASCO has no dated archive -> Helioviewer nearest, still labelled its real time.
+    assert "helioviewer" in by["lascoc2"]["image_url"]
+
+
+async def test_historical_overlay_falls_back_to_helioviewer(client):
+    # With the active-region overlay on, browse frames can't carry it, so the disk
+    # images come from Helioviewer (which supports the HEK overlay) instead.
+    fixed = datetime(2026, 6, 30, 20, 0, tzinfo=timezone.utc)
+    with patch.object(sa, "_closest_time", new=AsyncMock(return_value=fixed)):
+        r = await client.get("/api/solar/archive/images?date=2026-06-30&time=20:00&events=true")
+    assert r.status_code == 200
+    by = {i["id"]: i for i in r.json()["images"]}
+    assert "NOAA_SWPC_Observer" in by["aia171"]["image_url"]
+
+
+async def test_latest_mode_shows_browse_frames_with_science_downloads(client):
+    # Latest mode displays the fresh near-real-time browse frame (as the Overview
+    # does) while downloads still resolve to the newest *science* frame.
+    sci = datetime(2026, 6, 29, 20, 30, tzinfo=timezone.utc)     # days-old science
+    browse = datetime(2026, 7, 1, 15, 50, tzinfo=timezone.utc)   # fresh quick-look
+    with patch.object(sa, "_closest_time", new=AsyncMock(return_value=sci)), patch.object(
+        sa, "_browse_time", new=AsyncMock(return_value=browse)
+    ):
+        r = await client.get("/api/solar/archive/images?date=2026-07-01&latest=true")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["latest"] is True
+    by_id = {im["id"]: im for im in body["images"]}
+
+    aia = by_id["aia171"]
+    assert aia["image_url"].startswith("https://sdo.gsfc.nasa.gov/assets/img/latest/")
+    assert "helioviewer" not in aia["image_url"]
+    assert aia["time"].startswith("2026-07-01")                 # fresh browse time
+    assert "date=2026-06-29" in aia["png_download_url"]          # download = science frame
+    assert "date=2026-06-29" in aia["fts_download_url"]
+    # Coronagraph uses the SOHO realtime browse frame.
+    assert by_id["lascoc2"]["image_url"].startswith("https://soho.nascom.nasa.gov/data/realtime/c2/")
+
+
 # ── Download proxies ──
 
 
@@ -120,9 +189,18 @@ hmi.M_720s.20250115_130000_TAI.fits
 """
 
 
+# One SDO dated-browse frame per catalog code (historical display source).
+_SDO_BROWSE_LISTING = " ".join(
+    f"20250115_120000_2048_{c}.jpg"
+    for c in ("0094", "0131", "0171", "0193", "0211", "0304", "0335", "1600", "HMIIC", "HMIB")
+)
+
+
 async def test_list_marks_fits_availability(client):
     fixed = datetime(2025, 1, 15, 12, 0, tzinfo=timezone.utc)
-    with patch.object(sa, "_closest_time", new=AsyncMock(return_value=fixed)):
+    with patch.object(sa, "_closest_time", new=AsyncMock(return_value=fixed)), patch.object(
+        sa, "_cached_listing", new=AsyncMock(return_value=_SDO_BROWSE_LISTING)
+    ):
         r = await client.get(f"/api/solar/archive/images?date={_DATE}")
     by_id = {im["id"]: im for im in r.json()["images"]}
     assert by_id["aia171"]["fits_available"] is True

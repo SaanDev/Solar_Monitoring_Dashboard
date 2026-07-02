@@ -215,6 +215,7 @@ export interface SolarArchiveResponse {
   date: string;
   time: string;
   with_events: boolean;
+  latest: boolean;
   images: SolarArchiveImage[];
 }
 
@@ -385,6 +386,8 @@ export interface Alert {
   message: string;
   timestamp: string;
   source: string;
+  /** Ids of physically associated events (e.g. the radio burst of a flare). */
+  related_event_ids?: string[];
 }
 
 export interface SpaceWeatherEvent {
@@ -462,4 +465,69 @@ export interface ProjectSettings {
 export interface ProjectOpenResponse {
   session: AnalyzerSession;
   settings: ProjectSettings;
+}
+
+// ─── Data Analysis (SDO/AIA via SunPy) ─────────────────────────────────────────
+
+export interface AnalysisFrameMeta {
+  index: number;
+  time: string | null;
+  filename: string;
+}
+
+export interface AnalysisSession {
+  id: string;
+  source: "upload" | "fetch" | "archive";
+  observatory: string;
+  instrument: string;
+  detector: string;
+  measurement: string;
+  wavelength_angstrom: number | null;
+  reference_time: string | null;
+  width: number;
+  height: number;
+  n_frames: number;
+  frames: AnalysisFrameMeta[];
+}
+
+export interface WavelengthOption {
+  code: string;
+  label: string;
+}
+
+export interface AnalysisOptions {
+  wavelengths: WavelengthOption[];
+  colormaps: string[];
+  scales: string[];
+  difference_types: string[];
+  movie_formats: string[];
+  max_frames: number;
+}
+
+export interface AnalysisJobStatus {
+  job_id: string;
+  state: "pending" | "running" | "done" | "error";
+  progress: number;
+  message: string;
+  error: string | null;
+  session: AnalysisSession | null;
+  result_url: string | null;
+  meta: Record<string, unknown> | null;
+}
+
+export interface PlotParams {
+  cmap: string;
+  scale: string;
+  clip_low: number;
+  clip_high: number;
+  vmin: number | null;
+  vmax: number | null;
+  crop: boolean;
+  bl_x: number;
+  bl_y: number;
+  tr_x: number;
+  tr_y: number;
+  draw_limb: boolean;
+  draw_grid: boolean;
+  colorbar: boolean;
 }

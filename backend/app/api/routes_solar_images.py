@@ -64,8 +64,9 @@ async def solar_archive_images(
     date: str = Query(..., description="UTC date YYYY-MM-DD"),
     time: str = Query("12:00", description="UTC time HH:MM"),
     events: bool = Query(False, description="Overlay NOAA SWPC active regions"),
+    latest: bool = Query(False, description="Show the newest frame available on the day"),
 ) -> SolarArchiveResponse:
-    return await get_archive_images(_parse_date(date), time, events)
+    return await get_archive_images(_parse_date(date), time, events, latest)
 
 
 @router.get("/solar/archive/image")
