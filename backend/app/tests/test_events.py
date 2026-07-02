@@ -1,5 +1,6 @@
 """Tests for the event/alert engine: pure detectors, the detect-and-store pass
-(idempotency), range queries, alert derivation, and the API endpoints."""
+(idempotency), range queries, alert derivation, cross-type correlation, and the
+API endpoints."""
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -7,13 +8,14 @@ from httpx import ASGITransport, AsyncClient
 
 from app.main import app
 from app.models.timeseries import DstIndex, GoesProton, GoesXrs, KpIndex
+from app.processing.event_correlation import correlate_events, event_key
 from app.processing.event_detection import (
     detect_dst_storms,
     detect_kp_storms,
     detect_proton_events,
     detect_xray_flares,
 )
-from app.repositories.event_repo import query_range as query_events
+from app.repositories.event_repo import query_range as query_events, upsert_events
 from app.repositories.timeseries_repo import upsert_points
 from app.services.event_service import detect_and_store, get_events, get_latest_alerts
 
@@ -55,13 +57,46 @@ def test_ongoing_event_has_no_end_time():
     assert flares[0]["severity"] == "M2.0"
 
 
-def test_short_gap_merges_long_gap_splits():
-    # Two active samples 10 min apart (<= MAX_GAP) -> one event.
-    merged = detect_xray_flares(_xrs(_T0, [2e-6], _MIN) + _xrs(_T0 + 10 * _MIN, [2e-6], _MIN))
-    assert len(merged) == 1
-    # 30 min apart (> MAX_GAP) -> two events.
-    split = detect_xray_flares(_xrs(_T0, [2e-6], _MIN) + _xrs(_T0 + 30 * _MIN, [2e-6], _MIN))
-    assert len(split) == 2
+def test_flare_data_gap_shorter_than_max_stays_one():
+    # A rising flare with a 11-min data gap (<= FLARE_MAX_GAP) mid-event stays one flare.
+    pts = _xrs(_T0, [1e-7, 5e-6]) + _xrs(_T0 + 12 * _MIN, [8e-6, 3e-6, 1e-7])
+    flares = detect_xray_flares(pts)
+    assert len(flares) == 1
+    assert flares[0]["peak_value"] == 8e-6
+
+
+def test_flare_long_data_gap_splits():
+    # Two separate flares an hour apart -> two events (the gap is not bridged).
+    pts = _xrs(_T0, [1e-7, 5e-6, 1e-7]) + _xrs(_T0 + 60 * _MIN, [1e-7, 6e-6, 1e-7])
+    assert len(detect_xray_flares(pts)) == 2
+
+
+def test_flare_ends_at_half_decay_not_c1_crossing():
+    # An M-flare on an elevated C-class background: with the old "flux >= C1" rule
+    # this span would never end (background never drops below C1) and would read as
+    # perpetually "in progress". NOAA-style, it ends once flux decays half-way from
+    # the peak back to the background, and no spurious flare is raised on the flat
+    # background itself.
+    bg = 3e-6  # C3 background
+    fluxes = [bg, bg, bg, 5e-5, 3e-5, 1.5e-5, 8e-6, 5e-6, 3.5e-6, bg]
+    flares = detect_xray_flares(_xrs(_T0, fluxes))
+    assert len(flares) == 1
+    f = flares[0]
+    assert f["severity"] == "M5.0"        # classified by absolute peak, per NOAA
+    assert f["peak_value"] == 5e-5
+    assert f["end_time"] is not None      # properly ended, not stuck "in progress"
+
+
+def test_flat_elevated_background_is_not_a_flare():
+    # A steady C3 background with no brightening is background, not a flare.
+    assert detect_xray_flares(_xrs(_T0, [3e-6] * 10)) == []
+
+
+def test_distinct_flares_on_shared_background_not_merged():
+    # Two M-flares sharing an elevated background are two events, not one giant span.
+    flares = detect_xray_flares(_xrs(_T0, [2e-6, 3e-5, 5e-6, 4e-5, 2e-6]))
+    assert len(flares) == 2
+    assert [f["severity"] for f in flares] == ["M3.0", "M4.0"]
 
 
 def test_proton_event_scale():
@@ -107,6 +142,62 @@ def test_dst_possible_storm_above_moderate():
     assert events[0]["severity"] == "Possible storm"
     assert events[0]["peak_value"] == -40
     assert "Possible geomagnetic storm" in events[0]["description"]
+
+
+# ── Cross-type correlation (flare ↔ radio burst) ─────────────────────────────
+
+
+def _ev(etype: str, start: datetime, end: datetime | None) -> dict:
+    return {"type": etype, "start_time": start, "end_time": end}
+
+
+def test_overlapping_flare_and_burst_are_related():
+    flare = _ev("xray_flare", _T0, _T0 + 40 * _MIN)
+    burst = _ev("radio_burst", _T0 + 10 * _MIN, _T0 + 25 * _MIN)
+    related = correlate_events([flare, burst])
+    assert related[event_key(flare)] == [burst]
+    assert related[event_key(burst)] == [flare]
+
+
+def test_burst_within_gap_after_flare_is_related():
+    flare = _ev("xray_flare", _T0, _T0 + 10 * _MIN)
+    burst = _ev("radio_burst", _T0 + 35 * _MIN, _T0 + 50 * _MIN)  # 25 min after flare end
+    assert event_key(flare) in correlate_events([flare, burst])
+
+
+def test_burst_beyond_gap_is_not_related():
+    flare = _ev("xray_flare", _T0, _T0 + 10 * _MIN)
+    burst = _ev("radio_burst", _T0 + 45 * _MIN, _T0 + 60 * _MIN)  # 35 min after flare end
+    assert correlate_events([flare, burst]) == {}
+
+
+def test_ongoing_flare_relates_to_later_burst():
+    flare = _ev("xray_flare", _T0, None)  # still in progress
+    burst = _ev("radio_burst", _T0 + 3 * timedelta(hours=1), _T0 + 3 * timedelta(hours=1) + 15 * _MIN)
+    assert event_key(flare) in correlate_events([flare, burst])
+
+
+def test_stale_ongoing_flare_does_not_relate_to_much_later_burst():
+    # A row stuck "in progress" for days (never closed by the detection pass)
+    # must not pair with every burst that follows — the open end is capped.
+    flare = _ev("xray_flare", _T0, None)
+    burst = _ev("radio_burst", _T0 + timedelta(days=6), _T0 + timedelta(days=6) + 15 * _MIN)
+    assert correlate_events([flare, burst]) == {}
+
+
+def test_same_type_and_unpaired_types_are_not_related():
+    flare_a = _ev("xray_flare", _T0, _T0 + 10 * _MIN)
+    flare_b = _ev("xray_flare", _T0 + 5 * _MIN, _T0 + 15 * _MIN)
+    storm = _ev("geomagnetic_storm_kp", _T0, _T0 + 10 * _MIN)
+    assert correlate_events([flare_a, flare_b, storm]) == {}
+
+
+def test_flare_related_to_multiple_bursts_newest_first():
+    flare = _ev("xray_flare", _T0, _T0 + 60 * _MIN)
+    early = _ev("radio_burst", _T0 + 5 * _MIN, _T0 + 20 * _MIN)
+    late = _ev("radio_burst", _T0 + 30 * _MIN, _T0 + 45 * _MIN)
+    related = correlate_events([flare, early, late])
+    assert related[event_key(flare)] == [late, early]
 
 
 # ── detect_and_store + repository ────────────────────────────────────────────
@@ -167,6 +258,48 @@ async def test_old_subsided_event_kept_in_feed(db_session):
 
     events = await get_events(db_session, base - timedelta(days=1), datetime.now(timezone.utc) + _MIN)
     assert any(e.type == "xray_flare" for e in events)
+
+
+async def test_events_and_alerts_carry_related_ids(db_session):
+    # An M-class flare and a radio-burst event in the same half hour must
+    # cross-reference each other on both read surfaces (events + alerts).
+    base = _recent(120)
+    await upsert_points(db_session, GoesXrs, _xrs(base, [1e-7, 2e-6, 2e-5, 5e-6, 1e-7]), "noaa-swpc")
+    await detect_and_store(db_session)
+    await upsert_events(
+        db_session,
+        [{
+            "type": "radio_burst",
+            "start_time": base + 5 * _MIN,
+            "end_time": base + 20 * _MIN,
+            "peak_time": base + 10 * _MIN,
+            "peak_value": 0.97,
+            "severity": "High-confidence burst",
+            "description": "Radio burst window",
+            "source_url": None,
+        }],
+        source="ml-model",
+    )
+
+    events = await get_events(db_session, base - timedelta(days=1), datetime.now(timezone.utc) + _MIN)
+    flare = next(e for e in events if e.type == "xray_flare")
+    burst = next(e for e in events if e.type == "radio_burst")
+    assert burst.id in flare.related_event_ids
+    assert flare.id in burst.related_event_ids
+
+    alerts = await get_latest_alerts(db_session)
+    flare_alert = next(a for a in alerts if a.type == "xray_flare")
+    assert burst.id in flare_alert.related_event_ids
+
+
+async def test_unrelated_event_has_empty_related_ids(db_session):
+    base = _recent(120)
+    await upsert_points(db_session, GoesXrs, _xrs(base, [1e-7, 2e-6, 2e-5, 5e-6, 1e-7]), "noaa-swpc")
+    await detect_and_store(db_session)
+
+    events = await get_events(db_session, base - timedelta(days=1), datetime.now(timezone.utc) + _MIN)
+    flare = next(e for e in events if e.type == "xray_flare")
+    assert flare.related_event_ids == []
 
 
 async def test_alert_feed_is_full_history_newest_first(db_session):

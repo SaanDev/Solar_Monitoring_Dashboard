@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import type { F107Point } from "@/lib/types";
 import { toPlotlyUtc } from "@/lib/formatting";
+import { usePlotlyTheme } from "./plotlyTheme";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export function RadioFluxChart({ data, loading }: Props) {
+  const theme = usePlotlyTheme();
   if (loading) return <div className="h-full animate-pulse rounded bg-surface-muted" />;
   if (!data.length) {
     return (
@@ -38,18 +40,14 @@ export function RadioFluxChart({ data, loading }: Props) {
       ]}
       layout={
         {
-          paper_bgcolor: "transparent",
-          plot_bgcolor: "#0a0d14",
-          font: { color: "#94a3b8", size: 11 },
+          ...theme.layout,
           xaxis: {
-            color: "#475569",
-            gridcolor: "#1e2535",
+            ...theme.axis,
             title: { text: "Date (UTC)", font: { size: 10 } },
             hoverformat: "%Y-%m-%d",
           },
           yaxis: {
-            color: "#475569",
-            gridcolor: "#1e2535",
+            ...theme.axis,
             title: { text: "F10.7 (sfu)", font: { size: 10 } },
             rangemode: "tozero" as const,
           },

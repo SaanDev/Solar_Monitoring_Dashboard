@@ -14,6 +14,9 @@ const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 function DownloadRow({ img, compact = false }: { img: SolarArchiveImage; compact?: boolean }) {
   const cls =
     "flex items-center gap-1 rounded bg-surface-muted px-2 py-1 text-xs text-slate-300 transition-colors hover:bg-accent-blue/30 hover:text-accent-blue";
+  // PNG/JP2 exist for every source; FITS only for AIA/HMI (via JSOC). Show the
+  // FITS control always, but disabled when this source has no raw science FITS.
+  const fitsReady = img.fits_available && img.fts_download_url;
   return (
     <div className={clsx("flex items-center", compact ? "gap-1" : "gap-2")}>
       <a href={`${apiBase}${img.png_download_url}`} download className={cls} title="Download PNG image">
@@ -22,7 +25,7 @@ function DownloadRow({ img, compact = false }: { img: SolarArchiveImage; compact
       <a href={`${apiBase}${img.jp2_download_url}`} download className={cls} title="Download raw JPEG2000">
         <Download className="h-3.5 w-3.5" /> JP2
       </a>
-      {img.fits_available && img.fts_download_url ? (
+      {fitsReady ? (
         <a
           href={`${apiBase}${img.fts_download_url}`}
           download
@@ -31,7 +34,15 @@ function DownloadRow({ img, compact = false }: { img: SolarArchiveImage; compact
         >
           <Download className="h-3.5 w-3.5" /> FITS
         </a>
-      ) : null}
+      ) : (
+        <span
+          className="flex cursor-not-allowed items-center gap-1 rounded bg-surface-muted/40 px-2 py-1 text-xs text-slate-600"
+          title="No raw science FITS for this source"
+          aria-disabled="true"
+        >
+          <Download className="h-3.5 w-3.5" /> FITS
+        </span>
+      )}
     </div>
   );
 }
@@ -94,14 +105,29 @@ function Lightbox({ img, onClose }: { img: SolarArchiveImage; onClose: () => voi
   );
 }
 
-export function SolarArchive({ date }: { date: string }) {
-  const [events, setEvents] = useState(false);
+function utcToday(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export function SolarArchive() {
+  const today = utcToday();
+  // Solar images are near-real-time, so this tab opens on *today* — i.e. the
+  // latest frames — with no toggle. Pick an earlier date to browse archived data.
+  const [date, setDate] = useState(today);
   const [time, setTime] = useState("12:00");
+  const [events, setEvents] = useState(false);
   const [active, setActive] = useState<SolarArchiveImage | null>(null);
 
+  // Today → newest near-real-time browse frames; an earlier day → archived
+  // (Helioviewer) frames at the chosen time. The selected date decides the mode.
+  const isLatest = date >= today;
+  // Browse frames can't carry the HEK active-region overlay, so it only applies
+  // to archived (by-time) renders.
+  const reqEvents = isLatest ? false : events;
+
   const { data, isLoading, error } = useSWR(
-    ["solar-archive", date, time, events],
-    () => api.solarArchiveImages(date, events, time),
+    ["solar-archive", date, time, reqEvents, isLatest],
+    () => api.solarArchiveImages(date, reqEvents, time, isLatest),
     { revalidateOnFocus: false }
   );
   const images = data?.images ?? [];
@@ -110,27 +136,55 @@ export function SolarArchive({ date }: { date: string }) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-surface-border bg-surface-card p-3">
         <p className="text-xs text-slate-500">
-          Full-disk SDO (AIA/HMI) &amp; SOHO/LASCO via Helioviewer · {date} ~{time} UTC
+          Full-disk SDO (AIA/HMI) &amp; SOHO/LASCO ·{" "}
+          {isLatest
+            ? "latest near-real-time frames · downloads are the newest science data"
+            : `${date} ~${time} UTC · closest archived frame (actual time shown per image)`}
         </p>
         <div className="flex flex-wrap items-center gap-4">
           <label className="flex items-center gap-2 text-xs text-slate-500">
-            Time (UTC)
+            Date (UTC)
             <input
-              type="time"
-              value={time}
-              onChange={(e) => setTime(e.target.value || "12:00")}
+              type="date"
+              value={date}
+              max={today}
+              onChange={(e) => setDate(e.target.value || today)}
               className="rounded border border-surface-border bg-surface-muted px-2 py-1 text-xs text-slate-300 outline-none focus:border-accent-blue"
             />
           </label>
-          <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-300">
-            <input
-              type="checkbox"
-              checked={events}
-              onChange={(e) => setEvents(e.target.checked)}
-              className="h-3.5 w-3.5 accent-accent-blue"
-            />
-            Show NOAA active regions
-          </label>
+          {isLatest ? (
+            <span className="rounded bg-accent-blue/15 px-2 py-1 text-xs text-accent-blue">
+              Live · latest
+            </span>
+          ) : (
+            <>
+              <button
+                onClick={() => setDate(today)}
+                className="rounded bg-surface-muted px-2 py-1 text-xs text-accent-blue transition-colors hover:bg-accent-blue/20"
+                title="Jump back to the latest images"
+              >
+                Latest
+              </button>
+              <label className="flex items-center gap-2 text-xs text-slate-500">
+                Time (UTC)
+                <input
+                  type="time"
+                  value={time}
+                  onChange={(e) => setTime(e.target.value || "12:00")}
+                  className="rounded border border-surface-border bg-surface-muted px-2 py-1 text-xs text-slate-300 outline-none focus:border-accent-blue"
+                />
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={events}
+                  onChange={(e) => setEvents(e.target.checked)}
+                  className="h-3.5 w-3.5 accent-accent-blue"
+                />
+                Show NOAA active regions
+              </label>
+            </>
+          )}
         </div>
       </div>
 

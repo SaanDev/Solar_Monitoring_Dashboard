@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import { clsx } from "clsx";
+import { Link2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useApp } from "@/components/providers";
 import { windowFor } from "@/lib/formatting";
@@ -24,6 +25,7 @@ type RangeKey = (typeof RANGES)[number]["key"];
 
 export function EventsClient() {
   const [range, setRange] = useState<RangeKey>("7d");
+  const [grouped, setGrouped] = useState(false);
   const hours = RANGES.find((r) => r.key === range)!.hours;
   const { start, end } = windowFor(hours);
 
@@ -91,7 +93,20 @@ export function EventsClient() {
               <span className="ml-2 font-mono text-slate-400">{events.length}</span>
             )}
           </h2>
-          <div className="flex gap-1">
+          <div className="flex flex-wrap items-center gap-1">
+            <button
+              onClick={() => setGrouped((g) => !g)}
+              title="Merge related events (e.g. a flare and its radio burst) into one cluster"
+              className={clsx(
+                "mr-2 flex items-center gap-1.5 rounded px-3 py-1 text-xs transition-colors",
+                grouped
+                  ? "bg-accent-blue/20 text-accent-blue"
+                  : "text-slate-500 hover:bg-surface-muted hover:text-slate-300"
+              )}
+            >
+              <Link2 className="h-3.5 w-3.5" />
+              Group related
+            </button>
             {RANGES.map((r) => (
               <button
                 key={r.key}
@@ -118,7 +133,7 @@ export function EventsClient() {
             Loading events…
           </div>
         ) : (
-          <EventTimeline events={events ?? []} />
+          <EventTimeline events={events ?? []} grouped={grouped} />
         )}
       </section>
     </div>

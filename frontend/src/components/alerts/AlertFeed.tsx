@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { clsx } from "clsx";
+import { Link2 } from "lucide-react";
 
 import type { Alert } from "@/lib/types";
 import { formatUtcShort } from "@/lib/formatting";
@@ -24,6 +25,20 @@ const sevBorder = {
   warning: "border-accent-orange/40 bg-accent-orange/5",
   critical: "border-accent-red/40 bg-accent-red/5",
 } as const;
+
+// What the partner of a related pair is called (flare ↔ radio burst is the
+// only association the backend currently links).
+const RELATED_PARTNER: Record<string, string> = {
+  xray_flare: "radio burst",
+  radio_burst: "solar flare",
+};
+
+function relatedNote(a: Alert): string | null {
+  const n = a.related_event_ids?.length ?? 0;
+  if (!n) return null;
+  const partner = RELATED_PARTNER[a.type] ?? "event";
+  return `occurred with ${n > 1 ? `${n} ${partner}s` : `a ${partner}`}`;
+}
 
 /**
  * Alerts grouped into a dedicated area per type (Flare / Radio Bursts /
@@ -89,6 +104,12 @@ export function AlertFeed({
                         </span>
                       </div>
                       <p className="truncate text-slate-400">{a.message}</p>
+                      {relatedNote(a) && (
+                        <p className="mt-1 flex items-center gap-1 text-[10px] text-slate-500">
+                          <Link2 className="h-3 w-3 shrink-0" />
+                          {relatedNote(a)}
+                        </p>
+                      )}
                     </Link>
                   </li>
                 ))}

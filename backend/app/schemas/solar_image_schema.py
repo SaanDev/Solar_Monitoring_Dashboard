@@ -36,6 +36,7 @@ class SolarArchiveImage(BaseModel):
 
 class SolarArchiveResponse(BaseModel):
     date: str
-    time: str
+    time: str                       # effective UTC time resolved against (HH:MM)
     with_events: bool
+    latest: bool = False            # newest-available mode (vs a fixed archive time)
     images: list[SolarArchiveImage] = []

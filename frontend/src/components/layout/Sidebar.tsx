@@ -15,6 +15,7 @@ import {
   Archive,
   Settings,
   SlidersHorizontal,
+  Microscope,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -29,6 +30,7 @@ const NAV = [
   { href: "/burst-predictor", label: "Burst Predictor", icon: Radar },
   { href: "/e-callisto-analyzer", label: "e-CALLISTO Analyzer", icon: SlidersHorizontal },
   { href: "/solar-images", label: "Solar Images", icon: Image },
+  { href: "/data-analysis", label: "Data Analysis", icon: Microscope },
   { href: "/xray-proton", label: "X-ray & Proton", icon: Activity },
   { href: "/coronagraph", label: "Coronagraph", icon: Telescope },
   { href: "/geomagnetic", label: "Geomagnetic", icon: Compass },

@@ -38,6 +38,19 @@ PROTON_MIN_PFU = 10.0   # NOAA SEP / S1 onset (>=10 MeV >= 10 pfu).
 KP_MIN_STORM = 5.0      # NOAA G1 onset (confirmed geomagnetic storm).
 DST_MAX_NT = -50.0      # moderate-storm onset (Dst <= -50 nT).
 
+# X-ray flares are NOT a fixed-threshold crossing (unlike proton/Kp/Dst). Near
+# solar maximum the GOES long-channel *background* rides up to C-level, so
+# "flux >= C1" stays true for hours-to-days — a big M/X flare's slow decay never
+# dips back under the threshold, so its span runs to the latest sample and reads
+# as perpetually "in progress", and every flare on that elevated background merges
+# into one span whose peak is meaningless. Instead flares are segmented the way
+# NOAA/SWPC defines an X-ray event: an onset is a genuine *brightening* over the
+# local background, and the flare *ends* once it decays half-way from its peak
+# back to that background — not when it finally slips under C1.
+FLARE_RISE_WINDOW = timedelta(minutes=10)  # trailing window for the pre-flare background.
+FLARE_RISE_FACTOR = 1.4    # onset: flux must exceed 1.4x the local background AND be rising.
+FLARE_END_FRACTION = 0.5   # end: flux decays half-way from peak back to background.
+
 # "Possible geomagnetic storm" (watch) onsets: elevated, pre-storm activity that
 # may develop into a storm. A geomagnetic span is now flagged from these lower
 # thresholds; whether it is reported as a *possible* storm or a confirmed one is
@@ -104,10 +117,81 @@ _KP_URL = "https://www.swpc.noaa.gov/products/planetary-k-index"
 _DST_URL = "https://wdc.kugi.kyoto-u.ac.jp/dstdir/"
 
 
+def _flare_spans(samples: list[Sample]) -> list[dict]:
+    """Segment GOES long-channel flux into individual flares (NOAA/SWPC-style).
+
+    Unlike the fixed-threshold ``_spans``, a flare is *onset* only when the flux
+    rises meaningfully above the recent background (>= ``FLARE_RISE_FACTOR`` x the
+    trailing-window minimum, while above the C1 floor, and while actually
+    increasing), and is *closed* once it decays half-way from its peak back to
+    that onset background. This keeps a slowly-decaying M/X flare from lingering
+    as an endless "in progress" span, stops an elevated background from reading as
+    one giant flare, and separates distinct flares that share that background. A
+    flare still elevated at the most recent sample is ongoing (``end_time=None``).
+    """
+    pts = sorted((t, v) for t, v in samples if v is not None and v > 0)
+    if not pts:
+        return []
+    last_time = pts[-1][0]
+
+    out: list[dict] = []
+    window: list[Sample] = []          # (t, flux) within the trailing FLARE_RISE_WINDOW
+    cur: Optional[dict] = None
+    prev_t: Optional[datetime] = None
+    prev_v = 0.0
+
+    def _open(t: datetime, v: float, bg: float) -> dict:
+        return {"start_time": t, "background": bg, "peak_time": t, "peak_value": v, "last_active": t}
+
+    def _emit(fl: dict, end_time: Optional[datetime]) -> None:
+        out.append({
+            "start_time": fl["start_time"],
+            "end_time": end_time,
+            "peak_time": fl["peak_time"],
+            "peak_value": fl["peak_value"],
+        })
+
+    for t, v in pts:
+        while window and t - window[0][0] > FLARE_RISE_WINDOW:
+            window.pop(0)
+        background = min(f for _, f in window) if window else None
+        rising = prev_t is not None and (t - prev_t) <= FLARE_RISE_WINDOW and v > prev_v
+        onset = (
+            background is not None
+            and v >= FLARE_MIN_FLUX
+            and v >= background * FLARE_RISE_FACTOR
+            and rising
+        )
+
+        if cur is None:
+            if onset:
+                cur = _open(t, v, background)
+        elif t - cur["last_active"] > FLARE_MAX_GAP:
+            _emit(cur, cur["last_active"])          # data dropout: end before the gap
+            cur = _open(t, v, background) if onset else None
+        else:
+            if v > cur["peak_value"]:
+                cur["peak_value"], cur["peak_time"] = v, t
+            end_level = cur["background"] + FLARE_END_FRACTION * (cur["peak_value"] - cur["background"])
+            if v <= end_level:
+                _emit(cur, t)                        # decayed past the half-way point
+                cur = None
+            else:
+                cur["last_active"] = t
+
+        window.append((t, v))
+        prev_t, prev_v = t, v
+
+    if cur is not None:
+        _emit(cur, None if cur["last_active"] == last_time else cur["last_active"])
+
+    return out
+
+
 def detect_xray_flares(points: list[dict]) -> list[dict]:
     samples = [(p["time"], p.get("long_channel")) for p in points]
     out = []
-    for s in _spans(samples, lambda v: v >= FLARE_MIN_FLUX, FLARE_MAX_GAP):
+    for s in _flare_spans(samples):
         cls = flare_class(s["peak_value"])
         out.append({
             "type": "xray_flare",

@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import type { GoesMagnetometerPoint } from "@/lib/types";
 import { toPlotlyUtc } from "@/lib/formatting";
+import { usePlotlyTheme } from "./plotlyTheme";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export function MagnetometerChart({ data, loading }: Props) {
+  const theme = usePlotlyTheme();
   if (loading) return <div className="h-full animate-pulse rounded bg-surface-muted" />;
   if (!data.length) {
     return (
@@ -41,22 +43,19 @@ export function MagnetometerChart({ data, loading }: Props) {
         trace("hp", "Hp (north)", "#3b82f6"),
         trace("he", "He (earth)", "#06b6d4"),
         trace("hn", "Hn (east)", "#a855f7"),
-        trace("total", "Total", "#e2e8f0"),
+        // Near-white reads on the dark plot only; flip to dark slate on light.
+        trace("total", "Total", theme.dark ? "#e2e8f0" : "#334155"),
       ]}
       layout={
         {
-          paper_bgcolor: "transparent",
-          plot_bgcolor: "#0a0d14",
-          font: { color: "#94a3b8", size: 11 },
+          ...theme.layout,
           xaxis: {
-            color: "#475569",
-            gridcolor: "#1e2535",
+            ...theme.axis,
             title: { text: "Time (UTC)", font: { size: 10 } },
             hoverformat: "%Y-%m-%d %H:%M UTC",
           },
           yaxis: {
-            color: "#475569",
-            gridcolor: "#1e2535",
+            ...theme.axis,
             title: { text: "Field (nT)", font: { size: 10 } },
           },
           margin: { t: 20, r: 20, b: 40, l: 60 },
