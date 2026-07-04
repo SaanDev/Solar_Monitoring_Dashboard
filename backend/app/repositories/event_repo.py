@@ -27,6 +27,7 @@ _EVENT_FIELDS = (
     "peak_value",
     "severity",
     "description",
+    "stations",
     "source_url",
 )
 

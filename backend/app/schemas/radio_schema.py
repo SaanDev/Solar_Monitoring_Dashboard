@@ -183,3 +183,47 @@ class BurstPredictionJob(BaseModel):
     stations: list[str] = []
     error: str | None = None
     result: BurstPredictionResult | None = None
+
+
+# ── Scorecard (stored detections vs official list, trailing window) ──────────
+
+
+class ScorecardDay(BaseModel):
+    date: str
+    has_data: bool = False             # scanner produced scored files this day
+    pending: bool = False              # official list likely not published yet
+    scored_files: int = 0
+    burst_files: int = 0               # files classified Burst above alert minimum
+    official_count: int = 0
+    predicted_count: int = 0           # corroborated predicted events
+    matched_official: int = 0          # official events the model matched
+    matched_predicted: int = 0         # predicted events matching an official burst
+
+
+class BurstScorecardResponse(BaseModel):
+    days: int
+    days_with_data: int = 0            # totals below cover only these days
+    official_total: int = 0
+    predicted_total: int = 0
+    matched_official: int = 0
+    matched_predicted: int = 0
+    recall: float | None = None        # matched_official / official_total
+    precision: float | None = None     # matched_predicted / predicted_total
+    daily: list[ScorecardDay] = []
+
+
+# ── Official burst list over a date range (timeline overlay) ─────────────────
+
+
+class OfficialBurstItem(BaseModel):
+    start_time: datetime               # UTC
+    end_time: datetime
+    burst_type: str                    # e.g. "III", "II", "CTM"
+    stations: list[str] = []
+
+
+class OfficialBurstRangeResponse(BaseModel):
+    start: str                         # YYYY-MM-DD (inclusive)
+    end: str
+    source: str = "e-callisto"
+    events: list[OfficialBurstItem] = []

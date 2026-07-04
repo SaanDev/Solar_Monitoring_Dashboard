@@ -12,6 +12,17 @@ import type {
   GoesMagnetometerLatest,
   SunspotSeriesResponse,
   F107Response,
+  SolarWindLatest,
+  SolarWindSeriesResponse,
+  KpForecastResponse,
+  CmeListResponse,
+  NoaaScalesResponse,
+  AuroraForecast,
+  BurstScorecardResponse,
+  OfficialBurstRangeResponse,
+  NotificationSettings,
+  NotificationTestResponse,
+  SolarCycleResponse,
   KpPoint,
   DstPoint,
   KpLatest,
@@ -72,6 +83,16 @@ async function postNoBody<T>(path: string): Promise<T> {
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
+  return res.json() as Promise<T>;
+}
+
+async function putJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -173,6 +194,19 @@ export const api = {
     get<SunspotSeriesResponse>(`/api/indices/sunspot?scope=${scope}`),
   f107: () => get<F107Response>("/api/indices/f107"),
 
+  // Real-time solar wind: speed + IMF Bt/Bz (live-proxied NOAA windows, no DB).
+  solarWindLatest: () => get<SolarWindLatest>("/api/solar-wind/latest"),
+  solarWindSeries: (range: string) =>
+    get<SolarWindSeriesResponse>(`/api/solar-wind/series?range=${range}`),
+
+  // Forecasting: predicted Kp (Newell coupling), DONKI CMEs with ENLIL
+  // arrivals, NOAA 3-day R/S/G outlook, OVATION aurora.
+  forecastKp: (range: string) =>
+    get<KpForecastResponse>(`/api/forecast/kp?range=${range}`),
+  forecastCmes: (days = 7) => get<CmeListResponse>(`/api/forecast/cmes?days=${days}`),
+  forecastNoaaScales: () => get<NoaaScalesResponse>("/api/forecast/noaa-scales"),
+  forecastAurora: () => get<AuroraForecast>("/api/forecast/aurora"),
+
   kp: (start: string, end: string) =>
     get<KpPoint[]>(`/api/geomagnetic/kp?start=${start}&end=${end}`),
   dst: (start: string, end: string) =>
@@ -246,10 +280,25 @@ export const api = {
   // Result assembled from already-stored detections for a date (no re-scoring).
   burstPredictionStored: (date: string, raw = false) =>
     get<BurstPredictionResult>(`/api/radio/predict/stored?date=${date}&raw=${raw}`),
+  // Model performance over the trailing window (stored detections vs official list).
+  burstScorecard: (days = 30) =>
+    get<BurstScorecardResponse>(`/api/radio/predict/scorecard?days=${days}`),
+  // Official burst-list events over a date range (timeline overlay, max 31 days).
+  officialBurstsRange: (start: string, end: string) =>
+    get<OfficialBurstRangeResponse>(`/api/radio/bursts/range?start=${start}&end=${end}`),
 
   alertsLatest: () => get<Alert[]>("/api/alerts/latest"),
   events: (start: string, end: string) =>
     get<SpaceWeatherEvent[]>(`/api/events?start=${start}&end=${end}`),
+
+  // Alert delivery (Telegram / webhook push)
+  notificationSettings: () => get<NotificationSettings>("/api/notifications/settings"),
+  saveNotificationSettings: (s: Omit<NotificationSettings, "telegram_token_configured" | "updated_at">) =>
+    putJson<NotificationSettings>("/api/notifications/settings", s),
+  testNotifications: () => postNoBody<NotificationTestResponse>("/api/notifications/test"),
+
+  // Solar-cycle progression (monthly SSN/F10.7 + Cycle 25 prediction)
+  solarCycle: () => get<SolarCycleResponse>("/api/indices/solar-cycle"),
 
   // e-CALLISTO Analyzer
   analyzerOptions: () => get<AnalyzerOptions>("/api/analyzer/colormaps"),

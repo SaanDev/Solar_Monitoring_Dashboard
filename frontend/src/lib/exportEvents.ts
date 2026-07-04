@@ -21,6 +21,7 @@ const SECTIONS: { key: AlertCategoryKey; heading: string }[] = [
   { key: "radio_burst", heading: "RADIO BURSTS" },
   { key: "proton_event", heading: "SEP EVENTS (Solar Energetic Particle / proton events)" },
   { key: "geomagnetic_storm", heading: "GEOMAGNETIC STORMS" },
+  { key: "cme", heading: "EARTH-DIRECTED CMES" },
 ];
 
 /** UTC calendar day (YYYY-MM-DD) of an ISO timestamp. */

@@ -3,6 +3,7 @@
 import { Monitor, Moon, Sun } from "lucide-react";
 import { clsx } from "clsx";
 import { useApp, type Theme } from "@/components/providers";
+import { NotificationSettingsCard } from "@/components/settings/NotificationSettingsCard";
 
 const OPTIONS: { key: Theme; label: string; icon: typeof Sun }[] = [
   { key: "light", label: "Light", icon: Sun },
@@ -38,6 +39,8 @@ export function SettingsClient() {
           ))}
         </div>
       </section>
+
+      <NotificationSettingsCard />
     </div>
   );
 }

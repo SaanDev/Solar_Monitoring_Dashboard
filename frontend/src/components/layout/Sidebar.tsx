@@ -16,6 +16,10 @@ import {
   Settings,
   SlidersHorizontal,
   Microscope,
+  Wind,
+  TrendingUp,
+  CalendarRange,
+  Orbit,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -34,6 +38,10 @@ const NAV = [
   { href: "/xray-proton", label: "X-ray & Proton", icon: Activity },
   { href: "/coronagraph", label: "Coronagraph", icon: Telescope },
   { href: "/geomagnetic", label: "Geomagnetic", icon: Compass },
+  { href: "/solar-wind", label: "Solar Wind", icon: Wind },
+  { href: "/forecast", label: "Forecast", icon: TrendingUp },
+  { href: "/timeline", label: "Timeline", icon: CalendarRange },
+  { href: "/solar-cycle", label: "Solar Cycle", icon: Orbit },
   { href: "/events", label: "Alerts", icon: Bell, badge: true },
   { href: "/archive", label: "Archive", icon: Archive },
   { href: "/settings", label: "Settings", icon: Settings },

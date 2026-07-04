@@ -1,5 +1,6 @@
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { OverviewMetrics } from "./OverviewMetrics";
+import { OverviewForecast } from "./OverviewForecast";
 import { OverviewXrayChart } from "./OverviewXrayChart";
 import { OverviewProtonChart } from "./OverviewProtonChart";
 import { OverviewKpChart, OverviewDstChart } from "./OverviewGeomagnetic";
@@ -7,6 +8,7 @@ import { OverviewSolarImages } from "./OverviewSolarImages";
 import { OverviewAlertsPanel } from "./OverviewAlertsPanel";
 import { OverviewElectronChart } from "./OverviewElectronChart";
 import { OverviewMagnetometerChart } from "./OverviewMagnetometerChart";
+import { OverviewSolarWindChart, OverviewImfChart } from "./OverviewSolarWind";
 import { OverviewSunspotChart } from "./OverviewSunspotChart";
 import { OverviewRadioFlux } from "./OverviewRadioFlux";
 import { LascoMovie } from "@/components/coronagraph/LascoPanel";
@@ -18,6 +20,9 @@ export default function OverviewPage() {
       <div className="space-y-4">
         {/* Row 1 — summary metric cards */}
         <OverviewMetrics />
+
+        {/* Row 1.5 — forecast strip: predicted Kp, inbound CMEs, 3-day outlook */}
+        <OverviewForecast />
 
         {/* Row 2 — radio dynamic spectrum + GOES X-ray + GOES proton */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
@@ -57,13 +62,19 @@ export default function OverviewPage() {
           </div>
         </div>
 
-        {/* Row 5 — GOES electron flux + magnetometer (real-time) */}
+        {/* Row 5 — solar wind speed + IMF Bt/Bz (real-time L1) */}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <OverviewSolarWindChart />
+          <OverviewImfChart />
+        </div>
+
+        {/* Row 6 — GOES electron flux + magnetometer (real-time) */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <OverviewElectronChart />
           <OverviewMagnetometerChart />
         </div>
 
-        {/* Row 6 — F10.7 radio flux (bottom-left) + sunspot progression */}
+        {/* Row 7 — F10.7 radio flux (bottom-left) + sunspot progression */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
           <div className="flex flex-col lg:col-span-4">
             <OverviewRadioFlux />

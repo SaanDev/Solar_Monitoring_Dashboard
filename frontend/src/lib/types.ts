@@ -129,6 +129,105 @@ export interface GoesMagnetometerLatest {
   total: number | null;
 }
 
+// ─── Solar wind (real-time: speed + IMF Bt/Bz) ───────────────────────────────
+
+export interface SolarWindPoint {
+  time: string;
+  speed: number | null;
+  bt: number | null;
+  bz: number | null;
+}
+
+export interface SolarWindSeriesResponse {
+  range: string;
+  source: string;
+  data: SolarWindPoint[];
+}
+
+export interface SolarWindLatest {
+  time: string | null;
+  speed: number | null;
+  bz: number | null;
+  bt: number | null;
+  source: string;
+}
+
+// ─── Forecast (predicted Kp, DONKI CMEs, NOAA 3-day outlook, aurora) ─────────
+
+export interface KpForecastPoint {
+  time: string;
+  kp: number | null; // trailing-hour smoothed predicted Kp
+}
+
+export interface KpForecastLatest {
+  time: string | null;
+  kp: number | null; // smoothed predicted Kp (next ~1-3 h)
+  coupling: number | null; // Newell dΦ/dt
+  g_scale: string | null; // G level this Kp maps to (null = no storm)
+}
+
+export interface KpForecastResponse {
+  range: string;
+  source: string;
+  latest: KpForecastLatest;
+  data: KpForecastPoint[];
+}
+
+export interface CmeItem {
+  activity_id: string;
+  start_time: string;
+  source_location: string | null;
+  active_region: number | null;
+  latitude: number | null;
+  longitude: number | null;
+  half_angle: number | null; // cone half-width, degrees
+  speed: number | null; // radial speed at 21.5 Rs, km/s
+  cme_type: string | null; // DONKI class: S/C/O/R/ER
+  time21_5: string | null;
+  is_earth_directed: boolean;
+  predicted_arrival_time: string | null;
+  predicted_kp: number | null;
+  note: string;
+  catalog_link: string | null;
+}
+
+export interface CmeListResponse {
+  days: number;
+  source: string;
+  cmes: CmeItem[];
+}
+
+export interface NoaaScaleDay {
+  date: string | null;
+  r_scale: string | null;
+  r_text: string | null;
+  r_minor_prob: number | null; // P(R1-R2) %
+  r_major_prob: number | null; // P(R3+) %
+  s_scale: string | null;
+  s_text: string | null;
+  s_prob: number | null; // P(S1+) %
+  g_scale: string | null;
+  g_text: string | null;
+}
+
+export interface NoaaScalesResponse {
+  issued: string | null;
+  source: string;
+  observed: NoaaScaleDay | null; // yesterday's reached maxima
+  current: NoaaScaleDay | null; // today so far
+  forecast: NoaaScaleDay[]; // next 3 days
+}
+
+export interface AuroraForecast {
+  observation_time: string | null;
+  forecast_time: string | null;
+  power_north_gw: number | null;
+  power_south_gw: number | null;
+  north_image_url: string;
+  south_image_url: string;
+  source: string;
+}
+
 // ─── Solar indices (sunspot progression + F10.7 radio flux) ──────────────────
 
 export interface SunspotSeriesPoint {
@@ -377,6 +476,100 @@ export interface BurstPredictionJob {
   result: BurstPredictionResult | null;
 }
 
+// ─── Burst scorecard (model vs official list, trailing window) ───────────────
+
+export interface ScorecardDay {
+  date: string;
+  has_data: boolean;
+  pending: boolean; // official list likely not published yet
+  scored_files: number;
+  burst_files: number;
+  official_count: number;
+  predicted_count: number;
+  matched_official: number;
+  matched_predicted: number;
+}
+
+export interface BurstScorecardResponse {
+  days: number;
+  days_with_data: number;
+  official_total: number;
+  predicted_total: number;
+  matched_official: number;
+  matched_predicted: number;
+  recall: number | null; // official bursts the model matched
+  precision: number | null; // predicted events matching an official burst
+  daily: ScorecardDay[];
+}
+
+// ─── Official burst list over a date range (timeline overlay) ────────────────
+
+export interface OfficialBurstItem {
+  start_time: string;
+  end_time: string;
+  burst_type: string; // e.g. "III", "II", "CTM"
+  stations: string[];
+}
+
+export interface OfficialBurstRangeResponse {
+  start: string;
+  end: string;
+  source: string;
+  events: OfficialBurstItem[];
+}
+
+// ─── Notifications (alert delivery) ──────────────────────────────────────────
+
+export type AlertSeverity = "info" | "watch" | "warning" | "critical";
+
+export interface NotificationSettings {
+  telegram_enabled: boolean;
+  telegram_chat_id: string;
+  webhook_enabled: boolean;
+  webhook_url: string;
+  min_severity: AlertSeverity;
+  event_types: string[]; // empty = all
+  telegram_token_configured: boolean;
+  updated_at: string | null;
+}
+
+export interface ChannelResult {
+  ok: boolean;
+  error: string | null;
+}
+
+export interface NotificationTestResponse {
+  telegram: ChannelResult | null;
+  webhook: ChannelResult | null;
+}
+
+// ─── Solar cycle progression ─────────────────────────────────────────────────
+
+export interface SolarCycleObservedPoint {
+  month: string; // "YYYY-MM"
+  ssn: number | null;
+  smoothed_ssn: number | null;
+  f107: number | null;
+  smoothed_f107: number | null;
+}
+
+export interface SolarCyclePredictedPoint {
+  month: string;
+  ssn: number | null;
+  ssn_high: number | null;
+  ssn_low: number | null;
+  f107: number | null;
+  f107_high: number | null;
+  f107_low: number | null;
+}
+
+export interface SolarCycleResponse {
+  source: string;
+  cycle25_start: string;
+  observed: SolarCycleObservedPoint[];
+  predicted: SolarCyclePredictedPoint[];
+}
+
 // ─── Alerts & Events ─────────────────────────────────────────────────────────
 
 export interface Alert {
@@ -399,6 +592,8 @@ export interface SpaceWeatherEvent {
   peak_time: string | null;
   peak_value: number | null;
   description: string;
+  /** Observing stations for station-based events (radio bursts); empty otherwise. */
+  stations: string[];
   related_event_ids: string[];
   source_url: string | null;
 }

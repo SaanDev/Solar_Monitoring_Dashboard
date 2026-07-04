@@ -1,6 +1,8 @@
 """ORM models. Importing this package registers every table on ``Base.metadata``
 (used by Alembic autogenerate and by ``create_all`` in tests)."""
+from app.models.cme import CmeEvent
 from app.models.events import SpaceWeatherEvent
+from app.models.notifications import NotificationSettings, SentNotification
 from app.models.radio_detections import RadioBurstDetection
 from app.models.source_status import SourceStatus
 from app.models.timeseries import (
@@ -23,5 +25,8 @@ __all__ = [
     "SourceStatus",
     "SpaceWeatherEvent",
     "RadioBurstDetection",
+    "CmeEvent",
+    "NotificationSettings",
+    "SentNotification",
     "HYPERTABLES",
 ]

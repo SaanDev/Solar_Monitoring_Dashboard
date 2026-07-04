@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     data_dir: str = _DEFAULT_DATA_DIR
 
     noaa_base_url: str = "https://services.swpc.noaa.gov"
+    # NASA DONKI (CME catalog + WSA-ENLIL arrival predictions). The CCMC web
+    # service needs no API key, unlike the api.nasa.gov mirror.
+    donki_base_url: str = "https://kauai.ccmc.gsfc.nasa.gov/DONKI"
+    # How often to re-fetch the DONKI window (analyses are revised for days),
+    # and how far back that window reaches.
+    cme_poll_seconds: int = 7200
+    cme_lookback_days: int = 30
     helioviewer_base_url: str = "https://api.helioviewer.org"
     # JSOC synoptic FITS archives (SDO/AIA + SDO/HMI) for raw downloads.
     jsoc_base_url: str = "http://jsoc.stanford.edu"
@@ -64,6 +71,16 @@ class Settings(BaseSettings):
     silso_base_url: str = "https://www.sidc.be"
 
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+
+    # ── Alert delivery (Telegram / webhook push) ───────────────────────────────
+    # Bot token from @BotFather — the one channel secret, kept out of the DB.
+    telegram_bot_token: str = ""
+    telegram_api_base: str = "https://api.telegram.org"
+    # Dispatch pass cadence + per-pass send cap (flood control) + how far back
+    # an event can start and still be delivered.
+    notify_dispatch_seconds: int = 120
+    notify_max_per_pass: int = 8
+    notify_lookback_hours: int = 48
 
     # ── Native ML inference (burst classifier) ────────────────────────────────
     # Path to the ResNet-18 checkpoint. Relative paths are resolved from the

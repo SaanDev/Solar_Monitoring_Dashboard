@@ -21,5 +21,7 @@ class EventResponse(BaseModel):
     peak_time: datetime | None = None
     peak_value: float | None = None
     description: str
+    # Observing stations for station-based events (radio bursts); empty otherwise.
+    stations: list[str] = []
     related_event_ids: list[str] = []
     source_url: str | None = None

@@ -113,6 +113,7 @@ def _to_event_response(e: dict, related_ids: list[str] | None = None) -> EventRe
         peak_time=e.get("peak_time"),
         peak_value=e.get("peak_value"),
         description=e.get("description", ""),
+        stations=[s for s in (e.get("stations") or "").split(",") if s],
         related_event_ids=related_ids or [],
         source_url=e.get("source_url"),
     )
@@ -175,6 +176,11 @@ def _alert_level(event_type: str, severity: str | None) -> str:
         return _DST_LEVEL.get(severity, "info")
     if event_type == "radio_burst":
         return _RADIO_LEVEL.get(severity, "info")
+    # Forecast-derived types: predictions cap at "warning" — only a measured
+    # storm/flare can be "critical".
+    if event_type in ("cme", "geomagnetic_storm_prediction"):
+        n = _scale_number(severity) if severity.startswith("G") else 0
+        return "warning" if n >= 3 else "watch"
     return "info"
 
 

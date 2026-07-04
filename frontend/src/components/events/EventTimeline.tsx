@@ -39,6 +39,16 @@ const TYPE_META: Record<
     dot: "bg-accent-green",
     badge: "border-accent-green/40 bg-accent-green/10 text-accent-green",
   },
+  geomagnetic_storm_prediction: {
+    label: "Predicted Storm · Solar Wind",
+    dot: "bg-accent-yellow",
+    badge: "border-accent-yellow/40 bg-accent-yellow/10 text-accent-yellow",
+  },
+  cme: {
+    label: "Earth-Directed CME",
+    dot: "bg-accent-blue",
+    badge: "border-accent-blue/40 bg-accent-blue/10 text-accent-blue",
+  },
 };
 
 const FALLBACK = {
