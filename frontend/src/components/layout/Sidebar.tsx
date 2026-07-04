@@ -20,6 +20,7 @@ import {
   TrendingUp,
   CalendarRange,
   Orbit,
+  BookOpen,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -44,6 +45,7 @@ const NAV = [
   { href: "/solar-cycle", label: "Solar Cycle", icon: Orbit },
   { href: "/events", label: "Alerts", icon: Bell, badge: true },
   { href: "/archive", label: "Archive", icon: Archive },
+  { href: "/reference", label: "Science Reference", icon: BookOpen },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
