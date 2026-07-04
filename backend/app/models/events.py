@@ -42,6 +42,9 @@ class SpaceWeatherEvent(Base):
     # "G3"), or storm level ("Intense storm").
     severity: Mapped[str | None] = mapped_column(String(32), nullable=True)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Observing stations (comma-separated) for station-based events (radio
+    # bursts) — lets the UI show only spectrograms that actually saw the event.
+    stations: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(64), nullable=False, default="derived")
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(

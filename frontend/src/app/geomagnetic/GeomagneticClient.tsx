@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import useSWR from "swr";
 import { api } from "@/lib/api";
 import { KpChart } from "@/components/charts/KpChart";
@@ -40,6 +41,13 @@ export function GeomagneticClient() {
   );
   const { data: kpLatest } = useSWR("kp-latest", api.kpLatest, { refreshInterval: 180000 });
   const { data: dstLatest } = useSWR("dst-latest", api.dstLatest, { refreshInterval: 600000 });
+  // Forward-looking counterpart to the measured Kp (Newell coupling forecast).
+  const { data: kpForecast } = useSWR(
+    "forecast-kp-geomag",
+    () => api.forecastKp("2-hour"),
+    { refreshInterval: 60000 }
+  );
+  const predictedKp = kpForecast?.latest?.kp;
 
   return (
     <div className="space-y-4">
@@ -67,6 +75,29 @@ export function GeomagneticClient() {
                 </span>
               )}
             </p>
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-wider text-slate-500">
+              Predicted Kp (~1–3 h)
+            </p>
+            <p
+              className={clsx(
+                "font-mono text-2xl font-bold",
+                predictedKp != null && predictedKp >= 5
+                  ? "text-accent-red"
+                  : "text-accent-purple"
+              )}
+            >
+              {predictedKp != null ? predictedKp.toFixed(1) : "—"}
+              {kpForecast?.latest?.g_scale && (
+                <span className="ml-2 rounded bg-accent-red/20 px-2 py-0.5 text-sm text-accent-red">
+                  {kpForecast.latest.g_scale}
+                </span>
+              )}
+            </p>
+            <Link href="/forecast" className="text-[10px] text-accent-blue hover:underline">
+              solar-wind coupling forecast →
+            </Link>
           </div>
           <div className="text-xs text-slate-600">
             <p>Kp source: NOAA SWPC</p>

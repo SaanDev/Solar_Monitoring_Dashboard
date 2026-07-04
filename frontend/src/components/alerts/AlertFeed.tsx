@@ -58,6 +58,7 @@ export function AlertFeed({
     radio_burst: [],
     geomagnetic_storm: [],
     proton_event: [],
+    cme: [],
   };
   for (const a of alerts) {
     const key = categoryOf(a.type);

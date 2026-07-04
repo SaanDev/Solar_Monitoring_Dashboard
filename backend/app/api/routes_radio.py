@@ -24,8 +24,11 @@ from app.schemas.radio_schema import (
     BurstPredictionRequest,
     BurstPredictionJob,
     BurstPredictionResult,
+    BurstScorecardResponse,
+    OfficialBurstRangeResponse,
 )
 from app.services import burst_predictor_service as predictor
+from app.services.burst_scorecard_service import get_official_bursts_range, get_scorecard
 from app.services.ecallisto_service import (
     list_stations,
     process_fits_file,
@@ -88,6 +91,21 @@ async def live_spectrum(
 @router.get("/bursts/latest", response_model=BurstEventsResponse)
 async def bursts_latest() -> BurstEventsResponse:
     return await get_latest_burst_events()
+
+
+@router.get("/bursts/range", response_model=OfficialBurstRangeResponse)
+async def bursts_range(
+    start: str = Query(..., description="UTC date YYYY-MM-DD (inclusive)"),
+    end: str = Query(..., description="UTC date YYYY-MM-DD (inclusive)"),
+) -> OfficialBurstRangeResponse:
+    """Official e-CALLISTO burst-list events over a date range (max 31 days) —
+    backs the Timeline page's 'Radio · Official' lane."""
+    first, last = _parse_date(start), _parse_date(end)
+    if last < first:
+        raise HTTPException(status_code=400, detail="end is before start")
+    if (last - first).days > 31:
+        raise HTTPException(status_code=400, detail="range is limited to 31 days")
+    return await get_official_bursts_range(first, last)
 
 
 @router.get("/bursts/detections", response_model=RadioBurstDetectionsResponse)
@@ -154,6 +172,19 @@ async def prediction_stored(
     rows = await detections_for_range(db, start, start + timedelta(days=1))
     result = await predictor.assemble_result(rows, day, raw=raw)
     return BurstPredictionResult(**result)
+
+
+@router.get("/predict/scorecard", response_model=BurstScorecardResponse)
+async def prediction_scorecard(
+    days: int = Query(30, ge=7, le=60),
+    db: AsyncSession = Depends(get_db),
+) -> BurstScorecardResponse:
+    """Model performance over the trailing window: stored real-time detections
+    vs. the official burst list, per day + totals (recall / precision).
+
+    Declared before ``/predict/{job_id}`` so that path param doesn't capture it.
+    """
+    return await get_scorecard(db, days)
 
 
 @router.get("/predict/{job_id}", response_model=BurstPredictionJob)

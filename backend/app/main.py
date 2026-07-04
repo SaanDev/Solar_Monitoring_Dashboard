@@ -13,6 +13,9 @@ from app.api.routes_summary import router as summary_router
 from app.api.routes_goes import router as goes_router
 from app.api.routes_geomagnetic import router as geomagnetic_router
 from app.api.routes_solar_indices import router as solar_indices_router
+from app.api.routes_solar_wind import router as solar_wind_router
+from app.api.routes_forecast import router as forecast_router
+from app.api.routes_notifications import router as notifications_router
 from app.api.routes_solar_images import router as solar_router
 from app.api.routes_radio import router as radio_router
 from app.api.routes_alerts import router as alerts_router
@@ -99,6 +102,9 @@ app.include_router(summary_router)
 app.include_router(goes_router)
 app.include_router(geomagnetic_router)
 app.include_router(solar_indices_router)
+app.include_router(solar_wind_router)
+app.include_router(forecast_router)
+app.include_router(notifications_router)
 app.include_router(solar_router)
 app.include_router(radio_router)
 app.include_router(alerts_router)

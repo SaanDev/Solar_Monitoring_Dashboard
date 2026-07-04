@@ -1,5 +1,6 @@
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { LascoPanel } from "@/components/coronagraph/LascoPanel";
+import { CmeList } from "@/components/forecast/CmeList";
 
 export default function CoronagraphPage() {
   return (
@@ -11,6 +12,10 @@ export default function CoronagraphPage() {
         </div>
         <div className="max-w-5xl rounded-lg border border-surface-border bg-surface-card p-4">
           <LascoPanel />
+        </div>
+        {/* The CMEs behind those coronagraph frames, with ENLIL Earth arrivals. */}
+        <div className="max-w-5xl">
+          <CmeList days={7} compact limit={8} />
         </div>
       </div>
     </DashboardShell>

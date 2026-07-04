@@ -11,7 +11,10 @@ from app.config import settings
 from app.database import AsyncSessionLocal
 from app.ingest.runner import run_all, run_ingest
 from app.ingest.sources import SOURCES, IngestSource
+from app.services.cme_service import collect_and_store as collect_cmes
 from app.services.event_service import detect_and_store
+from app.services.forecast_service import detect_and_store_predicted_storms
+from app.services.notification_service import dispatch_pending
 from app.services.radio_burst_service import scan_and_detect_radio_bursts
 
 logger = logging.getLogger(__name__)
@@ -35,6 +38,21 @@ async def _detection_job() -> None:
 async def _radio_burst_job() -> None:
     async with AsyncSessionLocal() as db:
         await scan_and_detect_radio_bursts(db)
+
+
+async def _cme_job() -> None:
+    async with AsyncSessionLocal() as db:
+        await collect_cmes(db)
+
+
+async def _forecast_job() -> None:
+    async with AsyncSessionLocal() as db:
+        await detect_and_store_predicted_storms(db)
+
+
+async def _notify_job() -> None:
+    async with AsyncSessionLocal() as db:
+        await dispatch_pending(db)
 
 
 def start_scheduler() -> None:
@@ -68,6 +86,33 @@ def start_scheduler() -> None:
             max_instances=1,
             coalesce=True,
         )
+    scheduler.add_job(
+        _cme_job,
+        trigger="interval",
+        seconds=settings.cme_poll_seconds,
+        id="cme-ingest",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _forecast_job,
+        trigger="interval",
+        seconds=_DETECTION_INTERVAL_SECONDS,
+        id="kp-forecast-detection",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _notify_job,
+        trigger="interval",
+        seconds=settings.notify_dispatch_seconds,
+        id="alert-notify",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     scheduler.start()
     logger.info(
         "scheduler started with %d ingest jobs + event detection%s",
@@ -82,6 +127,8 @@ async def run_initial_ingest() -> None:
     async with AsyncSessionLocal() as db:
         await run_all(db)
         await detect_and_store(db)
+        await collect_cmes(db)
+        await detect_and_store_predicted_storms(db)
         if settings.radio_burst_enabled:
             await scan_and_detect_radio_bursts(db)
 

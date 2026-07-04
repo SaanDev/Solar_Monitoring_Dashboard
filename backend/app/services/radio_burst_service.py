@@ -110,6 +110,7 @@ def aggregate_events(detections: list[dict]) -> list[dict]:
                 "description": _describe(
                     window_start, stations, len(high_conf_stations), peak["probability"]
                 ),
+                "stations": ",".join(stations),
                 "source_url": None,
             }
         )

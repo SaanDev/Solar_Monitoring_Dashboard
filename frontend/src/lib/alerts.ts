@@ -2,14 +2,15 @@
 // friendly label, and where clicking it should visualize the underlying data.
 // Used by the overview alerts panel, the events-page alert feed, and the event
 // timeline so all three stay consistent.
-import { Activity, Compass, Radio, Zap } from "lucide-react";
+import { Activity, Compass, Globe, Radio, Zap } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export type AlertCategoryKey =
   | "xray_flare"
   | "radio_burst"
   | "geomagnetic_storm"
-  | "proton_event";
+  | "proton_event"
+  | "cme";
 
 export interface AlertCategory {
   key: AlertCategoryKey;
@@ -31,6 +32,7 @@ export const ALERT_CATEGORIES: AlertCategory[] = [
     accent: "text-accent-purple",
   },
   { key: "proton_event", title: "Proton Event Alerts", icon: Activity, accent: "text-accent-red" },
+  { key: "cme", title: "CME Alerts", icon: Globe, accent: "text-accent-cyan" },
 ];
 
 // Friendly per-alert label for a machine event-type key.
@@ -40,6 +42,11 @@ const TYPE_LABEL: Record<string, string> = {
   proton_event: "Proton Event",
   geomagnetic_storm_kp: "Geomagnetic Storm",
   geomagnetic_storm_dst: "Geomagnetic Storm",
+  geomagnetic_storm_prediction: "Predicted Geomagnetic Storm",
+  cme: "Earth-Directed CME",
+  // Synthesized on the Timeline page from the published e-CALLISTO list
+  // (never stored in the events table).
+  official_radio_burst: "Official Radio Burst",
 };
 
 export function alertLabel(type: string): string {
@@ -51,6 +58,7 @@ export function categoryOf(type: string): AlertCategoryKey | null {
   if (type === "xray_flare") return "xray_flare";
   if (type === "radio_burst") return "radio_burst";
   if (type === "proton_event") return "proton_event";
+  if (type === "cme") return "cme";
   if (type.startsWith("geomagnetic_storm")) return "geomagnetic_storm";
   return null;
 }
@@ -67,6 +75,9 @@ function utcDay(iso: string): string {
  *  - geomagnetic storms → the Archive's Kp/Dst charts
  */
 export function alertHref(type: string, timestamp: string): string {
+  // Forecast-derived alerts visualize on the Forecast page (CME arrival
+  // countdown, predicted-Kp chart), not in the historical archive.
+  if (type === "cme" || type === "geomagnetic_storm_prediction") return "/forecast";
   const date = utcDay(timestamp);
   switch (categoryOf(type)) {
     case "radio_burst":

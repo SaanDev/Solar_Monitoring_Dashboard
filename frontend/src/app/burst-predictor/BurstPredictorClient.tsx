@@ -11,6 +11,7 @@ import {
   predictedToReportEvents,
 } from "@/lib/exportEvents";
 import { ExportEventsButton } from "@/components/events/ExportEventsButton";
+import { ScorecardSection } from "@/components/radio/ScorecardSection";
 import type {
   PredictedDetection,
   PredictedEvent,
@@ -162,6 +163,9 @@ export function BurstPredictorClient() {
   return (
     <div className="space-y-4">
       <RealtimeMonitor />
+
+      {/* ── Model performance over the trailing month ── */}
+      <ScorecardSection />
 
       {/* ── Controls ── */}
       <div className="rounded-lg border border-surface-border bg-surface-card p-4">

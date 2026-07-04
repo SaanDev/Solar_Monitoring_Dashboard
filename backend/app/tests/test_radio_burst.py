@@ -55,6 +55,9 @@ def test_aggregate_corroborated_window():
     assert "2 high-confidence" in ev["description"]
     for s in ("SRI-Lanka", "HUMAIN", "GLASGOW", "BIR"):
         assert s in ev["description"]
+    # Observers are stored structured (comma-separated, sorted) so the UI can
+    # restrict spectrograms to stations that actually saw the burst.
+    assert ev["stations"] == "BIR,GLASGOW,HUMAIN,SRI-Lanka"
 
 
 def test_aggregate_requires_corroboration():
