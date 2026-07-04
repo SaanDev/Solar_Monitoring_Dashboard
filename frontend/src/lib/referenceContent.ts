@@ -278,14 +278,14 @@ const INSTRUMENTS: ReferenceEntry[] = [
       {
         kind: "para",
         text:
-          "The dashboard ingests CALLISTO FITS to render live/archival spectrograms (Solar Radio), the interactive e-CALLISTO Analyzer, and the machine-learning Burst Predictor.",
+          "The dashboard ingests CALLISTO FITS to render live/archival spectrograms (Solar Radio), the interactive e-CALLISTO Analyzer, and the machine-learning Burst Detector.",
       },
     ],
     dataSources: [
       "e-CALLISTO FITS archive (ETH Zurich)",
       "Official e-CALLISTO daily burst list",
     ],
-    usedIn: ["Solar Radio", "e-CALLISTO Analyzer", "Burst Predictor"],
+    usedIn: ["Solar Radio", "e-CALLISTO Analyzer", "Burst Detector"],
     references: [{ label: "e-CALLISTO network", url: "https://www.e-callisto.org/" }],
   },
   {
@@ -742,11 +742,11 @@ const PARAMETERS: ReferenceEntry[] = [
       {
         kind: "para",
         text:
-          "Type III bursts flag flare energy release; type II bursts are a key indicator of a shock and often an associated CME; moving type IV continua accompany erupting material. The e-CALLISTO tools and Burst Predictor in this dashboard focus on detecting and classifying these signatures.",
+          "Type III bursts flag flare energy release; type II bursts are a key indicator of a shock and often an associated CME; moving type IV continua accompany erupting material. The e-CALLISTO tools and Burst Detector in this dashboard focus on detecting and classifying these signatures.",
       },
     ],
     dataSources: ["e-CALLISTO dynamic spectra", "Official e-CALLISTO burst list"],
-    usedIn: ["Solar Radio", "e-CALLISTO Analyzer", "Burst Predictor"],
+    usedIn: ["Solar Radio", "e-CALLISTO Analyzer", "Burst Detector"],
     references: [{ label: "e-CALLISTO", url: "https://www.e-callisto.org/" }],
   },
   {
@@ -929,7 +929,7 @@ const METHODS: ReferenceEntry[] = [
       {
         kind: "para",
         text:
-          "The Burst Predictor runs the day's CALLISTO spectrograms through a trained classifier (served by a companion Burst Identifier microservice). Each spectrogram segment receives a burst probability and alert level.",
+          "The Burst Detector runs the day's CALLISTO spectrograms through a trained classifier (served by a companion Burst Identifier microservice). Each spectrogram segment receives a burst probability and alert level.",
       },
       {
         kind: "para",
@@ -938,7 +938,7 @@ const METHODS: ReferenceEntry[] = [
       },
     ],
     dataSources: ["e-CALLISTO spectra", "Burst Identifier ML service", "Official burst list"],
-    usedIn: ["Burst Predictor"],
+    usedIn: ["Burst Detector"],
   },
   {
     id: "coronagraph-cme-detection",

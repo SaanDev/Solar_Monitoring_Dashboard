@@ -3,7 +3,7 @@ import { BurstPredictorClient } from "./BurstPredictorClient";
 
 export default function BurstPredictorPage() {
   return (
-    <DashboardShell title="Burst Predictor">
+    <DashboardShell title="Burst Detector">
       <BurstPredictorClient />
     </DashboardShell>
   );

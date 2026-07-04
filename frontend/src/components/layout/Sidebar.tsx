@@ -32,7 +32,7 @@ import type { SummaryLatest } from "@/lib/types";
 const NAV = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
   { href: "/solar-radio", label: "Solar Radio", icon: Radio },
-  { href: "/burst-predictor", label: "Burst Predictor", icon: Radar },
+  { href: "/burst-predictor", label: "Burst Detector", icon: Radar },
   { href: "/e-callisto-analyzer", label: "e-CALLISTO Analyzer", icon: SlidersHorizontal },
   { href: "/solar-images", label: "Solar Images", icon: Image },
   { href: "/data-analysis", label: "Data Analysis", icon: Microscope },
