@@ -26,6 +26,18 @@ dependencies = [
     "Pillow>=10.3",
     "apscheduler>=3.10",
     "python-multipart>=0.0.9",
+    # Multi-mission Solar Image Analysis (Data Analysis page) — core, not
+    # optional: the feature is a first-class part of the dashboard and a plain
+    # `pip install -e .` must yield a fully working backend on every machine.
+    # SunPy pulls Fido (zeep/parfive); drms is the JSOC fast path; reproject
+    # powers the HMI composite + multi-viewpoint reprojection; aiapy adds AIA
+    # level-1.5 prep; imageio-ffmpeg supplies ffmpeg for movie export.
+    "sunpy[map,net]>=6.0",
+    "aiapy>=0.9",
+    "drms>=0.7",
+    "reproject>=0.13",
+    "imageio>=2.34",
+    "imageio-ffmpeg>=0.5",
 ]
 
 [project.optional-dependencies]
@@ -37,21 +49,10 @@ ml = [
     "torch>=2.1",
     "torchvision>=0.16",
 ]
-# Multi-mission Solar Image Analysis (SunPy workflows) — install with:
-#   pip install -e ".[sci]"
-# SunPy pulls Fido (drms/zeep/parfive) and map tooling (mpl-animators); aiapy adds
-# AIA level-1.5 prep; imageio-ffmpeg supplies an ffmpeg for movie export. drms is
-# the JSOC "fast path" (server-side cutout/binning) and reproject powers the HMI
-# composite + multi-viewpoint reprojection — pinned explicitly (both are optional
-# sunpy deps) so the analysis endpoints always have them.
-sci = [
-    "sunpy[map,net]>=6.0",
-    "aiapy>=0.9",
-    "drms>=0.7",
-    "reproject>=0.13",
-    "imageio>=2.34",
-    "imageio-ffmpeg>=0.5",
-]
+# Legacy alias — the scientific packages moved into the core dependencies above
+# (2026-07-12) so `pip install -e .` always includes them. Kept so existing
+# commands/docs (`pip install -e ".[sci]"`, the Dockerfile) keep working.
+sci = []
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
