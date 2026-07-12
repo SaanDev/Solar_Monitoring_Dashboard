@@ -60,8 +60,29 @@ import type {
   AnalysisSession,
   AnalysisOptions,
   AnalysisJobStatus,
+  SearchResponse,
   PlotParams,
+  FrameWcsMeta,
+  CoordReadout,
+  RulerResult,
+  ProfileResult,
+  RegionStatsResult,
+  LightcurveResult,
+  HeightTimeResult,
+  CompareInfo,
 } from "./types";
+
+export interface SearchParams {
+  observable: string;
+  start: string;
+  end: string;
+  wavelength_angstrom?: number | null;
+  product?: string | null;
+  level?: string | null;
+  satellite_number?: number | null;
+  sample_seconds?: number | null;
+  max_records?: number;
+}
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -127,6 +148,32 @@ function analysisPlotQuery(session: string, frame: number, p: PlotParams): strin
     draw_limb: String(p.draw_limb),
     draw_grid: String(p.draw_grid),
     colorbar: String(p.colorbar),
+    nrgf: String(p.nrgf ?? false),
+    grid_frame: p.grid_frame ?? "",
+  });
+  if (p.vmin != null) q.set("vmin", String(p.vmin));
+  if (p.vmax != null) q.set("vmax", String(p.vmax));
+  return q.toString();
+}
+
+/** Query string for the interactive canvas /render-bare endpoint. */
+function analysisBareQuery(
+  session: string,
+  frame: number,
+  mode: string,
+  baseIndex: number,
+  p: PlotParams
+): string {
+  const q = new URLSearchParams({
+    session,
+    frame: String(frame),
+    mode,
+    base_index: String(baseIndex),
+    cmap: p.cmap,
+    scale: p.scale,
+    clip_low: String(p.clip_low),
+    clip_high: String(p.clip_high),
+    nrgf: String(p.nrgf ?? false),
   });
   if (p.vmin != null) q.set("vmin", String(p.vmin));
   if (p.vmax != null) q.set("vmax", String(p.vmax));
@@ -397,6 +444,21 @@ export const api = {
   },
   analysisSession: (id: string) =>
     get<AnalysisSession>(`/api/analysis/session/${id}`),
+  // Multi-mission archive search (Fido) + selected-row download.
+  analysisSearch: (params: SearchParams) =>
+    postJson<SearchResponse>("/api/analysis/source/search", params),
+  analysisFindLatest: (params: SearchParams) =>
+    postJson<SearchResponse>("/api/analysis/source/find-latest", params),
+  analysisFetchSelected: (body: {
+    search_id: string;
+    indices: number[];
+    source: string;
+    frame_size: string;
+    cutout_x?: number;
+    cutout_y?: number;
+    cutout_w?: number;
+    cutout_h?: number;
+  }) => postJson<AnalysisJobStatus>("/api/analysis/source/fetch-selected", body),
   analysisFetch: (wavelength: string, time: string, prep: boolean) =>
     postJson<AnalysisJobStatus>("/api/analysis/source/fetch", { wavelength, time, prep }),
   analysisArchive: (date: string, time: string, wavelength: string) =>
@@ -490,4 +552,164 @@ export const api = {
     get<AnalysisJobStatus>(`/api/analysis/jobs/${jobId}`),
   analysisResultUrl: (jobId: string, download = false) =>
     apiUrl(`/api/analysis/result/${jobId}${download ? "?download=true" : ""}`),
+  // Interactive canvas (exact-pixel background + WCS metadata + readout).
+  analysisBareUrl: (session: string, frame: number, mode: string, baseIndex: number, p: PlotParams) =>
+    apiUrl(`/api/analysis/render-bare?${analysisBareQuery(session, frame, mode, baseIndex, p)}`),
+  analysisFrameMeta: (session: string, frame: number) =>
+    get<FrameWcsMeta>(`/api/analysis/frame-meta?session=${session}&frame=${frame}`),
+  analysisCoord: (session: string, frame: number, px: number, py: number, frameKey = "HGS") =>
+    get<CoordReadout>(
+      `/api/analysis/coord?session=${session}&frame=${frame}&px=${px}&py=${py}&frame_key=${frameKey}`
+    ),
+  // CME height–time tracking.
+  analysisHeightTime: (session: string, picks: { frame: number; px: number; py: number }[]) =>
+    postJson<HeightTimeResult>("/api/analysis/height-time", { session, picks }),
+  // Specialized science: J-map, HMI vector field, compare viewpoint.
+  analysisJMap: (session: string, paDeg: number, background: string, halfWidth: number) =>
+    postJson<AnalysisJobStatus>("/api/analysis/jmap", {
+      session,
+      pa_deg: paDeg,
+      background,
+      half_width: halfWidth,
+    }),
+  analysisVectorPrepare: (session: string, frame: number) =>
+    postJson<AnalysisJobStatus>("/api/analysis/vector-field/prepare", { session, frame }),
+  analysisVectorFieldUrl: (
+    session: string,
+    frame: number,
+    o: {
+      arrows: boolean;
+      streamlines: boolean;
+      magnitude: boolean;
+      gridStep: number;
+      minGauss: number;
+    },
+    p: PlotParams
+  ) => {
+    const q = new URLSearchParams({
+      session,
+      frame: String(frame),
+      arrows: String(o.arrows),
+      streamlines: String(o.streamlines),
+      magnitude: String(o.magnitude),
+      grid_step: String(o.gridStep),
+      min_gauss: String(o.minGauss),
+      cmap: p.cmap,
+      scale: p.scale,
+      clip_low: String(p.clip_low),
+      clip_high: String(p.clip_high),
+      draw_limb: String(p.draw_limb),
+      colorbar: String(p.colorbar),
+    });
+    return apiUrl(`/api/analysis/vector-field?${q.toString()}`);
+  },
+  analysisCompareInfo: (session: string, frame: number, other: string, otherFrame: number) =>
+    get<CompareInfo>(
+      `/api/analysis/compare-viewpoint/info?session=${session}&frame=${frame}&other=${other}&other_frame=${otherFrame}`
+    ),
+  analysisCompareUrl: (
+    session: string,
+    frame: number,
+    other: string,
+    otherFrame: number,
+    view: "primary" | "reprojected",
+    p: PlotParams
+  ) => {
+    const q = new URLSearchParams({
+      session,
+      frame: String(frame),
+      other,
+      other_frame: String(otherFrame),
+      view,
+      cmap: p.cmap,
+      scale: p.scale,
+      clip_low: String(p.clip_low),
+      clip_high: String(p.clip_high),
+      draw_limb: String(p.draw_limb),
+      colorbar: String(p.colorbar),
+    });
+    return apiUrl(`/api/analysis/compare-viewpoint?${q.toString()}`);
+  },
+  // Measurements + region light curve (interactive canvas tools).
+  analysisMeasureRuler: (session: string, frame: number, x1: number, y1: number, x2: number, y2: number) =>
+    get<RulerResult>(
+      `/api/analysis/measure/ruler?session=${session}&frame=${frame}&x1=${x1}&y1=${y1}&x2=${x2}&y2=${y2}`
+    ),
+  analysisMeasureProfile: (session: string, frame: number, x1: number, y1: number, x2: number, y2: number) =>
+    get<ProfileResult>(
+      `/api/analysis/measure/profile?session=${session}&frame=${frame}&x1=${x1}&y1=${y1}&x2=${x2}&y2=${y2}`
+    ),
+  analysisMeasureRegion: (session: string, frame: number, x0: number, y0: number, x1: number, y1: number) =>
+    get<RegionStatsResult>(
+      `/api/analysis/measure/region?session=${session}&frame=${frame}&x0=${x0}&y0=${y0}&x1=${x1}&y1=${y1}`
+    ),
+  analysisLightcurve: (
+    session: string,
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    statistic: string,
+    radioStart?: string | null,
+    radioEnd?: string | null
+  ) => {
+    const q = new URLSearchParams({
+      session,
+      x0: String(x0),
+      y0: String(y0),
+      x1: String(x1),
+      y1: String(y1),
+      statistic,
+    });
+    if (radioStart) q.set("radio_start", radioStart);
+    if (radioEnd) q.set("radio_end", radioEnd);
+    return get<LightcurveResult>(`/api/analysis/lightcurve?${q.toString()}`);
+  },
+  // Session bundles (.ecsolar) + regions CSV.
+  analysisSessionExport: async (
+    session: string,
+    picks: { frame: number; px: number; py: number }[],
+    display: Record<string, unknown>
+  ): Promise<void> => {
+    const res = await fetch(apiUrl("/api/analysis/session/export"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session, picks, display }),
+    });
+    if (!res.ok) throw new Error(`Export failed (${res.status})`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `session_${session.slice(0, 8)}.ecsolar`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+  analysisSessionImport: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return postForm<{
+      session: AnalysisSession;
+      picks: { frame: number; px: number; py: number }[];
+      display: Record<string, unknown>;
+    }>("/api/analysis/session/import", form);
+  },
+  analysisRegionsCsvUrl: (session: string, frame: number, thresholdPct = 98) =>
+    apiUrl(
+      `/api/analysis/export/regions-csv?session=${session}&frame=${frame}&threshold_pct=${thresholdPct}`
+    ),
+  analysisExportFitsUrl: (session: string, frame: number, p: PlotParams) => {
+    const q = new URLSearchParams({
+      session,
+      frame: String(frame),
+      crop: String(p.crop),
+      bl_x: String(p.bl_x),
+      bl_y: String(p.bl_y),
+      tr_x: String(p.tr_x),
+      tr_y: String(p.tr_y),
+    });
+    return apiUrl(`/api/analysis/export/fits?${q.toString()}`);
+  },
 };

@@ -795,11 +795,15 @@ export interface AnalysisFrameMeta {
   index: number;
   time: string | null;
   filename: string;
+  detector?: string;
+  exptime?: number | null;
 }
+
+export type ScienceClass = "disk_euv" | "coronagraph" | "heliospheric" | "magnetograph";
 
 export interface AnalysisSession {
   id: string;
-  source: "upload" | "fetch" | "archive";
+  source: "upload" | "fetch" | "archive" | "search";
   observatory: string;
   instrument: string;
   detector: string;
@@ -809,12 +813,36 @@ export interface AnalysisSession {
   width: number;
   height: number;
   n_frames: number;
+  science_class: ScienceClass;
   frames: AnalysisFrameMeta[];
 }
 
 export interface WavelengthOption {
   code: string;
   label: string;
+}
+
+// A selectable multi-mission target (mirrors the backend instrument registry).
+export interface Observable {
+  key: string;
+  label: string;
+  spacecraft: string;
+  instrument: string;
+  detector: string | null;
+  data_kind: string;
+  science_class: ScienceClass | "unknown";
+  supports_wavelength: boolean;
+  supports_detector: boolean;
+  supports_product: boolean;
+  supports_satellite: boolean;
+  supports_level: boolean;
+  wavelengths: number[];
+  products: string[];
+  levels: string[];
+  default_wavelength: number | null;
+  default_product: string | null;
+  default_level: string | null;
+  default_satellite: number | null;
 }
 
 export interface AnalysisOptions {
@@ -824,6 +852,29 @@ export interface AnalysisOptions {
   difference_types: string[];
   movie_formats: string[];
   max_frames: number;
+  observables: Observable[];
+  sources: string[];
+  frame_sizes: string[];
+  jsoc_enabled: boolean;
+}
+
+export interface SearchRow {
+  index: number;
+  start: string | null;
+  end: string | null;
+  source: string;
+  provider: string;
+  instrument: string;
+  size: string;
+  fileid: string;
+}
+
+export interface SearchResponse {
+  search_id: string;
+  observable: string;
+  data_kind: string;
+  rows: SearchRow[];
+  notice: string | null;
 }
 
 export interface AnalysisJobStatus {
@@ -852,4 +903,110 @@ export interface PlotParams {
   draw_limb: boolean;
   draw_grid: boolean;
   colorbar: boolean;
+  nrgf: boolean;               // coronagraph radial filter
+  grid_frame: "" | "hgs" | "hgc" | "hci"; // coordinate graticule ("" = off)
+}
+
+// WCS/geometry for the interactive canvas (GET /frame-meta).
+export interface FrameWcsMeta {
+  nx: number;
+  ny: number;
+  center_x: number;            // Sun-centre pixel, 0-based
+  center_y: number;
+  cdelt1: number;              // arcsec / pixel
+  cdelt2: number;
+  pc: number[][];              // 2×2 rotation matrix
+  rsun_arcsec: number;
+  time: string | null;
+  instrument: string;
+  detector: string;
+  measurement: string;
+  exptime: number | null;
+}
+
+// Measurement results (GET /measure/*, /lightcurve).
+export interface RulerResult {
+  p0_arcsec: number[];
+  p1_arcsec: number[];
+  dx_arcsec: number;
+  dy_arcsec: number;
+  distance_arcsec: number;
+  distance_rsun: number | null;
+  distance_km: number | null;
+  position_angle_deg: number;
+}
+
+export interface ProfileResult {
+  distance_arcsec: number[];
+  values: (number | null)[];
+  n: number;
+  length_arcsec: number;
+  length_rsun: number | null;
+}
+
+export interface RegionStatsResult {
+  n_pixels: number;
+  min: number;
+  max: number;
+  mean: number;
+  median: number;
+  std: number;
+  centroid_x_pix: number;
+  centroid_y_pix: number;
+  centroid_tx_arcsec: number;
+  centroid_ty_arcsec: number;
+}
+
+export interface LightcurveResult {
+  times: (string | null)[];
+  values: (number | null)[];
+  unit: string;
+  statistic: string;
+  bounds: number[];
+  peak_index: number;
+  peak_time: string | null;
+  radio_start: string | null;
+  radio_end: string | null;
+  radio_euv_lag_s: number | null;
+}
+
+// CME height–time tracking (POST /height-time).
+export interface HeightTimePoint {
+  frame: number;
+  time: string | null;
+  px: number;
+  py: number;
+  r_rsun: number;
+  height_km: number;
+}
+
+export interface HeightTimeResult {
+  points: HeightTimePoint[];
+  n: number;
+  speed_km_s?: number;
+  acceleration_km_s2?: number | null;
+  segment_speeds_km_s?: (number | null)[];
+}
+
+// Two-viewpoint comparison (GET /compare-viewpoint/info).
+export interface CompareInfo {
+  separation_deg: number | null;
+  primary: string;
+  secondary: string;
+  primary_time: string | null;
+  secondary_time: string | null;
+}
+
+// Exact server-side coordinate readout (GET /coord).
+export interface CoordReadout {
+  px: number;
+  py: number;
+  tx_arcsec: number;
+  ty_arcsec: number;
+  r_rsun: number | null;
+  position_angle_deg: number;
+  lon_deg: number | null;
+  lat_deg: number | null;
+  frame_key: string;
+  value: number | null;
 }

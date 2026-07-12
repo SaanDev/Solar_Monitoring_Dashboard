@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     helioviewer_base_url: str = "https://api.helioviewer.org"
     # JSOC synoptic FITS archives (SDO/AIA + SDO/HMI) for raw downloads.
     jsoc_base_url: str = "http://jsoc.stanford.edu"
+    # JSOC export requires a notify e-mail registered at
+    # http://jsoc.stanford.edu/ajax/register_email.html — used by the drms
+    # "fast path" (server-side cutout/binning) in the Data Analysis feature.
+    # Empty disables the fast path; acquisition then falls back to VSO/Fido.
+    jsoc_email: str = ""
     # GFZ — historical Kp index (full record since 1932).
     gfz_base_url: str = "https://kp.gfz.de"
     # SILSO (SIDC, Royal Observatory of Belgium) — daily estimated sunspot number.

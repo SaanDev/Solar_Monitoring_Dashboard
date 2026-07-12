@@ -85,7 +85,9 @@ def _map_metadata(m: Any) -> dict[str, Any]:
         wl = None
 
     detector = str(getattr(m, "detector", "") or "")
-    if wl is not None and detector.upper().startswith("AIA"):
+    if wl is not None:
+        # Uniform label for any wavelength-selected imager (AIA/EUVI/SUVI/…).
+        # Header-derived strings can carry mojibake (e.g. synoptic AIA "Ã…").
         measurement = f"{int(round(wl))} Å"
     else:
         measurement = str(getattr(m, "measurement", "") or "")
@@ -96,6 +98,14 @@ def _map_metadata(m: Any) -> dict[str, Any]:
     except Exception:
         when = None
 
+    exptime: float | None = None
+    try:
+        raw_exp = m.meta.get("exptime", m.meta.get("xposure"))
+        if raw_exp is not None:
+            exptime = float(raw_exp)
+    except Exception:
+        exptime = None
+
     return {
         "observatory": str(getattr(m, "observatory", "") or ""),
         "instrument": str(getattr(m, "instrument", "") or ""),
@@ -103,6 +113,7 @@ def _map_metadata(m: Any) -> dict[str, Any]:
         "measurement": measurement,
         "wavelength_angstrom": wl,
         "time": when,
+        "exptime": exptime,
         "width": int(m.dimensions[0].value),
         "height": int(m.dimensions[1].value),
     }
@@ -122,23 +133,75 @@ def get_session(id: str) -> AnalysisSession:
     return AnalysisSession.model_validate_json(path.read_text(encoding="utf-8"))
 
 
+def _north_up(m: Any) -> Any:
+    """Rotate a map to solar-north-up when its CCD orientation is rolled.
+
+    HMI and JSOC lev1 AIA arrive with CROTA2 ≈ 180° (south up) and LASCO
+    carries a few degrees of roll; ``Map.rotate()`` re-grids to north-up and
+    updates the WCS consistently, so renders, the interactive canvas and all
+    measurements stay exact. Already-north-up maps pass through untouched.
+    """
+    try:
+        import numpy as np
+
+        matrix = np.asarray(m.rotation_matrix, dtype=float)
+        # Identity to within ~2.5 deg → leave the pixels alone.
+        if abs(matrix[0, 0] - 1.0) < 1e-3 and abs(matrix[0, 1]) < 0.04:
+            return m
+        return m.rotate(missing=np.nan)
+    except Exception:
+        return m
+
+
+def _smart_map(path: str | Path) -> Any:
+    """Load one FITS into a sunpy Map, repairing LASCO/SUVI headers if needed.
+
+    Plain ``sunpy.map.Map`` fails on SOHO/LASCO frames missing ``CUNIT`` and on
+    GOES/SUVI L1b frames with a malformed ``CONTINUE`` card; the ported ingest
+    loaders backfill/repair those. Uploads and AIA/HMI/STEREO frames take the
+    ordinary path. All maps are normalised to solar-north-up.
+    """
+    import sunpy.map
+
+    try:
+        m = sunpy.map.Map(str(path))
+        return _north_up(m[0] if isinstance(m, list) else m)
+    except Exception:
+        pass
+    # Header-repair fallbacks (each raises if the file isn't its instrument).
+    from app.services.solar.lasco_ingest import load_lasco_map
+    from app.services.solar.suvi_ingest import load_suvi_map
+
+    last_exc: Exception | None = None
+    for loader in (load_lasco_map, load_suvi_map):
+        try:
+            m = loader(str(path))
+            return _north_up(m[0] if isinstance(m, list) else m)
+        except Exception as exc:  # noqa: BLE001 - try the next repair loader
+            last_exc = exc
+    raise last_exc or ValueError(f"Could not read {path} as a solar map")
+
+
 def build_session(id: str, source: str, files: list[Path]) -> AnalysisSession:
     """Load each FITS as a Map, order by observation time, persist session meta.
 
     Frames are renamed to ``frame_000.fits`` … in time order inside the session
     directory so downstream code can address them by index.
     """
-    import sunpy.map
+    from app.services.solar.instrument_profiles import classify_frame
 
     if not files:
         raise ValueError("No FITS files for session")
 
     loaded: list[tuple[Path, dict[str, Any]]] = []
     for f in files:
-        m = sunpy.map.Map(str(f))
-        if isinstance(m, list):  # a multi-image file yields a list of maps
-            m = m[0]
-        loaded.append((f, _map_metadata(m)))
+        m = _smart_map(f)
+        meta = _map_metadata(m)
+        try:
+            meta["science_class"] = classify_frame(m)
+        except Exception:
+            meta["science_class"] = "disk_euv"
+        loaded.append((f, meta))
 
     # Order by observation time (files without a time keep input order at the end).
     loaded.sort(key=lambda lm: (lm[1]["time"] is None, lm[1]["time"] or datetime.min))
@@ -149,7 +212,15 @@ def build_session(id: str, source: str, files: list[Path]) -> AnalysisSession:
         dest = sdir / f"frame_{i:03d}.fits"
         if src_path.resolve() != dest.resolve():
             dest.write_bytes(src_path.read_bytes())
-        frames.append(FrameMeta(index=i, time=meta["time"], filename=dest.name))
+        frames.append(
+            FrameMeta(
+                index=i,
+                time=meta["time"],
+                filename=dest.name,
+                detector=meta["detector"],
+                exptime=meta.get("exptime"),
+            )
+        )
 
     first = loaded[0][1]
     session = AnalysisSession(
@@ -163,6 +234,7 @@ def build_session(id: str, source: str, files: list[Path]) -> AnalysisSession:
         reference_time=frames[0].time,
         width=first["width"],
         height=first["height"],
+        science_class=first.get("science_class", "disk_euv"),
         n_frames=len(frames),
         frames=frames,
     )
@@ -365,6 +437,113 @@ async def store_from_archive(date: date_cls, time_hm: str, wavelength: str) -> A
     return session
 
 
+# ── interactive canvas: WCS metadata + exact coordinate readout ─────────────────
+
+
+def frame_wcs_meta(session_id: str, frame: int) -> dict[str, Any]:
+    """WCS/geometry needed by the interactive canvas for pixel↔arcsec mapping.
+
+    ``center_x``/``center_y`` is the Sun-centre pixel (0-based), so the client's
+    linear mapping ``Tx ≈ cdelt1·(PC(px−c))`` is exact up to TAN distortion
+    (negligible at disk scales). The server-side ``/coord`` endpoint does the
+    exact transform for click readouts.
+    """
+    import astropy.units as u
+    import numpy as np
+    from astropy.coordinates import SkyCoord
+
+    m = load_map(session_id, frame)
+    ny, nx = m.data.shape
+
+    try:
+        cpx = m.wcs.world_to_pixel(SkyCoord(0 * u.arcsec, 0 * u.arcsec, frame=m.coordinate_frame))
+        center = (float(cpx[0]), float(cpx[1]))
+        if not (np.isfinite(center[0]) and np.isfinite(center[1])):
+            raise ValueError
+    except Exception:
+        center = ((nx - 1) / 2.0, (ny - 1) / 2.0)
+
+    try:
+        cdelt1 = float(m.scale.axis1.to_value(u.arcsec / u.pix))
+        cdelt2 = float(m.scale.axis2.to_value(u.arcsec / u.pix))
+    except Exception:
+        cdelt1 = cdelt2 = 1.0
+    try:
+        pc = [[float(v) for v in row] for row in np.asarray(m.rotation_matrix)]
+    except Exception:
+        pc = [[1.0, 0.0], [0.0, 1.0]]
+    try:
+        rsun = float(m.rsun_obs.to_value(u.arcsec))
+    except Exception:
+        rsun = 960.0
+
+    meta = _map_metadata(m)
+    return {
+        "nx": nx,
+        "ny": ny,
+        "center_x": center[0],
+        "center_y": center[1],
+        "cdelt1": cdelt1,
+        "cdelt2": cdelt2,
+        "pc": pc,
+        "rsun_arcsec": rsun,
+        "time": meta["time"].isoformat() if meta["time"] else None,
+        "instrument": meta["instrument"],
+        "detector": meta["detector"],
+        "measurement": meta["measurement"],
+        "exptime": meta.get("exptime"),
+    }
+
+
+def coord_readout(
+    session_id: str, frame: int, px: float, py: float, frame_key: str = "HGS"
+) -> dict[str, Any]:
+    """Exact WCS readout for a data pixel: arcsec, R☉, position angle, lon/lat.
+
+    Position angle follows the solar convention (from north through east).
+    Off-disk sight lines have no lon/lat (``None``).
+    """
+    import astropy.units as u
+    import math
+
+    import numpy as np
+
+    from app.services.solar.solar_grid import point_lonlat
+
+    m = load_map(session_id, frame)
+    ny, nx = m.data.shape
+    coord = m.wcs.pixel_to_world(float(px), float(py))
+    tx = float(coord.Tx.to_value(u.arcsec))
+    ty = float(coord.Ty.to_value(u.arcsec))
+    try:
+        rsun = float(m.rsun_obs.to_value(u.arcsec))
+    except Exception:
+        rsun = 960.0
+    r_arcsec = math.hypot(tx, ty)
+    pa = math.degrees(math.atan2(-tx, ty)) % 360.0  # N→E convention
+
+    lonlat = point_lonlat(tx, ty, m, frame_key=frame_key)
+
+    value: float | None = None
+    ix, iy = int(round(px)), int(round(py))
+    if 0 <= ix < nx and 0 <= iy < ny:
+        raw = float(np.asarray(m.data, dtype=float)[iy, ix])
+        value = raw if np.isfinite(raw) else None
+
+    return {
+        "px": float(px),
+        "py": float(py),
+        "tx_arcsec": tx,
+        "ty_arcsec": ty,
+        "r_rsun": r_arcsec / rsun if rsun > 0 else None,
+        "position_angle_deg": pa,
+        "lon_deg": lonlat[0] if lonlat else None,
+        "lat_deg": lonlat[1] if lonlat else None,
+        "frame_key": frame_key.upper(),
+        "value": value,
+    }
+
+
 # ── composite / active-region helpers (slice 4) ─────────────────────────────────
 
 
@@ -471,6 +650,148 @@ def store_upload(files: list[tuple[bytes, str]]) -> AnalysisSession:
     return session
 
 
+# ── session bundles (.ecsolar) + regions CSV (ported solar_session) ─────────────
+
+
+def export_session_bundle(
+    session_id: str,
+    picks: list[dict[str, Any]] | None = None,
+    display: dict[str, Any] | None = None,
+) -> Path:
+    """Bundle a session into a desktop-compatible ``.ecsolar`` ZIP.
+
+    Embeds the raw FITS frames plus ``meta.json`` (source description, display
+    state, and CME height–time picks in the desktop's serialized format, so the
+    file opens in the e-CALLISTO FITS Analyzer too).
+    """
+    import astropy.units as u
+    import math
+
+    from app.services.solar.solar_session import serialize_picks, write_solar_session
+
+    session = get_session(session_id)
+    sdir = session_dir(session_id)
+    frame_paths = [str(sdir / fr.filename) for fr in session.frames]
+
+    # Web picks {frame, px, py} → desktop {frame: (when, h_rsun, x_arc, y_arc, pa)}.
+    desktop_picks: dict[int, tuple] = {}
+    for p in picks or []:
+        try:
+            frame = int(p["frame"])
+            m = load_map(session_id, frame)
+            coord = m.wcs.pixel_to_world(float(p["px"]), float(p["py"]))
+            x_arc = float(coord.Tx.to_value(u.arcsec))
+            y_arc = float(coord.Ty.to_value(u.arcsec))
+            try:
+                rsun = float(m.rsun_obs.to_value(u.arcsec))
+            except Exception:
+                rsun = 960.0
+            h_rsun = math.hypot(x_arc, y_arc) / rsun
+            pa = math.degrees(math.atan2(-x_arc, y_arc)) % 360.0
+            desktop_picks[frame] = (frame_time(session_id, frame), h_rsun, x_arc, y_arc, pa)
+        except Exception:  # noqa: BLE001 - drop unconvertible picks, keep the rest
+            continue
+
+    meta: dict[str, Any] = {
+        "source": {
+            "kind": session.source,
+            "observatory": session.observatory,
+            "instrument": session.instrument,
+            "detector": session.detector,
+            "measurement": session.measurement,
+            "science_class": session.science_class,
+        },
+        "display": dict(display or {}),
+        "picks": serialize_picks(desktop_picks),
+        "app": "Solar Monitoring Dashboard",
+    }
+    out = sdir / f"session_{session_id[:8]}.ecsolar"
+    write_solar_session(str(out), meta=meta, frame_paths=frame_paths)
+    return out
+
+
+def import_session_bundle(content: bytes) -> dict[str, Any]:
+    """Restore a ``.ecsolar`` bundle into a new session.
+
+    Returns ``{"session": AnalysisSession, "picks": [...], "display": {...}}`` —
+    picks are converted back to web canvas coordinates (frame, px, py) via each
+    frame's WCS, so desktop-made picks land on the right pixels here too.
+    """
+    import astropy.units as u
+    from astropy.coordinates import SkyCoord
+
+    from app.services.solar.solar_session import deserialize_picks, read_solar_session
+
+    id = uuid4().hex
+    sdir = session_dir(id)
+    sdir.mkdir(parents=True, exist_ok=True)
+    bundle = sdir / "_import.ecsolar"
+    extract = sdir / "_extract"
+    try:
+        bundle.write_bytes(content)
+        result = read_solar_session(str(bundle), extract_dir=str(extract))
+        session = build_session(id, "upload", [Path(p) for p in result.frame_paths])
+    except Exception:
+        _rmtree(extract)
+        _rmtree(sdir)
+        raise
+    finally:
+        bundle.unlink(missing_ok=True)
+        _rmtree(extract)
+
+    web_picks: list[dict[str, Any]] = []
+    for frame, (_when, _h, x_arc, y_arc, _pa) in deserialize_picks(result.meta.get("picks")).items():
+        try:
+            m = load_map(id, frame)
+            coord = SkyCoord(x_arc * u.arcsec, y_arc * u.arcsec, frame=m.coordinate_frame)
+            px, py = m.wcs.world_to_pixel(coord)
+            web_picks.append({"frame": frame, "px": float(px), "py": float(py)})
+        except Exception:  # noqa: BLE001 - skip picks that fall off the new grid
+            continue
+
+    return {
+        "session": session,
+        "picks": web_picks,
+        "display": result.meta.get("display") or {},
+    }
+
+
+def regions_csv(
+    session_id: str, frame: int, threshold_pct: float = 98.0, min_area_px: int = 40
+) -> Path:
+    """Detect bright regions (ported detect_active_regions) and write a CSV."""
+    import csv
+
+    import astropy.units as u
+    import numpy as np
+
+    from app.services.solar.solar_data_analysis import detect_active_regions
+
+    m = load_map(session_id, frame)
+    regions = detect_active_regions(
+        np.asarray(m.data, dtype=float),
+        threshold_percentile=float(threshold_pct),
+        min_area_px=int(min_area_px),
+    )
+    out = session_dir(session_id) / f"regions_{frame}_{int(threshold_pct)}.csv"
+    with out.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(
+            ["id", "centroid_x_px", "centroid_y_px", "centroid_tx_arcsec", "centroid_ty_arcsec",
+             "bbox_x0", "bbox_x1", "bbox_y0", "bbox_y1", "area_px", "peak", "mean"]
+        )
+        for r in regions:
+            # Exact arcsec centroid via the map WCS (detection ran without a transform).
+            coord = m.wcs.pixel_to_world(r.centroid_x, r.centroid_y)
+            tx = float(coord.Tx.to_value(u.arcsec))
+            ty = float(coord.Ty.to_value(u.arcsec))
+            w.writerow(
+                [r.region_id, f"{r.centroid_x:.2f}", f"{r.centroid_y:.2f}", f"{tx:.1f}", f"{ty:.1f}",
+                 *r.bbox, r.area_px, f"{r.peak:.2f}", f"{r.mean:.2f}"]
+            )
+    return out
+
+
 def _rmtree(path: Path) -> None:
     try:
         for child in path.glob("*"):
@@ -520,9 +841,7 @@ def load_map(id: str, index: int = 0) -> Any:
     path = frame_path(id, index)
 
     def _loader() -> Any:
-        import sunpy.map
-
-        m = sunpy.map.Map(str(path))
-        return m[0] if isinstance(m, list) else m
+        # _smart_map repairs LASCO/SUVI headers; AIA/HMI/STEREO load plainly.
+        return _smart_map(path)
 
     return _MAP_CACHE.get(id, index, _loader)
