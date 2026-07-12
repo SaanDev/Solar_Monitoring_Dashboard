@@ -65,10 +65,13 @@ async def options() -> AnalysisOptions:
 # ── multi-mission archive search (Fido) + selected-row download ──────────────────
 
 _SCI_INSTALL_HINT = (
-    "The multi-mission archive search needs the backend's scientific extras "
-    "(SunPy/Fido). Install them where the backend runs: "
-    'pip install -e ".[sci]" — or, when using Docker, rebuild the image '
-    "(docker compose build backend && docker compose up -d backend) — then restart."
+    "The archive search needs the backend's scientific packages (SunPy/Fido), "
+    "which are missing from the Python environment this backend is running in. "
+    "If you start the backend with uvicorn: run  cd backend && python -m pip "
+    "install -e .  using the SAME terminal/venv you start uvicorn from (the "
+    "pyproject.toml is inside backend/, not the repo root), then restart "
+    "uvicorn. If you start the backend with Docker: run  docker compose build "
+    "backend && docker compose up -d backend  instead."
 )
 
 
@@ -84,6 +87,16 @@ def _is_missing_dependency(exc: Exception) -> bool:
     return "no module named" in text or "pip install" in text
 
 
+def _root_cause(exc: BaseException) -> str:
+    """Innermost chained exception, e.g. \"ModuleNotFoundError: No module named
+    'zeep'\" — names the exact missing package in the 503 detail."""
+    seen: set[int] = set()
+    while exc.__cause__ is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        exc = exc.__cause__
+    return f"{type(exc).__name__}: {exc}"
+
+
 @router.post("/source/search", response_model=SearchResponse)
 async def source_search(req: SearchRequest) -> SearchResponse:
     """Search a mission archive (SunPy Fido). Rows are returned for the results
@@ -97,7 +110,7 @@ async def source_search(req: SearchRequest) -> SearchResponse:
         raise HTTPException(422, str(exc))
     except Exception as exc:  # noqa: BLE001 - surface Fido/network errors cleanly
         if _is_missing_dependency(exc):
-            raise HTTPException(503, _SCI_INSTALL_HINT)
+            raise HTTPException(503, f"{_SCI_INSTALL_HINT} [cause: {_root_cause(exc)}]")
         raise HTTPException(502, f"Archive search failed: {type(exc).__name__}: {exc}")
 
 
@@ -113,7 +126,7 @@ async def source_find_latest(req: SearchRequest) -> SearchResponse:
         raise HTTPException(422, str(exc))
     except Exception as exc:  # noqa: BLE001
         if _is_missing_dependency(exc):
-            raise HTTPException(503, _SCI_INSTALL_HINT)
+            raise HTTPException(503, f"{_SCI_INSTALL_HINT} [cause: {_root_cause(exc)}]")
         raise HTTPException(502, f"Find-latest failed: {type(exc).__name__}: {exc}")
 
 
