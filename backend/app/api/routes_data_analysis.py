@@ -64,6 +64,25 @@ async def options() -> AnalysisOptions:
 
 # ── multi-mission archive search (Fido) + selected-row download ──────────────────
 
+_SCI_INSTALL_HINT = (
+    "The multi-mission archive search needs the backend's scientific extras "
+    "(SunPy/Fido). Install them where the backend runs: "
+    'pip install -e ".[sci]" — or, when using Docker, rebuild the image '
+    "(docker compose build backend && docker compose up -d backend) — then restart."
+)
+
+
+def _is_missing_dependency(exc: Exception) -> bool:
+    """True when the failure is a missing scientific package, not a network/data
+    problem (the ported acquisition layer wraps its lazy sunpy imports in
+    RuntimeError with an install hint)."""
+    if isinstance(exc, (ImportError, ModuleNotFoundError)):
+        return True
+    if isinstance(exc.__cause__, (ImportError, ModuleNotFoundError)):
+        return True
+    text = str(exc).lower()
+    return "no module named" in text or "pip install" in text
+
 
 @router.post("/source/search", response_model=SearchResponse)
 async def source_search(req: SearchRequest) -> SearchResponse:
@@ -77,7 +96,9 @@ async def source_search(req: SearchRequest) -> SearchResponse:
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     except Exception as exc:  # noqa: BLE001 - surface Fido/network errors cleanly
-        raise HTTPException(502, f"Archive search failed: {exc}")
+        if _is_missing_dependency(exc):
+            raise HTTPException(503, _SCI_INSTALL_HINT)
+        raise HTTPException(502, f"Archive search failed: {type(exc).__name__}: {exc}")
 
 
 @router.post("/source/find-latest", response_model=SearchResponse)
@@ -91,7 +112,9 @@ async def source_find_latest(req: SearchRequest) -> SearchResponse:
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(502, f"Find-latest failed: {exc}")
+        if _is_missing_dependency(exc):
+            raise HTTPException(503, _SCI_INSTALL_HINT)
+        raise HTTPException(502, f"Find-latest failed: {type(exc).__name__}: {exc}")
 
 
 @router.post("/source/fetch-selected", response_model=JobStatusResponse)
