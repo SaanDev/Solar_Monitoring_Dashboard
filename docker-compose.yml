@@ -28,7 +28,13 @@ services:
       retries: 5
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      # Set INSTALL_ML=false in .env for a lean image without PyTorch (runs the
+      # whole dashboard except native radio-burst detection). Defaults to a full
+      # image with the ML classifier.
+      args:
+        INSTALL_ML: "${INSTALL_ML:-true}"
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://swdash:swdash@postgres:5432/swdash
