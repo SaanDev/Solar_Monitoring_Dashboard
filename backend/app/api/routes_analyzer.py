@@ -15,7 +15,12 @@ from app.processing.analyzer_processing import (
 from app.schemas.analyzer_schema import (
     AnalyzerSession,
     AnalyzerStats,
+    MaxIntensityRequest,
+    MaxIntensityResult,
     ProjectOpenResponse,
+    RenderGeometry,
+    ShockFitRequest,
+    ShockFitResult,
 )
 from app.services import analyzer_service as svc
 from app.services.analyzer_service import RenderParams
@@ -243,7 +248,146 @@ async def open_project(file: UploadFile = File(...)) -> ProjectOpenResponse:
         raise HTTPException(400, "File must be a .efaproj project")
     content = await file.read()
     try:
-        session, settings = svc.open_project(content)
+        session, settings, shock = svc.open_project(content)
     except Exception as exc:
         raise HTTPException(422, f"Could not open project: {exc}")
-    return ProjectOpenResponse(session=session, settings=settings)
+    return ProjectOpenResponse(session=session, settings=settings, shock=shock)
+
+
+# ── Type II shock analysis (Path A) ──────────────────────────────────────────
+
+
+@router.get("/shock/geometry", response_model=RenderGeometry)
+async def shock_geometry(
+    id: str = Query(...),
+    method: str = Query("median"),
+    intensity_unit: str = Query("db"),
+    time_unit: str = Query("seconds"),
+    cmap: str = Query("magma"),
+    vmin: float | None = Query(None),
+    vmax: float | None = Query(None),
+    rfi_enabled: bool = Query(False),
+    rfi_low: float = Query(1.0),
+    rfi_high: float = Query(99.0),
+    station: str = Query(""),
+) -> RenderGeometry:
+    """Plotted-area geometry so the browser lasso can map pixels → data coordinates."""
+    params = _params(
+        method, intensity_unit, time_unit, cmap, vmin, vmax,
+        rfi_enabled, rfi_low, rfi_high, station,
+    )
+    try:
+        return RenderGeometry(**svc.shock_geometry(id, params))
+    except FileNotFoundError:
+        raise HTTPException(404, "Analyzer session not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.get("/shock/spectrogram")
+async def shock_spectrogram(
+    id: str = Query(...),
+    method: str = Query("median"),
+    intensity_unit: str = Query("db"),
+    time_unit: str = Query("seconds"),
+    cmap: str = Query("magma"),
+    vmin: float | None = Query(None),
+    vmax: float | None = Query(None),
+    rfi_enabled: bool = Query(False),
+    rfi_low: float = Query(1.0),
+    rfi_high: float = Query(99.0),
+    station: str = Query(""),
+) -> FileResponse:
+    """Fixed-axes spectrogram PNG matching /shock/geometry (for the lasso overlay)."""
+    params = _params(
+        method, intensity_unit, time_unit, cmap, vmin, vmax,
+        rfi_enabled, rfi_low, rfi_high, station,
+    )
+    try:
+        path = svc.render_shock(id, params)
+    except FileNotFoundError:
+        raise HTTPException(404, "Analyzer session not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return FileResponse(path, media_type="image/png")
+
+
+@router.post("/shock/max-intensity", response_model=MaxIntensityResult)
+async def shock_max_intensity(req: MaxIntensityRequest) -> MaxIntensityResult:
+    """Isolate the burst (polygon in data coords) and extract per-column peak frequency."""
+    params = _params(
+        req.method, req.intensity_unit, "seconds", "magma", None, None,
+        req.rfi_enabled, req.rfi_low, req.rfi_high, "",
+    )
+    polygon = [(p.time_s, p.freq_mhz) for p in req.polygon] or None
+    try:
+        result = svc.compute_max_intensity(req.id, params, polygon, auto_clean=req.auto_clean)
+    except FileNotFoundError:
+        raise HTTPException(404, "Analyzer session not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return MaxIntensityResult(**result)
+
+
+@router.post("/shock/fit", response_model=ShockFitResult)
+async def shock_fit(req: ShockFitRequest) -> ShockFitResult:
+    """Power-law fit + Newkirk shock parameters on the kept maximum-intensity points."""
+    if not (1 <= req.fold <= 4):
+        raise HTTPException(422, "fold must be between 1 and 4")
+    points = [(p.time_s, p.freq_mhz) for p in req.points]
+    try:
+        result = svc.fit_shock(
+            req.id, points, req.fold, req.harmonic, time_channels=req.time_channels
+        )
+    except FileNotFoundError:
+        raise HTTPException(404, "Analyzer session not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return ShockFitResult(**result)
+
+
+@router.get("/shock/fit-plot")
+async def shock_fit_plot(id: str = Query(...)) -> FileResponse:
+    try:
+        path = svc.render_shock_fit_png(id)
+    except FileNotFoundError:
+        raise HTTPException(404, "No shock analysis for this session")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return FileResponse(path, media_type="image/png")
+
+
+@router.get("/shock/extra-plot")
+async def shock_extra_plot(
+    id: str = Query(...),
+    kind: str = Query(..., pattern="^(speed_height|speed_freq|height_freq)$"),
+) -> FileResponse:
+    try:
+        path = svc.render_shock_extra_png(id, kind)
+    except FileNotFoundError:
+        raise HTTPException(404, "No shock analysis for this session")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return FileResponse(path, media_type="image/png")
+
+
+@router.get("/shock/export")
+async def shock_export(
+    id: str = Query(...),
+    format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
+) -> Response:
+    try:
+        content, fname = svc.export_shock_table(id, format)
+    except FileNotFoundError:
+        raise HTTPException(404, "No shock analysis for this session")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    media = (
+        "text/csv" if format == "csv"
+        else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    return Response(
+        content=content,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )

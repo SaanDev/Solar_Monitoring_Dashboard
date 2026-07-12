@@ -10,7 +10,7 @@ revised analysis is no longer Earth-directed has its event reconciled away.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,10 +18,16 @@ from app.cache import cache_get_json, cache_set_json
 from app.collectors.collect_donki import fetch_cmes
 from app.config import settings
 from app.processing.geomag_scale import kp_storm_scale
-from app.repositories.cme_repo import query_since, upsert_cmes
+from app.repositories.cme_repo import query_between, query_since, upsert_cmes
 from app.repositories.event_repo import delete_events_of_type_since, upsert_events
 from app.repositories.status_repo import record_error, record_success
-from app.schemas.forecast_schema import CmeItem, CmeListResponse
+from app.schemas.forecast_schema import (
+    CmeHistogramBin,
+    CmeHistogramResponse,
+    CmeHistoryResponse,
+    CmeItem,
+    CmeListResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,3 +118,67 @@ async def get_cmes(db: AsyncSession, days: int) -> CmeListResponse:
     resp = CmeListResponse(days=days, cmes=[CmeItem.model_validate(r) for r in rows])
     await cache_set_json(key, resp.model_dump(mode="json"), _CME_TTL)
     return resp
+
+
+async def get_cmes_range(db: AsyncSession, start: date, end: date) -> CmeHistoryResponse:
+    """Past CMEs first observed in ``[start, end]`` (inclusive UTC dates).
+
+    The scheduler only keeps the rolling ``cme_lookback_days`` window fresh in
+    the catalog, so a request reaching further back is fetched on demand from
+    DONKI and upserted (idempotent) before reading. A failed on-demand fetch is
+    non-fatal — we still serve whatever the catalog already holds.
+    """
+    key = f"forecast:cmes:history:{start.isoformat()}:{end.isoformat()}"
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return CmeHistoryResponse.model_validate(cached)
+
+    start_dt = datetime.combine(start, time.min, tzinfo=timezone.utc)
+    end_dt = datetime.combine(end, time.max, tzinfo=timezone.utc)
+
+    retained_since = datetime.now(timezone.utc) - timedelta(days=settings.cme_lookback_days)
+    if start_dt < retained_since:
+        try:
+            await upsert_cmes(db, await fetch_cmes(start, end))
+        except Exception as exc:  # noqa: BLE001 - fall back to catalog on failure
+            logger.warning("on-demand DONKI history fetch failed: %s", exc)
+
+    rows = await query_between(db, start_dt, end_dt)
+    resp = CmeHistoryResponse(
+        start=start_dt, end=end_dt, cmes=[CmeItem.model_validate(r) for r in rows]
+    )
+    await cache_set_json(key, resp.model_dump(mode="json"), _CME_TTL)
+    return resp
+
+
+async def get_cme_histogram(
+    db: AsyncSession, start: date, end: date, interval_days: int
+) -> CmeHistogramResponse:
+    """CME counts bucketed into ``interval_days``-wide bins across ``[start, end]``.
+
+    Reuses :func:`get_cmes_range` (so old periods are fetched on demand), then
+    buckets by launch date. Empty bins are kept so the histogram bars stay
+    evenly spaced across the whole period.
+    """
+    history = await get_cmes_range(db, start, end)
+
+    span_days = (end - start).days + 1  # inclusive
+    n_bins = -(-span_days // interval_days)  # ceil division
+    bins = [
+        CmeHistogramBin(
+            bin_start=datetime.combine(
+                start + timedelta(days=i * interval_days), time.min, tzinfo=timezone.utc
+            )
+        )
+        for i in range(n_bins)
+    ]
+    for c in history.cmes:
+        idx = (c.start_time.date() - start).days // interval_days
+        if 0 <= idx < n_bins:
+            bins[idx].count += 1
+            if c.is_earth_directed:
+                bins[idx].earth_directed += 1
+
+    return CmeHistogramResponse(
+        start=history.start, end=history.end, interval_days=interval_days, bins=bins
+    )

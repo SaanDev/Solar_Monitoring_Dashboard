@@ -3,11 +3,15 @@
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { api } from "@/lib/api";
+import { clsx } from "clsx";
 import { FitsImport } from "@/components/analyzer/FitsImport";
 import { SourcesPanel } from "@/components/analyzer/SourcesPanel";
 import { AnalyzerControls } from "@/components/analyzer/AnalyzerControls";
 import { SpectrumView } from "@/components/analyzer/SpectrumView";
-import type { AnalyzerSession, ProjectOpenResponse, RenderParams } from "@/lib/types";
+import { ShockAnalysisPanel } from "@/components/analyzer/shock/ShockAnalysisPanel";
+import type { AnalyzerSession, ProjectOpenResponse, RenderParams, ShockSession } from "@/lib/types";
+
+type Mode = "spectrum" | "shock";
 
 const DEFAULT_PARAMS: RenderParams = {
   method: "median",
@@ -36,6 +40,8 @@ export function ECallistoAnalyzerClient() {
   const [sessions, setSessions] = useState<AnalyzerSession[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [params, setParams] = useState<RenderParams>(DEFAULT_PARAMS);
+  const [mode, setMode] = useState<Mode>("spectrum");
+  const [restoredShock, setRestoredShock] = useState<ShockSession | null>(null);
 
   const session = sessions.find((s) => s.id === activeId) ?? null;
 
@@ -81,6 +87,10 @@ export function ECallistoAnalyzerClient() {
     setSessions((prev) => [...prev.filter((x) => x.id !== resp.session.id), resp.session]);
     setActiveId(resp.session.id);
     setParams({ ...DEFAULT_PARAMS, station: resp.session.station, ...resp.settings });
+    if (resp.shock) {
+      setRestoredShock(resp.shock);
+      setMode("shock"); // a project carrying a shock analysis opens straight into it
+    }
   }
 
   function clearAll() {
@@ -99,22 +109,52 @@ export function ECallistoAnalyzerClient() {
   const renderUrl = session ? api.analyzerRenderUrl(session.id, debounced) : null;
 
   return (
-    <div className="grid gap-4 lg:grid-cols-3">
-      <div className="space-y-4 lg:col-span-1">
-        <FitsImport onImport={addSession} onOpenProject={loadProject} />
-        <SourcesPanel
-          sessions={sessions}
-          activeId={activeId}
-          onActivate={activate}
-          onCombined={addSession}
-          onClearAll={clearAll}
-        />
-        {session && (
-          <AnalyzerControls params={params} stats={stats} options={options} onChange={patch} />
-        )}
-      </div>
-      <div className="lg:col-span-2">
-        <SpectrumView session={session} params={debounced} renderUrl={renderUrl} />
+    <div className="space-y-4">
+      {session && (
+        <div className="inline-flex rounded-lg border border-surface-border bg-surface-card p-1">
+          {(["spectrum", "shock"] as Mode[]).map((m) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              className={clsx(
+                "rounded px-4 py-1.5 text-xs font-medium transition-colors",
+                mode === m
+                  ? "bg-accent-blue/20 text-accent-blue"
+                  : "text-slate-500 hover:text-slate-300"
+              )}
+            >
+              {m === "spectrum" ? "Spectrum" : "Shock Analysis"}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="space-y-4 lg:col-span-1">
+          <FitsImport onImport={addSession} onOpenProject={loadProject} />
+          <SourcesPanel
+            sessions={sessions}
+            activeId={activeId}
+            onActivate={activate}
+            onCombined={addSession}
+            onClearAll={clearAll}
+          />
+          {session && (
+            <AnalyzerControls params={params} stats={stats} options={options} onChange={patch} />
+          )}
+        </div>
+        <div className="lg:col-span-2">
+          {mode === "spectrum" || !session ? (
+            <SpectrumView session={session} params={debounced} renderUrl={renderUrl} />
+          ) : (
+            <ShockAnalysisPanel
+              session={session}
+              params={debounced}
+              restored={restoredShock}
+              onRestoredConsumed={() => setRestoredShock(null)}
+            />
+          )}
+        </div>
       </div>
     </div>
   );

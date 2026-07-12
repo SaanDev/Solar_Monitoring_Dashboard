@@ -197,6 +197,43 @@ export interface CmeListResponse {
   cmes: CmeItem[];
 }
 
+export interface CmeHistoryResponse {
+  start: string;
+  end: string;
+  source: string;
+  cmes: CmeItem[];
+}
+
+export interface CmeHistogramBin {
+  bin_start: string;
+  count: number;
+  earth_directed: number;
+}
+
+export interface CmeHistogramResponse {
+  start: string;
+  end: string;
+  interval_days: number;
+  source: string;
+  bins: CmeHistogramBin[];
+}
+
+export interface ActivityHistogramSeries {
+  key: string;
+  label: string;
+  categories: string[];
+  counts: number[][]; // [bin][category]
+  total: number;
+}
+
+export interface ActivityHistogramResponse {
+  start: string;
+  end: string;
+  interval_days: number;
+  bin_starts: string[];
+  series: ActivityHistogramSeries[];
+}
+
 export interface NoaaScaleDay {
   date: string | null;
   r_scale: string | null;
@@ -657,9 +694,99 @@ export interface ProjectSettings {
   rfi_high: number;
 }
 
+// ─── Type II shock analysis (Path A) ───────────────────────────────────────────
+
+/** Plotted-area geometry of the shock spectrogram (PNG pixels) for lasso mapping. */
+export interface RenderGeometry {
+  img_w: number;
+  img_h: number;
+  axes_px: [number, number, number, number]; // x0, y0, x1, y1 (top-left origin)
+  t0: number;
+  t1: number;
+  freq_top: number;
+  freq_bottom: number;
+}
+
+export interface ShockPoint {
+  time_s: number;
+  freq_mhz: number;
+}
+
+export interface MaxIntensityResult {
+  time_channels: number[];
+  time_seconds: number[];
+  freqs: number[];
+  auto_outlier_cleaned: boolean;
+  auto_removed_count: number;
+}
+
+export interface PowerLawFit {
+  a: number;
+  b: number;
+  std_errs: (number | null)[];
+  r2: number | null;
+  rmse: number | null;
+  point_count: number;
+}
+
+export interface ShockSummary {
+  avg_freq_mhz: number | null;
+  avg_freq_err_mhz: number | null;
+  avg_drift_mhz_s: number | null;
+  avg_drift_err_mhz_s: number | null;
+  start_freq_mhz: number | null;
+  start_freq_err_mhz: number | null;
+  initial_shock_speed_km_s: number | null;
+  initial_shock_speed_err_km_s: number | null;
+  initial_shock_height_rs: number | null;
+  initial_shock_height_err_rs: number | null;
+  avg_shock_speed_km_s: number | null;
+  avg_shock_speed_err_km_s: number | null;
+  avg_shock_height_rs: number | null;
+  avg_shock_height_err_rs: number | null;
+  fold: number;
+  fundamental: boolean;
+  harmonic: boolean;
+  harmonic_number: number;
+  observed_avg_freq_mhz: number | null;
+  observed_avg_drift_mhz_s: number | null;
+  observed_start_freq_mhz: number | null;
+}
+
+export interface ShockCurves {
+  shock_freq_mhz: number[];
+  shock_speed_km_s: number[];
+  shock_height_rs: number[];
+}
+
+export interface FitLine {
+  time_s: number[];
+  freq_mhz: number[];
+}
+
+export interface ShockFitResult {
+  fit: PowerLawFit;
+  shock_summary: ShockSummary;
+  curves: ShockCurves;
+  fit_line: FitLine;
+}
+
+export interface ShockSession {
+  time_seconds: number[];
+  freqs: number[];
+  fundamental: boolean;
+  harmonic: boolean;
+  fold: number;
+  fit: PowerLawFit | null;
+  shock_summary: ShockSummary | null;
+}
+
+export type ExtraPlotKind = "speed_height" | "speed_freq" | "height_freq";
+
 export interface ProjectOpenResponse {
   session: AnalyzerSession;
   settings: ProjectSettings;
+  shock: ShockSession | null;
 }
 
 // ─── Data Analysis (SDO/AIA via SunPy) ─────────────────────────────────────────

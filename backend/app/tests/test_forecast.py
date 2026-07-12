@@ -326,6 +326,87 @@ async def test_cmes_route_reads_catalog(client, db_session):
     assert (await client.get("/api/forecast/cmes?days=99")).status_code == 422
 
 
+async def test_cmes_history_reads_catalog_within_window(client, db_session, monkeypatch):
+    # A window inside the retained rolling catalog serves from the DB and must
+    # NOT trigger an on-demand DONKI fetch.
+    fetch = AsyncMock(return_value=[])
+    monkeypatch.setattr(cme_service, "fetch_cmes", fetch)
+    await upsert_cmes(db_session, parse_cmes([_DONKI_CME]))
+
+    r = await client.get("/api/forecast/cmes/history?start=2026-07-01&end=2026-07-02")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["cmes"][0]["activity_id"] == "2026-07-01T12:36:00-CME-001"
+    fetch.assert_not_awaited()
+
+
+async def test_cmes_history_fetches_old_window_on_demand(client, db_session, monkeypatch):
+    # A window older than the retained catalog is fetched on demand + upserted.
+    fetch = AsyncMock(return_value=parse_cmes([_DONKI_CME]))
+    monkeypatch.setattr(cme_service, "fetch_cmes", fetch)
+
+    r = await client.get("/api/forecast/cmes/history?start=2020-01-01&end=2020-01-31")
+    assert r.status_code == 200
+    fetch.assert_awaited_once()
+
+
+async def test_cmes_history_validates_range(client):
+    # end before start, and an over-long span, are rejected.
+    assert (
+        await client.get("/api/forecast/cmes/history?start=2026-07-05&end=2026-07-01")
+    ).status_code == 422
+    assert (
+        await client.get("/api/forecast/cmes/history?start=2020-01-01&end=2026-01-01")
+    ).status_code == 422
+
+
+async def test_cme_histogram_buckets_by_interval(db_session, monkeypatch):
+    # Two CMEs a day apart -> one per daily bin, both in the same 3-day bin.
+    day1 = {**parse_cmes([_DONKI_CME])[0], "activity_id": "a"}
+    day2 = {
+        **day1,
+        "activity_id": "b",
+        "start_time": day1["start_time"] + timedelta(days=1),
+        "is_earth_directed": False,
+        "predicted_arrival_time": None,
+    }
+    await upsert_cmes(db_session, [day1, day2])
+
+    start = day1["start_time"].date()
+    end = start + timedelta(days=2)
+
+    daily = await cme_service.get_cme_histogram(db_session, start, end, 1)
+    assert daily.interval_days == 1
+    assert [b.count for b in daily.bins] == [1, 1, 0]
+    assert [b.earth_directed for b in daily.bins] == [1, 0, 0]
+
+    every3 = await cme_service.get_cme_histogram(db_session, start, end, 3)
+    assert [b.count for b in every3.bins] == [2]  # one bin spanning the window
+    assert every3.bins[0].earth_directed == 1
+
+
+async def test_cmes_histogram_route(client, db_session):
+    await upsert_cmes(db_session, parse_cmes([_DONKI_CME]))
+    r = await client.get(
+        "/api/forecast/cmes/histogram?start=2026-07-01&end=2026-07-03&interval=1"
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["interval_days"] == 1
+    assert sum(b["count"] for b in body["bins"]) == 1
+    # interval outside 1..30 and an unordered window are rejected.
+    assert (
+        await client.get(
+            "/api/forecast/cmes/histogram?start=2026-07-01&end=2026-07-03&interval=0"
+        )
+    ).status_code == 422
+    assert (
+        await client.get(
+            "/api/forecast/cmes/histogram?start=2026-07-05&end=2026-07-01&interval=1"
+        )
+    ).status_code == 422
+
+
 async def test_noaa_scales_route(client, monkeypatch):
     monkeypatch.setattr(
         routes_forecast,

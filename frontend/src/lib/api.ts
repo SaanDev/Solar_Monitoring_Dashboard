@@ -16,6 +16,8 @@ import type {
   SolarWindSeriesResponse,
   KpForecastResponse,
   CmeListResponse,
+  CmeHistoryResponse,
+  CmeHistogramResponse,
   NoaaScalesResponse,
   AuroraForecast,
   BurstScorecardResponse,
@@ -40,6 +42,7 @@ import type {
   BurstPredictionJob,
   BurstPredictionResult,
   Alert,
+  ActivityHistogramResponse,
   SpaceWeatherEvent,
   AnalyzerSession,
   AnalyzerStats,
@@ -47,6 +50,13 @@ import type {
   RenderParams,
   CombineMode,
   ProjectOpenResponse,
+  BgMethod,
+  IntensityUnit,
+  RenderGeometry,
+  ShockPoint,
+  MaxIntensityResult,
+  ShockFitResult,
+  ExtraPlotKind,
   AnalysisSession,
   AnalysisOptions,
   AnalysisJobStatus,
@@ -204,6 +214,14 @@ export const api = {
   forecastKp: (range: string) =>
     get<KpForecastResponse>(`/api/forecast/kp?range=${range}`),
   forecastCmes: (days = 7) => get<CmeListResponse>(`/api/forecast/cmes?days=${days}`),
+  // Past CMEs over an arbitrary date window (YYYY-MM-DD, inclusive).
+  forecastCmesHistory: (start: string, end: string) =>
+    get<CmeHistoryResponse>(`/api/forecast/cmes/history?start=${start}&end=${end}`),
+  // CME counts per `interval`-day bin over a period (histogram).
+  forecastCmesHistogram: (start: string, end: string, interval: number) =>
+    get<CmeHistogramResponse>(
+      `/api/forecast/cmes/histogram?start=${start}&end=${end}&interval=${interval}`
+    ),
   forecastNoaaScales: () => get<NoaaScalesResponse>("/api/forecast/noaa-scales"),
   forecastAurora: () => get<AuroraForecast>("/api/forecast/aurora"),
 
@@ -290,6 +308,11 @@ export const api = {
   alertsLatest: () => get<Alert[]>("/api/alerts/latest"),
   events: (start: string, end: string) =>
     get<SpaceWeatherEvent[]>(`/api/events?start=${start}&end=${end}`),
+  // Per-parameter, time-aligned activity histograms for the alerts page.
+  activityHistogram: (start: string, end: string, interval: number) =>
+    get<ActivityHistogramResponse>(
+      `/api/events/activity-histogram?start=${start}&end=${end}&interval=${interval}`
+    ),
 
   // Alert delivery (Telegram / webhook push)
   notificationSettings: () => get<NotificationSettings>("/api/notifications/settings"),
@@ -335,6 +358,35 @@ export const api = {
     form.append("file", file);
     return postForm<ProjectOpenResponse>("/api/analyzer/open-project", form);
   },
+
+  // Type II shock analysis (Path A)
+  analyzerShockGeometry: (id: string, p: RenderParams) =>
+    get<RenderGeometry>(`/api/analyzer/shock/geometry?${analyzerQuery(id, p)}`),
+  analyzerShockSpectrogramUrl: (id: string, p: RenderParams) =>
+    apiUrl(`/api/analyzer/shock/spectrogram?${analyzerQuery(id, p)}`),
+  analyzerShockMaxIntensity: (body: {
+    id: string;
+    method: BgMethod;
+    intensity_unit: IntensityUnit;
+    rfi_enabled: boolean;
+    rfi_low: number;
+    rfi_high: number;
+    polygon: ShockPoint[];
+    auto_clean: boolean;
+  }) => postJson<MaxIntensityResult>("/api/analyzer/shock/max-intensity", body),
+  analyzerShockFit: (body: {
+    id: string;
+    points: ShockPoint[];
+    fold: number;
+    harmonic: boolean;
+    time_channels?: number[] | null;
+  }) => postJson<ShockFitResult>("/api/analyzer/shock/fit", body),
+  analyzerShockFitPlotUrl: (id: string, bust: string | number = "") =>
+    apiUrl(`/api/analyzer/shock/fit-plot?id=${id}${bust ? `&v=${bust}` : ""}`),
+  analyzerShockExtraPlotUrl: (id: string, kind: ExtraPlotKind, bust: string | number = "") =>
+    apiUrl(`/api/analyzer/shock/extra-plot?id=${id}&kind=${kind}${bust ? `&v=${bust}` : ""}`),
+  analyzerShockExportUrl: (id: string, format: "xlsx" | "csv") =>
+    apiUrl(`/api/analyzer/shock/export?id=${id}&format=${format}`),
 
   // Data Analysis (SDO/AIA via SunPy)
   analysisOptions: () => get<AnalysisOptions>("/api/analysis/options"),

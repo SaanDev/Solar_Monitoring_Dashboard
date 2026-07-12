@@ -2,6 +2,29 @@ from datetime import datetime
 from pydantic import BaseModel
 
 
+class ActivityHistogramSeries(BaseModel):
+    """One parameter's per-bin counts, split across ordered severity categories.
+
+    ``counts[i]`` aligns to the shared ``bin_starts`` (see the response) and each
+    inner list aligns to ``categories`` (low → high severity).
+    """
+    key: str
+    label: str
+    categories: list[str] = []
+    counts: list[list[int]] = []
+    total: int = 0
+
+
+class ActivityHistogramResponse(BaseModel):
+    """Per-parameter activity histograms over a shared, time-aligned set of bins
+    (for correlating flares / radio bursts / CMEs / geomagnetic storms)."""
+    start: datetime
+    end: datetime
+    interval_days: int
+    bin_starts: list[datetime] = []
+    series: list[ActivityHistogramSeries] = []
+
+
 class AlertResponse(BaseModel):
     id: str
     type: str
