@@ -148,7 +148,6 @@ export function PlotControls({ params, options, onChange }: Props) {
         {(
           [
             ["draw_limb", "Solar limb"],
-            ["draw_grid", "Heliographic grid"],
             ["colorbar", "Colorbar"],
           ] as const
         ).map(([key, label]) => (
@@ -162,6 +161,23 @@ export function PlotControls({ params, options, onChange }: Props) {
             {label}
           </label>
         ))}
+      </div>
+
+      {/* Coordinate graticule (ported solar_grid: HGS / HGC / HCI meridians+parallels) */}
+      <div>
+        <label className={labelCls}>Coordinate grid</label>
+        <select
+          value={params.grid_frame}
+          onChange={(e) =>
+            onChange({ grid_frame: e.target.value as PlotParams["grid_frame"], draw_grid: false })
+          }
+          className={selectCls}
+        >
+          <option value="">Off</option>
+          <option value="hgs">Heliographic Stonyhurst (HGS)</option>
+          <option value="hgc">Heliographic Carrington (HGC)</option>
+          <option value="hci">Heliocentric Inertial (HCI)</option>
+        </select>
       </div>
     </div>
   );

@@ -35,10 +35,16 @@ COLORMAPS: list[str] = [
     "auto",
     "sdoaia94", "sdoaia131", "sdoaia171", "sdoaia193", "sdoaia211",
     "sdoaia304", "sdoaia335", "sdoaia1600", "sdoaia1700", "hmimag",
+    # Multi-mission instrument colormaps (registered by sunpy on import; unknown
+    # names degrade to the map's own default via resolve_cmap).
+    "soholasco2", "soholasco3", "stereocor1", "stereocor2", "stereohi1", "stereohi2",
     "gray", "inferno", "magma", "viridis", "plasma", "hot",
     "RdBu_r", "seismic", "bwr",   # diverging — good for difference images
 ]
 SCALES: list[str] = ["linear", "sqrt", "log", "asinh"]
+
+# Coordinate graticule reference frames (ported solar_grid); "" = off.
+GRID_FRAMES: list[str] = ["", "hgs", "hgc", "hci"]
 
 # Dark theme matching the dashboard (see processing/plot_rendering.py).
 _BG = "#0f1117"
@@ -63,6 +69,11 @@ class PlotParams:
     draw_limb: bool = False
     draw_grid: bool = False
     colorbar: bool = True
+    # NRGF radial filter (coronagraphs): flattens the corona's radial fall-off so
+    # faint CME fronts appear. Applied to the full frame before any crop.
+    nrgf: bool = False
+    # Coordinate graticule frame ("" = off, else hgs/hgc/hci — ported solar_grid).
+    grid_frame: str = ""
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -211,6 +222,69 @@ def _param_hash(*parts: Any) -> str:
     return hashlib.sha1(repr(parts).encode()).hexdigest()[:12]
 
 
+def _apply_nrgf(m: Any) -> Any:
+    """Apply the ported NRGF radial filter to a coronagraph map (full frame).
+
+    Returns a new sunpy Map carrying the original WCS metadata, so crops,
+    graticules and pixel↔world transforms keep working on the filtered image.
+    """
+    import sunpy.map
+
+    from app.services.solar.coronagraph import nrgf, solar_center_from_meta
+
+    center = solar_center_from_meta(m.meta, m.data.shape)
+    import numpy as np
+
+    filtered = nrgf(np.asarray(m.data, dtype=float), center)
+    out = sunpy.map.Map(filtered, dict(m.meta))
+    try:  # keep the instrument's plot defaults (colormap) on the derived map
+        out.plot_settings = dict(m.plot_settings)
+    except Exception:
+        pass
+    return out
+
+
+def _graticule_overlay(m: Any, frame_key: str) -> Any:
+    """Overlay callable drawing an HGS/HGC/HCI graticule (ported solar_grid).
+
+    The graticule polylines come back in helioprojective arcsec; they are
+    converted to pixel coordinates of ``m`` (crop-aware — a submap's WCS maps
+    them correctly) and drawn with NaN gaps at the far hemisphere.
+    """
+    import astropy.units as u
+    import numpy as np
+    from astropy.coordinates import SkyCoord
+
+    from app.services.solar.solar_grid import graticule_arcsec
+
+    polylines, labels = graticule_arcsec(m, frame_key=frame_key.upper())
+
+    def _overlay(ax: Any) -> None:
+        for tx, ty in polylines:
+            try:
+                coords = SkyCoord(tx * u.arcsec, ty * u.arcsec, frame=m.coordinate_frame)
+                px, py = m.wcs.world_to_pixel(coords)
+            except Exception:
+                continue
+            ax.plot(np.asarray(px, float), np.asarray(py, float),
+                    color=_GRID, linewidth=0.4, alpha=0.75)
+        for text, lx, ly in labels:
+            try:
+                c = SkyCoord(lx * u.arcsec, ly * u.arcsec, frame=m.coordinate_frame)
+                px, py = m.wcs.world_to_pixel(c)
+                px, py = float(px), float(py)
+            except Exception:
+                continue
+            if not (np.isfinite(px) and np.isfinite(py)):
+                continue
+            ny, nx = m.data.shape
+            if not (0 <= px < nx and 0 <= py < ny):
+                continue
+            ax.text(px, py, text, color=_FG, fontsize=6, alpha=0.8)
+
+    return _overlay if polylines else None
+
+
 # ── single-image plot + crop (slice 1) ────────────────────────────────────────
 
 
@@ -222,23 +296,99 @@ def render_plot(
     if out.exists():
         return out
     m = data.load_map(session_id, frame)
+    if params.nrgf:
+        m = _apply_nrgf(m)  # full frame first — the radial annuli need the whole image
     if params.crop:
         m = submap(m, params)
     cmap = resolve_cmap(params.cmap, m)
     norm = build_norm(m, params)
+    overlay = _graticule_overlay(m, params.grid_frame) if params.grid_frame else None
     return _render_map_to_png(
         m,
         out,
         cmap=cmap,
         norm=norm,
-        title=_title_for(m),
+        title=_title_for(m) + ("  · NRGF" if params.nrgf else ""),
         draw_limb=params.draw_limb,
         draw_grid=params.draw_grid,
         colorbar=params.colorbar,
-        cbar_label=_cbar_label(m),
+        cbar_label="σ (NRGF)" if params.nrgf else _cbar_label(m),
+        overlay=overlay,
         tight=tight,
         dpi=dpi,
     )
+
+
+# ── exact-pixel "bare" render (interactive canvas background) ───────────────────
+
+
+def render_bare(
+    session_id: str,
+    frame: int,
+    params: PlotParams,
+    mode: str = "plot",
+    base_index: int = 0,
+) -> Path:
+    """Render one frame as a PNG whose pixels map 1:1 to the data array.
+
+    No axes, colorbar, title or padding — ``matplotlib.image.imsave`` writes
+    exactly ``(ny, nx)`` pixels with ``origin="lower"``, so the interactive
+    canvas can convert clicks to data pixels linearly. ``mode`` mirrors the
+    difference tool: "plot" (raw, optional NRGF), "running", "base".
+    """
+    import numpy as np
+    from matplotlib.image import imsave
+
+    out = data.session_dir(session_id) / (
+        f"bare_{mode}_{frame}_{base_index}_{_param_hash(params)}.png"
+    )
+    if out.exists():
+        return out
+
+    m = data.load_map(session_id, frame)
+    if mode in ("running", "base"):
+        ref_index = frame - 1 if mode == "running" else base_index
+        if ref_index < 0 or ref_index == frame:
+            raise ValueError("Difference needs a distinct previous/base frame.")
+        ref = data.load_map(session_id, ref_index)
+        if m.data.shape != ref.data.shape:
+            raise ValueError("Frames have different sizes; cannot difference them.")
+        arr = np.asarray(m.data, float) - np.asarray(ref.data, float)
+        if params.vmin is not None and params.vmax is not None:
+            vmin, vmax = params.vmin, params.vmax
+        else:
+            lim = float(np.nanpercentile(np.abs(arr), params.clip_high)) or 1.0
+            if not np.isfinite(lim) or lim == 0.0:
+                lim = 1.0
+            vmin, vmax = -lim, lim
+        cmap_name = params.cmap if params.cmap not in ("", "auto") else "RdBu_r"
+        cmap = resolve_cmap(cmap_name, m)
+        normed = np.clip((arr - vmin) / (vmax - vmin), 0.0, 1.0)
+    else:
+        if params.nrgf:
+            m = _apply_nrgf(m)
+        arr = np.asarray(m.data, float)
+        norm = build_norm(m, params)
+        normed = np.asarray(norm(arr))
+        normed = np.clip(np.nan_to_num(normed, nan=0.0), 0.0, 1.0)
+        cmap = resolve_cmap(params.cmap, m)
+
+    normed = np.nan_to_num(normed, nan=0.0)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    imsave(str(out), normed, cmap=cmap, vmin=0.0, vmax=1.0, origin="lower", format="png")
+    return out
+
+
+def export_fits(session_id: str, frame: int, params: PlotParams) -> Path:
+    """Write one frame (optionally cropped, WCS-correct via submap) as FITS."""
+    out = data.session_dir(session_id) / f"export_{frame}_{_param_hash(params.crop, params.bl_x, params.bl_y, params.tr_x, params.tr_y)}.fits"
+    if out.exists():
+        return out
+    m = data.load_map(session_id, frame)
+    if params.crop:
+        m = submap(m, params)
+    m.save(str(out), overwrite=True)
+    return out
 
 
 # ── running / base difference (slice 3) ────────────────────────────────────────

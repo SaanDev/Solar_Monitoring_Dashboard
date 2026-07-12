@@ -15,12 +15,14 @@ class FrameMeta(BaseModel):
     index: int
     time: datetime | None = None
     filename: str
+    detector: str = ""                # per-frame detector (SECCHI frames vary)
+    exptime: float | None = None      # exposure time (s); differencing normalises to DN/s
 
 
 class AnalysisSession(BaseModel):
     """Metadata for a solar-image session held server-side by id."""
     id: str
-    source: str                       # "upload" | "fetch" | "archive"
+    source: str                       # "upload" | "fetch" | "archive" | "search"
     observatory: str = ""             # e.g. "SDO"
     instrument: str = ""              # e.g. "AIA"
     detector: str = ""                # e.g. "AIA"
@@ -30,12 +32,42 @@ class AnalysisSession(BaseModel):
     width: int = 0
     height: int = 0
     n_frames: int = 1
+    # Science class from instrument_profiles.classify_frame — drives which analysis
+    # tools apply: "disk_euv" | "coronagraph" | "heliospheric" | "magnetograph".
+    science_class: str = "disk_euv"
     frames: list[FrameMeta] = []
 
 
 class WavelengthOption(BaseModel):
     code: str                         # AIA wavelength code, e.g. "171"
     label: str                        # "AIA 171 Å"
+
+
+class Observable(BaseModel):
+    """A selectable multi-mission target from the instrument registry.
+
+    Mirrors ``app.services.solar.sunpy_archive.InstrumentRegistryEntry`` — the
+    frontend's observable picker is built from a list of these.
+    """
+    key: str                          # e.g. "sdo_aia", "stereo_a_cor2"
+    label: str                        # e.g. "SDO/AIA", "STEREO-A/COR2"
+    spacecraft: str
+    instrument: str
+    detector: str | None = None
+    data_kind: str                    # "map" | "timeseries"
+    science_class: str                # disk_euv | coronagraph | heliospheric | magnetograph
+    supports_wavelength: bool = False
+    supports_detector: bool = False
+    supports_product: bool = False
+    supports_satellite: bool = False
+    supports_level: bool = False
+    wavelengths: list[float] = []
+    products: list[str] = []
+    levels: list[str] = []
+    default_wavelength: float | None = None
+    default_product: str | None = None
+    default_level: str | None = None
+    default_satellite: int | None = None
 
 
 class AnalysisOptions(BaseModel):
@@ -45,6 +77,55 @@ class AnalysisOptions(BaseModel):
     difference_types: list[str]
     movie_formats: list[str]
     max_frames: int
+    # Multi-mission Solar Image Analysis additions.
+    observables: list[Observable] = []
+    sources: list[str] = ["auto", "jsoc", "vso"]
+    frame_sizes: list[str] = ["full", "bin2", "bin4", "cutout"]
+    jsoc_enabled: bool = False        # True when a JSOC notify e-mail is configured
+
+
+class SearchRequest(BaseModel):
+    """Search a mission archive via SunPy Fido (multi-mission)."""
+    observable: str                   # registry key, e.g. "soho_lasco_c2"
+    start: datetime                   # UTC window start
+    end: datetime                     # UTC window end
+    wavelength_angstrom: float | None = None   # for AIA/EUVI/SUVI
+    product: str | None = None        # for HMI (magnetogram/continuum/dopplergram)
+    level: str | None = None          # for SUVI ("1b"/"2")
+    satellite_number: int | None = None       # for GOES
+    sample_seconds: float | None = None        # cadence sub-sampling (VSO)
+    max_records: int = 60
+
+
+class SearchRow(BaseModel):
+    index: int
+    start: datetime | None = None
+    end: datetime | None = None
+    source: str = ""
+    provider: str = ""
+    instrument: str = ""
+    size: str = ""
+    fileid: str = ""
+
+
+class SearchResponse(BaseModel):
+    search_id: str                    # server-side handle for the cached Fido result
+    observable: str
+    data_kind: str
+    rows: list[SearchRow]
+    notice: str | None = None         # e.g. LASCO nearest-available-date fallback
+
+
+class FetchSelectionRequest(BaseModel):
+    """Download selected rows of a prior search into a new session (background job)."""
+    search_id: str
+    indices: list[int] = []           # selected row indices (empty = all rows)
+    source: str = "auto"              # auto | jsoc | vso
+    frame_size: str = "full"          # full | bin2 | bin4 | cutout (JSOC server-side)
+    cutout_x: float = 0.0             # arcsec, cutout centre (frame_size=cutout)
+    cutout_y: float = 0.0
+    cutout_w: float = 500.0
+    cutout_h: float = 500.0
 
 
 class FetchRequest(BaseModel):
@@ -86,6 +167,33 @@ class MovieRequest(BaseModel):
     bl_y: float = 0.0
     tr_x: float = 0.0
     tr_y: float = 0.0
+
+
+class HeightTimePick(BaseModel):
+    """One CME leading-edge pick on the interactive canvas."""
+    frame: int
+    px: float                         # data pixel (0-based, origin bottom-left)
+    py: float
+
+
+class HeightTimeRequest(BaseModel):
+    """Fit a CME height–time curve from leading-edge picks across frames."""
+    session: str
+    picks: list[HeightTimePick]
+
+
+class JMapRequest(BaseModel):
+    """Build a time–elongation J-map from a session's frame stack."""
+    session: str
+    pa_deg: float = 90.0              # solar position angle of the slit (N→E)
+    background: str = "median"        # median | previous
+    half_width: int = 2               # slit half-width (px) averaged perpendicular
+
+
+class VectorPrepareRequest(BaseModel):
+    """Fetch + assemble hmi.B_720s vector segments near a frame's time."""
+    session: str
+    frame: int = 0
 
 
 class JobStatusResponse(BaseModel):

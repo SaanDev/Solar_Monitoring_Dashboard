@@ -12,20 +12,31 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from datetime import datetime
 
+from app.config import settings
 from app.schemas.data_analysis_schema import (
     AnalysisOptions,
     AnalysisSession,
     ArchiveRequest,
     FetchRequest,
+    FetchSelectionRequest,
+    HeightTimeRequest,
+    JMapRequest,
     JobStatusResponse,
     MovieRequest,
+    SearchRequest,
+    SearchResponse,
     SequenceRequest,
+    VectorPrepareRequest,
 )
 from app.services import aia_analysis_service as analysis
 from app.services import aia_data_service as data
+from app.services import solar_acquisition_service as acquire
+from app.services import solar_measure_service as measure
+from app.services import solar_science_service as science
 from app.services.aia_analysis_service import COLORMAPS, SCALES, PlotParams
 from app.services.job_manager import Job, job_manager
 
@@ -44,7 +55,60 @@ async def options() -> AnalysisOptions:
         difference_types=["running", "base"],
         movie_formats=["mp4", "gif"],
         max_frames=40,
+        observables=acquire.observable_options(),
+        sources=["auto", "jsoc", "vso"],
+        frame_sizes=["full", "bin2", "bin4", "cutout"],
+        jsoc_enabled=bool(settings.jsoc_email),
     )
+
+
+# ── multi-mission archive search (Fido) + selected-row download ──────────────────
+
+
+@router.post("/source/search", response_model=SearchResponse)
+async def source_search(req: SearchRequest) -> SearchResponse:
+    """Search a mission archive (SunPy Fido). Rows are returned for the results
+    table; the raw result is cached server-side under ``search_id`` for the
+    follow-up download of selected rows."""
+    import asyncio
+
+    try:
+        return await asyncio.to_thread(acquire.run_search, req)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except Exception as exc:  # noqa: BLE001 - surface Fido/network errors cleanly
+        raise HTTPException(502, f"Archive search failed: {exc}")
+
+
+@router.post("/source/find-latest", response_model=SearchResponse)
+async def source_find_latest(req: SearchRequest) -> SearchResponse:
+    """Walk back to the archive's data frontier and return the newest available
+    records (for lagging archives such as SOHO/LASCO)."""
+    import asyncio
+
+    try:
+        return await asyncio.to_thread(acquire.run_find_latest, req)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Find-latest failed: {exc}")
+
+
+@router.post("/source/fetch-selected", response_model=JobStatusResponse)
+async def source_fetch_selected(req: FetchSelectionRequest) -> JobStatusResponse:
+    """Start a background download of the selected search rows into a session."""
+    if req.source not in ("auto", "jsoc", "vso"):
+        raise HTTPException(422, "source must be auto, jsoc or vso")
+    if req.frame_size not in ("full", "bin2", "bin4", "cutout"):
+        raise HTTPException(422, "frame_size must be full, bin2, bin4 or cutout")
+    cutout = (req.cutout_x, req.cutout_y, req.cutout_w, req.cutout_h)
+    job_id = job_manager.submit(
+        acquire.fetch_selected_job,
+        req.search_id, req.indices, req.source, req.frame_size, cutout,
+    )
+    job = job_manager.get(job_id)
+    assert job is not None
+    return _job_response(job)
 
 
 @router.post("/source/upload", response_model=AnalysisSession)
@@ -121,6 +185,67 @@ async def session(session_id: str) -> AnalysisSession:
         raise HTTPException(400, str(exc))
 
 
+class SessionExportRequest(BaseModel):
+    """Bundle a session (frames + state) into a desktop-compatible .ecsolar."""
+    session: str
+    picks: list[dict] = []            # web height–time picks: {frame, px, py}
+    display: dict = {}                # PlotParams snapshot to restore later
+
+
+@router.post("/session/export")
+async def session_export(req: SessionExportRequest) -> FileResponse:
+    import asyncio
+
+    try:
+        path = await asyncio.to_thread(
+            data.export_session_bundle, req.session, req.picks, req.display
+        )
+    except FileNotFoundError:
+        raise HTTPException(404, "Analysis session not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    headers = {"Content-Disposition": f'attachment; filename="{Path(path).name}"'}
+    return FileResponse(path, media_type="application/zip", headers=headers)
+
+
+@router.post("/session/import")
+async def session_import(file: UploadFile = File(...)) -> dict:
+    """Restore a .ecsolar bundle (from this dashboard or the desktop analyzer)."""
+    import asyncio
+
+    name = (file.filename or "").lower()
+    if not name.endswith((".ecsolar", ".zip")):
+        raise HTTPException(400, "Expected a .ecsolar session file")
+    content = await file.read()
+    try:
+        result = await asyncio.to_thread(data.import_session_bundle, content)
+    except Exception as exc:  # noqa: BLE001 - malformed bundles → clear 422
+        raise HTTPException(422, f"Could not restore session: {exc}")
+    return {
+        "session": result["session"].model_dump(mode="json"),
+        "picks": result["picks"],
+        "display": result["display"],
+    }
+
+
+@router.get("/export/regions-csv")
+async def export_regions_csv(
+    session: str = Query(...),
+    frame: int = Query(0),
+    threshold_pct: float = Query(98.0, ge=50.0, le=100.0),
+    min_area: int = Query(40, ge=1),
+) -> FileResponse:
+    """Bright-region detection table as CSV (ported detect_active_regions)."""
+    try:
+        path = data.regions_csv(session, frame, threshold_pct, min_area)
+    except FileNotFoundError:
+        raise HTTPException(404, "Analysis session or frame not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    headers = {"Content-Disposition": f'attachment; filename="regions_{session[:8]}_{frame}.csv"'}
+    return FileResponse(path, media_type="text/csv", headers=headers)
+
+
 def _plot_params(
     cmap: str,
     scale: str,
@@ -136,15 +261,20 @@ def _plot_params(
     draw_limb: bool,
     draw_grid: bool,
     colorbar: bool,
+    nrgf: bool = False,
+    grid_frame: str = "",
 ) -> PlotParams:
     if cmap not in COLORMAPS:
         raise HTTPException(422, f"cmap must be one of {COLORMAPS}")
     if scale not in SCALES:
         raise HTTPException(422, f"scale must be one of {SCALES}")
+    if grid_frame not in analysis.GRID_FRAMES:
+        raise HTTPException(422, f"grid_frame must be one of {analysis.GRID_FRAMES}")
     return PlotParams(
         cmap=cmap, scale=scale, clip_low=clip_low, clip_high=clip_high,
         vmin=vmin, vmax=vmax, crop=crop, bl_x=bl_x, bl_y=bl_y, tr_x=tr_x, tr_y=tr_y,
         draw_limb=draw_limb, draw_grid=draw_grid, colorbar=colorbar,
+        nrgf=nrgf, grid_frame=grid_frame,
     )
 
 
@@ -166,11 +296,14 @@ async def render(
     draw_limb: bool = Query(False),
     draw_grid: bool = Query(False),
     colorbar: bool = Query(True),
+    nrgf: bool = Query(False),
+    grid_frame: str = Query(""),
     download: bool = Query(False),
 ) -> FileResponse:
     params = _plot_params(
         cmap, scale, clip_low, clip_high, vmin, vmax,
         crop, bl_x, bl_y, tr_x, tr_y, draw_limb, draw_grid, colorbar,
+        nrgf=nrgf, grid_frame=grid_frame,
     )
     dpi = analysis.EXPORT_DPI if download else analysis.RENDER_DPI
     try:
@@ -183,6 +316,181 @@ async def render(
     if download:
         headers["Content-Disposition"] = f'attachment; filename="aia_{session[:8]}_{frame}.png"'
     return FileResponse(path, media_type="image/png", headers=headers)
+
+
+@router.get("/render-bare")
+async def render_bare(
+    session: str = Query(...),
+    frame: int = Query(0),
+    mode: str = Query("plot", pattern="^(plot|running|base)$"),
+    base_index: int = Query(0),
+    cmap: str = Query("auto"),
+    scale: str = Query("linear"),
+    clip_low: float = Query(1.0),
+    clip_high: float = Query(99.9),
+    vmin: float | None = Query(None),
+    vmax: float | None = Query(None),
+    nrgf: bool = Query(False),
+) -> FileResponse:
+    """Exact-pixel PNG (1:1 with the data array, origin bottom-left) for the
+    interactive canvas. No axes/colorbar — clicks map linearly to data pixels."""
+    params = _plot_params(
+        cmap, scale, clip_low, clip_high, vmin, vmax,
+        False, 0.0, 0.0, 0.0, 0.0, False, False, True, nrgf=nrgf,
+    )
+    try:
+        path = analysis.render_bare(session, frame, params, mode=mode, base_index=base_index)
+    except FileNotFoundError:
+        raise HTTPException(404, "Analysis session or frame not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return FileResponse(path, media_type="image/png")
+
+
+@router.get("/frame-meta")
+async def frame_meta(session: str = Query(...), frame: int = Query(0)) -> dict:
+    """WCS/geometry for the interactive canvas (shape, Sun-centre pixel, plate
+    scale, rotation matrix, apparent solar radius)."""
+    try:
+        return data.frame_wcs_meta(session, frame)
+    except FileNotFoundError:
+        raise HTTPException(404, "Analysis session or frame not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.get("/coord")
+async def coord(
+    session: str = Query(...),
+    frame: int = Query(0),
+    px: float = Query(...),
+    py: float = Query(...),
+    frame_key: str = Query("HGS"),
+) -> dict:
+    """Exact WCS readout for a data pixel (arcsec, R☉, PA, lon/lat, data value)."""
+    if frame_key.upper() not in ("HGS", "HGC", "HCI"):
+        raise HTTPException(422, "frame_key must be HGS, HGC or HCI")
+    try:
+        return data.coord_readout(session, frame, px, py, frame_key)
+    except FileNotFoundError:
+        raise HTTPException(404, "Analysis session or frame not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+# ── measurements + region light curve (interactive canvas tools) ─────────────────
+
+
+@router.get("/measure/ruler")
+async def measure_ruler(
+    session: str = Query(...),
+    frame: int = Query(0),
+    x1: float = Query(...), y1: float = Query(...),
+    x2: float = Query(...), y2: float = Query(...),
+) -> dict:
+    """Two-point plane-of-sky distance (arcsec/R☉/km) + N→E position angle."""
+    try:
+        return measure.measure_ruler(session, frame, x1, y1, x2, y2)
+    except FileNotFoundError:
+        raise HTTPException(404, "Analysis session or frame not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.get("/measure/profile")
+async def measure_profile(
+    session: str = Query(...),
+    frame: int = Query(0),
+    x1: float = Query(...), y1: float = Query(...),
+    x2: float = Query(...), y2: float = Query(...),
+) -> dict:
+    """Intensity profile along a segment (arcsec distance scale)."""
+    try:
+        return measure.measure_profile(session, frame, x1, y1, x2, y2)
+    except FileNotFoundError:
+        raise HTTPException(404, "Analysis session or frame not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.get("/measure/region")
+async def measure_region(
+    session: str = Query(...),
+    frame: int = Query(0),
+    x0: float = Query(...), y0: float = Query(...),
+    x1: float = Query(...), y1: float = Query(...),
+) -> dict:
+    """Rectangle statistics + intensity-weighted centroid (px + arcsec)."""
+    try:
+        return measure.measure_region(session, frame, x0, y0, x1, y1)
+    except FileNotFoundError:
+        raise HTTPException(404, "Analysis session or frame not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.post("/height-time")
+async def height_time(req: HeightTimeRequest) -> dict:
+    """CME height–time fit: leading-edge picks → speed (km/s), acceleration
+    (km/s²), per-segment speeds (ported coronagraph.fit_height_time)."""
+    if not req.picks:
+        raise HTTPException(422, "At least one pick is required.")
+    try:
+        return measure.height_time(req.session, req.picks)
+    except FileNotFoundError:
+        raise HTTPException(404, "Analysis session or frame not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.get("/lightcurve")
+async def lightcurve(
+    session: str = Query(...),
+    x0: float = Query(...), y0: float = Query(...),
+    x1: float = Query(...), y1: float = Query(...),
+    statistic: str = Query("mean", pattern="^(mean|sum)$"),
+    radio_start: datetime | None = Query(None),
+    radio_end: datetime | None = Query(None),
+) -> dict:
+    """ROI intensity vs time (DN/s) across all frames, with optional
+    radio-burst-window timing (EUV-peak-minus-radio-onset lag)."""
+    import asyncio
+
+    try:
+        return await asyncio.to_thread(
+            measure.region_lightcurve, session, x0, y0, x1, y1, statistic, radio_start, radio_end
+        )
+    except FileNotFoundError:
+        raise HTTPException(404, "Analysis session not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.get("/export/fits")
+async def export_fits(
+    session: str = Query(...),
+    frame: int = Query(0),
+    crop: bool = Query(False),
+    bl_x: float = Query(0.0),
+    bl_y: float = Query(0.0),
+    tr_x: float = Query(0.0),
+    tr_y: float = Query(0.0),
+) -> FileResponse:
+    """Download one frame as FITS (optionally cropped; WCS kept correct)."""
+    params = _plot_params(
+        "auto", "linear", 1.0, 99.9, None, None,
+        crop, bl_x, bl_y, tr_x, tr_y, False, False, True,
+    )
+    try:
+        path = analysis.export_fits(session, frame, params)
+    except FileNotFoundError:
+        raise HTTPException(404, "Analysis session or frame not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    headers = {
+        "Content-Disposition": f'attachment; filename="solar_{session[:8]}_frame{frame}{"_crop" if crop else ""}.fits"'
+    }
+    return FileResponse(path, media_type="application/fits", headers=headers)
 
 
 @router.get("/difference")
@@ -314,6 +622,123 @@ async def active_regions(
     if download:
         headers["Content-Disposition"] = f'attachment; filename="aia_{session[:8]}_ar_{method}_{frame}.png"'
     return FileResponse(path, media_type="image/png", headers=headers)
+
+
+# ── specialized science: J-map, HMI vector field, compare viewpoint ─────────────
+
+
+@router.post("/jmap", response_model=JobStatusResponse)
+async def jmap(req: JMapRequest) -> JobStatusResponse:
+    """Start a background J-map build (time–elongation map along a slit)."""
+    if req.background not in ("median", "previous"):
+        raise HTTPException(422, "background must be median or previous")
+    job_id = job_manager.submit(
+        science.jmap_job, req.session, req.pa_deg, req.background, max(0, int(req.half_width))
+    )
+    job = job_manager.get(job_id)
+    assert job is not None
+    return _job_response(job)
+
+
+@router.post("/vector-field/prepare", response_model=JobStatusResponse)
+async def vector_prepare(req: VectorPrepareRequest) -> JobStatusResponse:
+    """Fetch + assemble hmi.B_720s vector segments for a session (background)."""
+    job_id = job_manager.submit(science.vector_prepare_job, req.session, req.frame)
+    job = job_manager.get(job_id)
+    assert job is not None
+    return _job_response(job)
+
+
+@router.get("/vector-field")
+async def vector_field(
+    session: str = Query(...),
+    frame: int = Query(0),
+    arrows: bool = Query(True),
+    streamlines: bool = Query(False),
+    magnitude: bool = Query(False),
+    grid_step: int = Query(64, ge=8, le=512),
+    min_gauss: float = Query(200.0, ge=0.0),
+    cmap: str = Query("auto"),
+    scale: str = Query("linear"),
+    clip_low: float = Query(1.0),
+    clip_high: float = Query(99.9),
+    draw_limb: bool = Query(False),
+    colorbar: bool = Query(True),
+    download: bool = Query(False),
+) -> FileResponse:
+    """HMI frame + magnetic vector-field overlay (red = +Bz, blue = −Bz)."""
+    params = _plot_params(
+        cmap, scale, clip_low, clip_high, None, None,
+        False, 0.0, 0.0, 0.0, 0.0, draw_limb, False, colorbar,
+    )
+    dpi = analysis.EXPORT_DPI if download else analysis.RENDER_DPI
+    try:
+        path = science.render_vector_field(
+            session, frame, params,
+            show_arrows=arrows, show_streamlines=streamlines, show_magnitude=magnitude,
+            grid_step_px=grid_step, min_gauss=min_gauss, dpi=dpi,
+        )
+    except FileNotFoundError:
+        raise HTTPException(404, "Analysis session or frame not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except Exception as exc:  # noqa: BLE001 - vector assembly errors → clear 422
+        raise HTTPException(422, f"Vector-field render failed: {exc}")
+    headers = {}
+    if download:
+        headers["Content-Disposition"] = f'attachment; filename="hmi_vector_{session[:8]}_{frame}.png"'
+    return FileResponse(path, media_type="image/png", headers=headers)
+
+
+@router.get("/compare-viewpoint/info")
+async def compare_viewpoint_info(
+    session: str = Query(...),
+    frame: int = Query(0),
+    other: str = Query(...),
+    other_frame: int = Query(0),
+) -> dict:
+    """Observer separation + labels for a two-viewpoint pair."""
+    try:
+        return science.compare_info(session, frame, other, other_frame)
+    except FileNotFoundError:
+        raise HTTPException(404, "One of the sessions/frames was not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.get("/compare-viewpoint")
+async def compare_viewpoint(
+    session: str = Query(...),
+    frame: int = Query(0),
+    other: str = Query(...),
+    other_frame: int = Query(0),
+    view: str = Query("primary", pattern="^(primary|reprojected)$"),
+    cmap: str = Query("auto"),
+    scale: str = Query("linear"),
+    clip_low: float = Query(1.0),
+    clip_high: float = Query(99.9),
+    draw_limb: bool = Query(False),
+    colorbar: bool = Query(True),
+) -> FileResponse:
+    """One side of a two-viewpoint blink: the primary frame, or the other
+    session's frame reprojected onto the primary WCS/observer."""
+    import asyncio
+
+    params = _plot_params(
+        cmap, scale, clip_low, clip_high, None, None,
+        False, 0.0, 0.0, 0.0, 0.0, draw_limb, False, colorbar,
+    )
+    try:
+        path = await asyncio.to_thread(
+            science.render_compare, session, frame, other, other_frame, view, params
+        )
+    except FileNotFoundError:
+        raise HTTPException(404, "One of the sessions/frames was not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except Exception as exc:  # noqa: BLE001 - reprojection errors → clear 422
+        raise HTTPException(422, f"Reprojection failed: {exc}")
+    return FileResponse(path, media_type="image/png")
 
 
 @router.post("/movie", response_model=JobStatusResponse)
