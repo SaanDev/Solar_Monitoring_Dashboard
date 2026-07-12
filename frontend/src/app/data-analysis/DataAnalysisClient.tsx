@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { clsx } from "clsx";
 import { api, apiUrl } from "@/lib/api";
 import { DataSourcePicker } from "@/components/analysis/DataSourcePicker";
+import { PlaybackControls } from "@/components/analysis/PlaybackControls";
 import { PlotControls } from "@/components/analysis/PlotControls";
 import { CoronagraphControls } from "@/components/analysis/CoronagraphControls";
 import { DifferenceControls } from "@/components/analysis/DifferenceControls";
@@ -243,6 +244,30 @@ export function DataAnalysisClient() {
 
   const multiFrame = !!session && session.n_frames > 1;
 
+  // First playable frame: running differences need a previous frame.
+  const playMinFrame =
+    (tool === "difference" && diffType === "running") ||
+    ((tool === "inspect" || tool === "heightTime") && inspectMode === "running")
+      ? 1
+      : 0;
+
+  // Current-view URL for an arbitrary frame — playback preloading warms the
+  // browser/server caches so looping animations run smoothly after one pass.
+  function urlForFrame(f: number): string | null {
+    if (!session) return null;
+    const id = session.id;
+    if (tool === "difference") return api.analysisDifferenceUrl(id, f, diffType, baseIndex, debounced);
+    if (tool === "composite") return api.analysisCompositeUrl(id, f, contourLevel, debounced);
+    if (tool === "activeRegions") return api.analysisActiveRegionsUrl(id, f, arMethod, thresholdPct, debounced);
+    if (tool === "inspect" || tool === "heightTime")
+      return api.analysisBareUrl(id, f, inspectMode, 0, debounced);
+    if (tool === "measure" || tool === "lightcurve")
+      return api.analysisBareUrl(id, f, "plot", 0, debounced);
+    if (tool === "vectorField")
+      return vecPrepared ? api.analysisVectorFieldUrl(id, f, vecOptions, debounced) : null;
+    return api.analysisRenderUrl(id, f, debounced);
+  }
+
   return (
     <div className="grid gap-4 lg:grid-cols-3">
       <div className="space-y-4 lg:col-span-1">
@@ -285,20 +310,15 @@ export function DataAnalysisClient() {
         )}
 
         {multiFrame && (
-          <div className="rounded-lg border border-surface-border bg-surface-card p-4">
-            <label className="mb-1 block text-xs text-slate-500">
-              Frame {frame + 1} / {session!.n_frames}
-            </label>
-            <input
-              type="range"
-              min={0}
-              max={session!.n_frames - 1}
-              step={1}
-              value={frame}
-              onChange={(e) => setFrame(parseInt(e.target.value, 10))}
-              className="w-full accent-accent-blue"
-            />
-          </div>
+          <PlaybackControls
+            sessionId={session!.id}
+            frame={frame}
+            nFrames={session!.n_frames}
+            minFrame={playMinFrame}
+            frames={session!.frames}
+            onFrame={setFrame}
+            preloadUrl={urlForFrame}
+          />
         )}
 
         {session && (tool === "plot" || tool === "inspect") && (

@@ -91,23 +91,39 @@ export function apiUrl(path: string): string {
   return `${BASE}${path}`;
 }
 
+/** Build an Error carrying the backend's `detail` message (FastAPI convention),
+ * so failures show their real cause instead of just a status code. */
+async function apiError(res: Response, path: string): Promise<Error> {
+  let detail = "";
+  try {
+    const body = await res.json();
+    if (typeof body?.detail === "string") detail = body.detail;
+    else if (body?.detail) detail = JSON.stringify(body.detail);
+  } catch {
+    try {
+      detail = (await res.text()).slice(0, 300);
+    } catch {
+      /* unreadable body */
+    }
+  }
+  return new Error(detail ? `${detail} (HTTP ${res.status})` : `API error ${res.status}: ${path}`);
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`API error ${res.status}: ${path}`);
-  }
+  if (!res.ok) throw await apiError(res, path);
   return res.json() as Promise<T>;
 }
 
 async function postForm<T>(path: string, form: FormData): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { method: "POST", body: form });
-  if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
+  if (!res.ok) throw await apiError(res, path);
   return res.json() as Promise<T>;
 }
 
 async function postNoBody<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { method: "POST" });
-  if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
+  if (!res.ok) throw await apiError(res, path);
   return res.json() as Promise<T>;
 }
 
@@ -117,7 +133,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
+  if (!res.ok) throw await apiError(res, path);
   return res.json() as Promise<T>;
 }
 
@@ -127,7 +143,7 @@ async function putJson<T>(path: string, body: unknown): Promise<T> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
+  if (!res.ok) throw await apiError(res, path);
   return res.json() as Promise<T>;
 }
 
@@ -676,7 +692,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session, picks, display }),
     });
-    if (!res.ok) throw new Error(`Export failed (${res.status})`);
+    if (!res.ok) throw await apiError(res, "/api/analysis/session/export");
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
