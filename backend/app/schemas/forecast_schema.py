@@ -51,6 +51,30 @@ class CmeListResponse(BaseModel):
     cmes: list[CmeItem] = []
 
 
+class CmeHistoryResponse(BaseModel):
+    """Past CMEs over an arbitrary date window (newest first)."""
+    start: datetime
+    end: datetime
+    source: str = "nasa-donki"
+    cmes: list[CmeItem] = []
+
+
+class CmeHistogramBin(BaseModel):
+    """CME count for one ``interval_days``-wide time bin."""
+    bin_start: datetime
+    count: int = 0
+    earth_directed: int = 0      # subset of ``count`` with an ENLIL Earth arrival
+
+
+class CmeHistogramResponse(BaseModel):
+    """Per-interval CME counts over a period (bins oldest first)."""
+    start: datetime
+    end: datetime
+    interval_days: int
+    source: str = "nasa-donki"
+    bins: list[CmeHistogramBin] = []
+
+
 # ── NOAA 3-day R/S/G outlook ─────────────────────────────────────────────────
 
 

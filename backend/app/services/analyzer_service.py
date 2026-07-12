@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import re
 import time
 from collections import OrderedDict
@@ -32,11 +33,32 @@ from app.processing.analyzer_processing import (
     process_spectrum,
     resolve_cmap,
 )
+from app.processing.analysis_session import (
+    from_legacy_max_intensity,
+    normalize_session,
+    to_project_payload,
+)
 from app.processing.dynamic_spectrum import parse_obs_start
 from app.processing.efaproj import read_project, write_project
 from app.processing.fits_loader import FitsData, load_ecallisto_fits
-from app.processing.plot_rendering import render_spectrum_png
-from app.schemas.analyzer_schema import AnalyzerSession, AnalyzerStats, ProjectSettings
+from app.processing.plot_rendering import (
+    render_extra_plot,
+    render_fit_plot,
+    render_shock_spectrogram,
+    render_spectrum_png,
+    shock_geometry as _shock_geometry_dict,
+)
+from app.processing.shock_analysis import (
+    compute_shock_parameters,
+    extract_max_intensity,
+    power_law_fit,
+)
+from app.schemas.analyzer_schema import (
+    AnalyzerSession,
+    AnalyzerStats,
+    ProjectSettings,
+    ShockSession,
+)
 from app.services.ecallisto_service import get_archive_fits
 
 _ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -70,13 +92,17 @@ def _safe_id(id: str) -> str:
     return id
 
 
+# FITS suffixes stored per session; excludes the ``{id}.analysis.json`` shock sidecar.
+_FITS_SUFFIXES = {".fits", ".fit", ".gz"}
+
+
 def _locate(id: str) -> Path:
     """Resolve the stored FITS for ``id`` within analyzer_dir (path-traversal safe)."""
     _safe_id(id)
     base = Path(settings.analyzer_dir).resolve()
     for p in base.glob(f"{id}.*"):
         rp = p.resolve()
-        if rp.is_file() and base in rp.parents:
+        if rp.is_file() and base in rp.parents and rp.suffix.lower() in _FITS_SUFFIXES:
             return rp
     raise FileNotFoundError(f"No FITS for analyzer id {id}")
 
@@ -311,6 +337,321 @@ def export_fits(id: str, params: RenderParams) -> tuple[bytes, str]:
     return buf.getvalue(), f"analyzer_{id[:8]}_{params.intensity_unit}.fits"
 
 
+# ── Type II shock analysis (Path A) ──────────────────────────────────────────
+
+SHOCK_RENDER_DPI = 150
+
+
+def _analysis_path(id: str) -> Path:
+    """Sidecar JSON holding the shock-analysis session for ``id`` (max-intensity
+    points + fit + shock summary). Lives beside the FITS so cleanup_stale sweeps it."""
+    return Path(settings.analyzer_dir) / f"{_safe_id(id)}.analysis.json"
+
+
+def _load_analysis(id: str) -> dict | None:
+    p = _analysis_path(id)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _save_analysis(id: str, sidecar: dict) -> None:
+    p = _analysis_path(id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(sidecar), encoding="utf-8")
+
+
+def _analysis_hash(id: str) -> str:
+    """Short hash of the sidecar contents for cache-busting derived plots/exports."""
+    p = _analysis_path(id)
+    raw = p.read_bytes() if p.exists() else b""
+    return hashlib.sha1(raw).hexdigest()[:12]
+
+
+def shock_geometry(id: str, params: RenderParams) -> dict:
+    """Plotted-area geometry for the current spectrogram (for the browser lasso)."""
+    time_axis, freq_axis, _o, _arr, _label = _processed(id, params)
+    return _shock_geometry_dict(time_axis, freq_axis, SHOCK_RENDER_DPI)
+
+
+def render_shock(id: str, params: RenderParams, dpi: int = SHOCK_RENDER_DPI) -> Path:
+    """Render (or reuse) the fixed-axes shock spectrogram PNG for lasso overlay."""
+    out = Path(settings.spectra_dir) / f"shock_{id}_{_param_hash(id, params, dpi)}.png"
+    if out.exists():
+        return out
+    time_axis, freq_axis, obs_start, arr, _label = _processed(id, params)
+    if params.vmin is None or params.vmax is None:
+        vmin, vmax = default_limits(arr, params.intensity_unit)
+    else:
+        vmin, vmax = params.vmin, params.vmax
+    render_shock_spectrogram(
+        arr, time_axis, freq_axis, out,
+        station=params.station, obs_start=obs_start,
+        vmin=float(vmin), vmax=float(vmax), cmap=resolve_cmap(params.cmap),
+        time_unit=params.time_unit, dpi=dpi,
+    )
+    return out
+
+
+def compute_max_intensity(
+    id: str,
+    params: RenderParams,
+    polygon: list[tuple[float, float]] | None,
+    auto_clean: bool = True,
+) -> dict:
+    """Isolate the burst (polygon in data coords) and extract per-column peak frequency."""
+    _t, _f, _o, arr, _label = _processed(id, params)
+    time_axis, freq_axis = _t, _f
+    return extract_max_intensity(arr, time_axis, freq_axis, polygon=polygon, auto_clean=auto_clean)
+
+
+def _fit_equation(fit: dict) -> str:
+    return f"f(x) = {fit['a']:.2f} · x^-{abs(fit['b']):.2f}"
+
+
+def fit_shock(
+    id: str,
+    points: list[tuple[float, float]],
+    fold: int,
+    harmonic: bool,
+    time_channels: list[float] | None = None,
+) -> dict:
+    """Power-law fit + Newkirk shock parameters on the kept points; persist a sidecar."""
+    _safe_id(id)
+    if len(points) < 2:
+        raise ValueError("At least two maximum-intensity points are required to fit.")
+    times = [float(p[0]) for p in points]
+    freqs = [float(p[1]) for p in points]
+
+    fit = power_law_fit(times, freqs)
+    result = compute_shock_parameters(fit, times, freqs, fold=fold, harmonic=harmonic)
+
+    if time_channels is not None and len(time_channels) == len(points):
+        channels = [float(c) for c in time_channels]
+    else:
+        channels = [float(i) for i in range(len(points))]
+
+    sidecar = {
+        "max_intensity": {
+            "time_channels": channels,
+            "time_seconds": times,
+            "freqs": freqs,
+            "fundamental": bool(not harmonic),
+            "harmonic": bool(harmonic),
+        },
+        "analyzer": {
+            "fit_params": fit,
+            "fold": int(max(1, min(4, fold))),
+            "shock_summary": result["shock_summary"],
+        },
+        "curves": result["curves"],
+        "fit_line": result["fit_line"],
+        "equation": _fit_equation(fit),
+    }
+    _save_analysis(id, sidecar)
+
+    return {
+        "fit": fit,
+        "shock_summary": result["shock_summary"],
+        "curves": result["curves"],
+        "fit_line": result["fit_line"],
+    }
+
+
+def render_shock_fit_png(id: str) -> Path:
+    """Scatter of the kept max-intensity points + best-fit overlay."""
+    sidecar = _load_analysis(id)
+    if sidecar is None:
+        raise FileNotFoundError(f"No shock analysis for id {id}")
+    out = Path(settings.spectra_dir) / f"shockfit_{id}_{_analysis_hash(id)}.png"
+    if out.exists():
+        return out
+    mi = sidecar.get("max_intensity") or {}
+    fit_line = sidecar.get("fit_line") or {}
+    render_fit_plot(
+        out,
+        np.asarray(mi.get("time_seconds") or [], dtype=float),
+        np.asarray(mi.get("freqs") or [], dtype=float),
+        fit_time=np.asarray(fit_line.get("time_s") or [], dtype=float),
+        fit_freq=np.asarray(fit_line.get("freq_mhz") or [], dtype=float),
+        title="Power-law best fit",
+        equation=sidecar.get("equation", ""),
+    )
+    return out
+
+
+def render_shock_extra_png(id: str, kind: str) -> Path:
+    """Derived shock plot (speed-vs-height / speed-vs-freq / height-vs-freq)."""
+    sidecar = _load_analysis(id)
+    if sidecar is None:
+        raise FileNotFoundError(f"No shock analysis for id {id}")
+    out = Path(settings.spectra_dir) / f"shockextra_{id}_{kind}_{_analysis_hash(id)}.png"
+    if out.exists():
+        return out
+    render_extra_plot(out, kind, sidecar.get("curves") or {})
+    return out
+
+
+# Shock-summary rows for the exported table (label, summary-key, error-key, unit, digits).
+_SHOCK_EXPORT_ROWS = [
+    ("Average Frequency", "avg_freq_mhz", "avg_freq_err_mhz", "MHz", 2),
+    ("Average Drift Rate", "avg_drift_mhz_s", "avg_drift_err_mhz_s", "MHz/s", 4),
+    ("Starting Frequency", "start_freq_mhz", "start_freq_err_mhz", "MHz", 2),
+    ("Initial Shock Speed", "initial_shock_speed_km_s", "initial_shock_speed_err_km_s", "km/s", 2),
+    ("Initial Shock Height", "initial_shock_height_rs", "initial_shock_height_err_rs", "Rs", 3),
+    ("Average Shock Speed", "avg_shock_speed_km_s", "avg_shock_speed_err_km_s", "km/s", 2),
+    ("Average Shock Height", "avg_shock_height_rs", "avg_shock_height_err_rs", "Rs", 3),
+]
+
+
+def _shock_export_rows(id: str) -> tuple[dict, list[list]]:
+    sidecar = _load_analysis(id)
+    if sidecar is None:
+        raise FileNotFoundError(f"No shock analysis for id {id}")
+    analyzer = sidecar.get("analyzer") or {}
+    summary = analyzer.get("shock_summary") or {}
+    fit = analyzer.get("fit_params") or {}
+    rows: list[list] = [["Parameter", "Value", "Error", "Unit"]]
+    for label, key, ekey, unit, digits in _SHOCK_EXPORT_ROWS:
+        val = summary.get(key)
+        err = summary.get(ekey)
+        rows.append([
+            label,
+            round(float(val), digits) if val is not None else "",
+            round(float(err), digits) if err is not None else "",
+            unit,
+        ])
+    rows.append(["Newkirk fold", summary.get("fold", analyzer.get("fold", 1)), "", ""])
+    rows.append(["Emission", "Harmonic" if summary.get("harmonic") else "Fundamental", "", ""])
+    if fit:
+        rows.append(["Fit a", round(float(fit.get("a", 0)), 4), "", ""])
+        rows.append(["Fit b", round(float(fit.get("b", 0)), 4), "", ""])
+        rows.append(["R²", round(float(fit.get("r2", 0)), 4), "", ""])
+        rows.append(["RMSE", round(float(fit.get("rmse", 0)), 4), "", ""])
+    return summary, rows
+
+
+def export_shock_table(id: str, fmt: str) -> tuple[bytes, str]:
+    """Shock parameters as CSV or Excel (bytes, filename). Excel needs openpyxl."""
+    _summary, rows = _shock_export_rows(id)
+    if fmt == "csv":
+        import csv
+        buf = io.StringIO()
+        csv.writer(buf).writerows(rows)
+        return buf.getvalue().encode("utf-8"), f"shock_{id[:8]}.csv"
+    if fmt == "xlsx":
+        try:
+            from openpyxl import Workbook
+        except ImportError as exc:
+            raise ValueError(
+                "Excel export needs the 'openpyxl' package (rebuild the backend image)."
+            ) from exc
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Shock Parameters"
+        for row in rows:
+            ws.append(row)
+        for cell in ws[1]:
+            cell.font = cell.font.copy(bold=True)
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue(), f"shock_{id[:8]}.xlsx"
+    raise ValueError("format must be 'csv' or 'xlsx'")
+
+
+def _shock_session_from_normalized(norm: dict | None) -> ShockSession | None:
+    """Build the frontend-facing ShockSession from a normalized analysis session."""
+    if not norm:
+        return None
+    mi = dict(norm.get("max_intensity") or {})
+    an = dict(norm.get("analyzer") or {})
+    freqs = mi.get("freqs")
+    if freqs is None:
+        return None
+    time_seconds = mi.get("time_seconds")
+    if time_seconds is None:
+        time_seconds = mi.get("time_channels")
+    return ShockSession(
+        time_seconds=[float(x) for x in np.asarray(time_seconds, dtype=float).reshape(-1)],
+        freqs=[float(x) for x in np.asarray(freqs, dtype=float).reshape(-1)],
+        fundamental=bool(mi.get("fundamental", True)),
+        harmonic=bool(mi.get("harmonic", False)),
+        fold=int(an.get("fold", 1)),
+        fit=an.get("fit_params"),
+        shock_summary=an.get("shock_summary"),
+    )
+
+
+def _sidecar_from_normalized(norm: dict) -> dict:
+    """Sidecar dict (JSON-safe) from a normalized analysis session — for open_project."""
+    mi = dict(norm.get("max_intensity") or {})
+    an = dict(norm.get("analyzer") or {})
+
+    def _list(v):
+        return None if v is None else [float(x) for x in np.asarray(v, dtype=float).reshape(-1)]
+
+    return {
+        "max_intensity": {
+            "time_channels": _list(mi.get("time_channels")),
+            "time_seconds": _list(mi.get("time_seconds")),
+            "freqs": _list(mi.get("freqs")),
+            "fundamental": bool(mi.get("fundamental", True)),
+            "harmonic": bool(mi.get("harmonic", False)),
+        },
+        "analyzer": {
+            "fit_params": an.get("fit_params"),
+            "fold": int(an.get("fold", 1)),
+            "shock_summary": an.get("shock_summary"),
+        },
+    }
+
+
+def _embed_analysis_session(
+    id: str, meta: dict, arrays: dict, fd: FitsData, station: str
+) -> None:
+    """If a shock-analysis sidecar exists, write meta['analysis_session'] + arrays and the
+    legacy max_intensity mirror — byte-compatible with the desktop project format."""
+    sidecar = _load_analysis(id)
+    if sidecar is None:
+        return
+    mi = dict(sidecar.get("max_intensity") or {})
+    analyzer = dict(sidecar.get("analyzer") or {})
+    if not mi.get("freqs"):
+        return
+
+    session = {
+        "source": {
+            "filename": station,
+            "shape": [int(fd.data.shape[0]), int(fd.data.shape[1])],
+        },
+        "max_intensity": mi,
+        "analyzer": analyzer,
+        "ui": {"restore_max_window": True, "restore_analyzer_window": True},
+    }
+    session_meta, session_arrays = to_project_payload(session)
+    if session_meta is None:
+        return
+    meta["analysis_session"] = session_meta
+    arrays.update(session_arrays)
+
+    # Legacy compatibility payload (older desktop builds read meta['max_intensity']).
+    meta["max_intensity"] = {
+        "present": True,
+        "fundamental": bool(mi.get("fundamental", True)),
+        "harmonic": bool(mi.get("harmonic", False)),
+        "analyzer": analyzer,
+    }
+    if mi.get("time_channels") is not None:
+        arrays["max_time_channels"] = np.asarray(mi.get("time_channels"), dtype=float)
+    if mi.get("time_seconds") is not None:
+        arrays["max_time_seconds"] = np.asarray(mi.get("time_seconds"), dtype=float)
+    if mi.get("freqs") is not None:
+        arrays["max_freqs"] = np.asarray(mi.get("freqs"), dtype=float)
+
+
 # ── Project (.efaproj) save / open — interoperable with the desktop app ───────
 
 
@@ -397,14 +738,20 @@ def save_project(id: str, params: RenderParams) -> tuple[bytes, str]:
         "freqs": np.asarray(freq_axis, dtype=np.float32),
         "time": np.asarray(time_axis, dtype=np.float32),
     }
+
+    # Embed the shock-analysis session so the project round-trips with the desktop app
+    # (meta["analysis_session"] + analysis_* arrays, plus the legacy max_intensity mirror).
+    _embed_analysis_session(id, meta, arrays, fd, station)
+
     buf = io.BytesIO()
     write_project(buf, meta=meta, arrays=arrays)
     date_tag = obs_start.strftime("%Y%m%d") if obs_start else "session"
     return buf.getvalue(), f"{station}_{date_tag}.efaproj"
 
 
-def open_project(content: bytes) -> tuple[AnalyzerSession, ProjectSettings]:
-    """Load a .efaproj (desktop or web) into a new session + restorable settings."""
+def open_project(content: bytes) -> tuple[AnalyzerSession, ProjectSettings, ShockSession | None]:
+    """Load a .efaproj (desktop or web) into a new session + restorable settings +
+    any restored shock-analysis session."""
     payload = read_project(io.BytesIO(content))
     meta, arrays = payload.meta, payload.arrays
 
@@ -449,7 +796,29 @@ def open_project(content: bytes) -> tuple[AnalyzerSession, ProjectSettings]:
         vmin=_opt_float(meta.get("noise_vmin")),
         vmax=_opt_float(meta.get("noise_vmax")),
     )
-    return session, settings_out
+
+    # Restore a shock-analysis session if the project carries one (canonical or legacy).
+    shock_out: ShockSession | None = None
+    norm = None
+    analysis_meta = meta.get("analysis_session")
+    if isinstance(analysis_meta, dict):
+        session_payload = dict(analysis_meta)
+        max_block = dict(session_payload.get("max_intensity") or {})
+        max_block["time_channels"] = arrays.get("analysis_time_channels")
+        max_block["time_seconds"] = arrays.get("analysis_time_seconds")
+        max_block["freqs"] = arrays.get("analysis_freqs")
+        session_payload["max_intensity"] = max_block
+        norm = normalize_session(session_payload)
+    if norm is None:
+        norm = from_legacy_max_intensity(meta, arrays)
+    if norm is not None:
+        try:
+            _save_analysis(new_id, _sidecar_from_normalized(norm))
+        except Exception:
+            pass
+        shock_out = _shock_session_from_normalized(norm)
+
+    return session, settings_out, shock_out
 
 
 def cleanup_stale(ttl_hours: int = 24) -> None:

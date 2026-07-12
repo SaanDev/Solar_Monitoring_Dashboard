@@ -2,6 +2,8 @@
 
 import { KpForecastPanel } from "@/components/forecast/KpForecastPanel";
 import { CmeList } from "@/components/forecast/CmeList";
+import { CmeHistogram } from "@/components/forecast/CmeHistogram";
+import { PastCmeList } from "@/components/forecast/PastCmeList";
 import { NoaaScalesPanel } from "@/components/forecast/NoaaScalesPanel";
 import { AuroraPanel } from "@/components/forecast/AuroraPanel";
 
@@ -18,8 +20,11 @@ export function ForecastClient() {
         </div>
       </div>
 
-      {/* Row 2 — DONKI CME catalog with ENLIL Earth arrivals */}
+      {/* Row 2 — DONKI CME catalog: upcoming/inbound, eruption-cadence
+          histogram, then a past-window log */}
       <CmeList days={7} />
+      <CmeHistogram />
+      <PastCmeList />
 
       {/* Row 3 — OVATION aurora oval */}
       <AuroraPanel />

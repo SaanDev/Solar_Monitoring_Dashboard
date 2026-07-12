@@ -72,3 +72,16 @@ async def query_since(db: AsyncSession, since: datetime) -> list[dict]:
     )
     res = await db.execute(stmt)
     return [_to_dict(o) for o in res.scalars().all()]
+
+
+async def query_between(
+    db: AsyncSession, start: datetime, end: datetime
+) -> list[dict]:
+    """CMEs first observed in ``[start, end]`` (inclusive), newest first."""
+    stmt = (
+        select(CmeEvent)
+        .where(CmeEvent.start_time >= start, CmeEvent.start_time <= end)
+        .order_by(CmeEvent.start_time.desc())
+    )
+    res = await db.execute(stmt)
+    return [_to_dict(o) for o in res.scalars().all()]

@@ -10,6 +10,7 @@ import { windowFor } from "@/lib/formatting";
 import { alertsToReportEvents } from "@/lib/exportEvents";
 import { AlertFeed } from "@/components/alerts/AlertFeed";
 import { EventTimeline } from "@/components/events/EventTimeline";
+import { ActivityHistograms } from "@/components/events/ActivityHistograms";
 import { ExportEventsButton } from "@/components/events/ExportEventsButton";
 
 const RANGES = [
@@ -61,6 +62,7 @@ export function EventsClient() {
   });
 
   return (
+    <div className="space-y-4">
     <div className="grid gap-4 lg:grid-cols-3">
       {/* Active alerts */}
       <aside className="rounded-lg border border-surface-border bg-surface-card p-4 lg:col-span-1">
@@ -124,18 +126,26 @@ export function EventsClient() {
           </div>
         </div>
 
-        {error ? (
-          <div className="flex h-48 items-center justify-center text-sm text-accent-red">
-            Failed to load events
-          </div>
-        ) : isLoading ? (
-          <div className="flex h-48 items-center justify-center text-sm text-slate-600">
-            Loading events…
-          </div>
-        ) : (
-          <EventTimeline events={events ?? []} grouped={grouped} />
-        )}
+        {/* Cap the list height (like the alerts feed) so a long event record
+            doesn't push the histograms far down the page — scroll within instead. */}
+        <div className="max-h-[36rem] overflow-y-auto pr-1">
+          {error ? (
+            <div className="flex h-48 items-center justify-center text-sm text-accent-red">
+              Failed to load events
+            </div>
+          ) : isLoading ? (
+            <div className="flex h-48 items-center justify-center text-sm text-slate-600">
+              Loading events…
+            </div>
+          ) : (
+            <EventTimeline events={events ?? []} grouped={grouped} />
+          )}
+        </div>
       </section>
+    </div>
+
+      {/* Per-parameter activity histograms for visual correlation */}
+      <ActivityHistograms />
     </div>
   );
 }
