@@ -23,6 +23,10 @@ interface Props {
   formatX?: (v: number) => string;
   bands?: ChartBand[];
   markers?: ChartMarker[];
+  /** Optional secondary series (e.g. a linear fit) drawn as a dashed line. */
+  overlay?: { x: number; y: number }[];
+  /** Draw a dot at each data point (handy for sparse tracking series). */
+  showDots?: boolean;
 }
 
 export function MiniChart({
@@ -34,6 +38,8 @@ export function MiniChart({
   formatX,
   bands = [],
   markers = [],
+  overlay = [],
+  showDots = false,
 }: Props) {
   const W = 640;
   const H = height;
@@ -44,7 +50,7 @@ export function MiniChart({
 
   const pts = x
     .map((xv, i) => ({ x: xv, y: y[i] }))
-    .filter((p): p is { x: number; y: number } => p.y != null && isFinite(p.y));
+    .filter((p): p is { x: number; y: number } => isFinite(p.x) && p.y != null && isFinite(p.y));
   if (pts.length < 2) {
     return <p className="text-[10px] text-slate-600">Not enough data to chart.</p>;
   }
@@ -60,7 +66,12 @@ export function MiniChart({
   const Y = (v: number) => padT + (1 - (v - yMin) / ySpan) * (H - padT - padB);
 
   const path = pts.map((p, i) => `${i === 0 ? "M" : "L"}${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(" ");
-  const fx = formatX ?? ((v: number) => v.toPrecision(3));
+  const overlayPts = overlay.filter((p) => isFinite(p.x) && isFinite(p.y));
+  const overlayPath = overlayPts
+    .map((p, i) => `${i === 0 ? "M" : "L"}${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`)
+    .join(" ");
+  const rawFx = formatX ?? ((v: number) => v.toPrecision(3));
+  const fx = (v: number) => (isFinite(v) ? rawFx(v) : "");
 
   const xTicks = [xMin, xMin + xSpan / 2, xMax];
   const yTicks = [yMin, yMin + ySpan / 2, yMax];
@@ -118,8 +129,16 @@ export function MiniChart({
           </g>
         );
       })}
+      {/* fit / overlay line */}
+      {overlayPath && (
+        <path d={overlayPath} fill="none" stroke="#22d3ee" strokeWidth={1.2} strokeDasharray="4 3" opacity={0.85} />
+      )}
       {/* series */}
       <path d={path} fill="none" stroke="#3b82f6" strokeWidth={1.4} />
+      {showDots &&
+        pts.map((p, i) => (
+          <circle key={`dot${i}`} cx={X(p.x)} cy={Y(p.y)} r={2.2} fill="#3b82f6" />
+        ))}
       {/* axis labels */}
       {xLabel && (
         <text x={(padL + W - padR) / 2} y={H - 4} fill="#94a3b8" fontSize={10} textAnchor="middle">

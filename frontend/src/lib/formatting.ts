@@ -26,6 +26,28 @@ export function windowFor(hours: number): { start: string; end: string } {
   return { start: iso(now - hours * 3600 * 1000), end: iso(now) };
 }
 
+/**
+ * Parse a backend ISO timestamp to epoch **seconds**, treating a bare
+ * (offset-less) timestamp as UTC. Backend `datetime.isoformat()` may or may not
+ * carry an offset: naive → "2024-01-01T00:00:00", aware → "…+00:00". Blindly
+ * appending "Z" turns the aware form into "…+00:00Z", an invalid date whose
+ * `getTime()` is NaN — which then crashes `new Date(NaN).toISOString()`.
+ * Returns NaN for null/blank/unparseable input so callers can filter it out.
+ */
+export function parseUtcSeconds(iso: string | null | undefined): number {
+  if (!iso) return NaN;
+  // Add "Z" only when the string has no timezone designator already.
+  const hasTz = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(iso);
+  const ms = new Date(hasTz ? iso : iso + "Z").getTime();
+  return Number.isNaN(ms) ? NaN : ms / 1000;
+}
+
+/** Format epoch seconds as a UTC "HH:MM" clock label; "" for NaN/invalid. */
+export function formatClockUtc(sec: number): string {
+  if (!Number.isFinite(sec)) return "";
+  return new Date(sec * 1000).toISOString().slice(11, 16);
+}
+
 export function flareClass(flux: number | null): string {
   if (flux === null) return "—";
   if (flux >= 1e-4) return "X" + (flux / 1e-4).toFixed(1);

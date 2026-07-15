@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { Download } from "lucide-react";
 import { api } from "@/lib/api";
+import { loadWorkflow, saveWorkflow } from "@/lib/workflowStorage";
 import type {
   AnalyzerSession,
   RenderParams,
@@ -26,6 +27,22 @@ interface Points {
   time: number[];
   freq: number[];
   channels: number[];
+}
+
+// Per-session, per-tab persistence of the shock-analysis work so a refresh or a
+// Spectrum/Shock mode toggle (which unmounts this panel) reopens the same
+// extracted points and fit. Keyed by session id; the backend keeps the fit
+// artifacts for that id across a client reload.
+const shockKey = (id: string) => `e-callisto-shock-${id}`;
+
+interface ShockSnapshot {
+  extracted: Points | null;
+  kept: Points | null;
+  fold: number;
+  harmonic: boolean;
+  fit: ShockFitResult | null;
+  note: string;
+  bust: number;
 }
 
 function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
@@ -62,16 +79,46 @@ export function ShockAnalysisPanel({ session, params, restored, onRestoredConsum
     { revalidateOnFocus: false }
   );
 
-  // Reset when the active session changes.
+  // On (re)mount or an active-session change, restore this session's saved work
+  // if any, otherwise reset to a blank analysis.
+  const loadedFor = useRef<string | null>(null);
   useEffect(() => {
-    setExtracted(null);
-    setKept(null);
-    setFit(null);
-    setNote("");
     setError("");
-    setFold(1);
-    setHarmonic(false);
+    const saved = loadWorkflow<ShockSnapshot>(shockKey(session.id));
+    if (saved) {
+      setExtracted(saved.extracted);
+      setKept(saved.kept);
+      setFit(saved.fit);
+      setNote(saved.note);
+      setFold(saved.fold);
+      setHarmonic(saved.harmonic);
+      setBust(saved.bust);
+    } else {
+      setExtracted(null);
+      setKept(null);
+      setFit(null);
+      setNote("");
+      setFold(1);
+      setHarmonic(false);
+    }
+    loadedFor.current = session.id;
   }, [session.id]);
+
+  // Persist the working state for the active session. Guarded so a state carried
+  // over from the previous session isn't written under the new session's key
+  // before the restore/reset above has applied.
+  useEffect(() => {
+    if (loadedFor.current !== session.id) return;
+    saveWorkflow(shockKey(session.id), {
+      extracted,
+      kept,
+      fold,
+      harmonic,
+      fit,
+      note,
+      bust,
+    } satisfies ShockSnapshot);
+  }, [session.id, extracted, kept, fold, harmonic, fit, note, bust]);
 
   // Restore a shock session carried in an opened .efaproj.
   const restoredRef = useRef<ShockSession | null>(null);

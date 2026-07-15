@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import { clsx } from "clsx";
 import { api, apiUrl } from "@/lib/api";
@@ -18,7 +18,10 @@ import { ImageCanvas } from "@/components/analysis/ImageCanvas";
 import { MeasureControls, type MeasureMode } from "@/components/analysis/MeasureControls";
 import { LightCurveControls } from "@/components/analysis/LightCurveControls";
 import { HeightTimeControls, type HtPick } from "@/components/analysis/HeightTimeControls";
+import { HeightTimeResultView } from "@/components/analysis/HeightTimeResultView";
 import { MiniChart } from "@/components/analysis/MiniChart";
+import { formatClockUtc, parseUtcSeconds } from "@/lib/formatting";
+import { loadWorkflow, saveWorkflow } from "@/lib/workflowStorage";
 import { JMapControls } from "@/components/analysis/JMapControls";
 import { VectorFieldControls, type VectorOptions } from "@/components/analysis/VectorFieldControls";
 import {
@@ -88,6 +91,41 @@ const DEFAULT_PLOT_PARAMS: PlotParams = {
   grid_frame: "",
 };
 
+// Per-tab persistence: everything needed to reopen the current workflow after
+// a refresh or back/forward navigation. Transient movie-job polling state
+// (job id / building flag) is intentionally left out.
+const WORKFLOW_KEY = "data-analysis-workflow";
+
+interface WorkflowSnapshot {
+  session: AnalysisSession | null;
+  frame: number;
+  params: PlotParams;
+  tool: Tool;
+  diffType: "running" | "base";
+  baseIndex: number;
+  contourLevel: number;
+  arMethod: "hek" | "threshold";
+  thresholdPct: number;
+  movieFmt: "mp4" | "gif";
+  movieFps: number;
+  movieMode: "plot" | "difference";
+  movieResultUrl: string | null;
+  inspectMode: "plot" | "running";
+  picks: { px: number; py: number }[];
+  measureMode: MeasureMode;
+  lcResult: LightcurveResult | null;
+  htPicks: HtPick[];
+  htAutoAdvance: boolean;
+  htResult: HeightTimeResult | null;
+  jmapUrl: string | null;
+  vecPrepared: boolean;
+  vecOptions: VectorOptions;
+  sessionHistory: SessionRef[];
+  compareOtherId: string;
+  compareOtherFrame: number;
+  compareBlink: boolean;
+}
+
 /** Debounce a value so control drags don't spam the render endpoint. */
 function useDebounced<T>(value: T, ms: number): T {
   const [v, setV] = useState(value);
@@ -142,16 +180,117 @@ export function DataAnalysisClient() {
     revalidateOnFocus: false,
   });
 
-  // Restore a session from ?session=<id> so a refresh / shared link reopens it.
+  // Restore prior work on mount. A shared ?session=<id> link wins (open that
+  // session fresh); otherwise rehydrate the full workflow saved for this tab so
+  // a refresh / back-forward navigation reopens the same view.
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get("session");
-    if (!id) return;
-    api
-      .analysisSession(id)
-      .then((s) => onSession(s))
-      .catch(() => {});
+    if (id) {
+      api
+        .analysisSession(id)
+        .then((s) => onSession(s))
+        .catch(() => {});
+      return;
+    }
+    const snap = loadWorkflow<WorkflowSnapshot>(WORKFLOW_KEY);
+    if (!snap) return;
+    setSession(snap.session);
+    setFrame(snap.frame);
+    setParams(snap.params);
+    setTool(snap.tool);
+    setDiffType(snap.diffType);
+    setBaseIndex(snap.baseIndex);
+    setContourLevel(snap.contourLevel);
+    setArMethod(snap.arMethod);
+    setThresholdPct(snap.thresholdPct);
+    setMovieFmt(snap.movieFmt);
+    setMovieFps(snap.movieFps);
+    setMovieMode(snap.movieMode);
+    setMovieResultUrl(snap.movieResultUrl);
+    setInspectMode(snap.inspectMode);
+    setPicks(snap.picks);
+    setMeasureMode(snap.measureMode);
+    setLcResult(snap.lcResult);
+    setHtPicks(snap.htPicks);
+    setHtAutoAdvance(snap.htAutoAdvance);
+    setHtResult(snap.htResult);
+    setJmapUrl(snap.jmapUrl);
+    setVecPrepared(snap.vecPrepared);
+    setVecOptions(snap.vecOptions);
+    setSessionHistory(snap.sessionHistory);
+    setCompareOtherId(snap.compareOtherId);
+    setCompareOtherFrame(snap.compareOtherFrame);
+    setCompareBlink(snap.compareBlink);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Persist the workflow whenever it changes. The first pass (initial defaults,
+  // before the restore effect's setState commits) is skipped so we never clobber
+  // a saved snapshot with defaults.
+  const skipFirstSave = useRef(true);
+  useEffect(() => {
+    if (skipFirstSave.current) {
+      skipFirstSave.current = false;
+      return;
+    }
+    saveWorkflow(WORKFLOW_KEY, {
+      session,
+      frame,
+      params,
+      tool,
+      diffType,
+      baseIndex,
+      contourLevel,
+      arMethod,
+      thresholdPct,
+      movieFmt,
+      movieFps,
+      movieMode,
+      movieResultUrl,
+      inspectMode,
+      picks,
+      measureMode,
+      lcResult,
+      htPicks,
+      htAutoAdvance,
+      htResult,
+      jmapUrl,
+      vecPrepared,
+      vecOptions,
+      sessionHistory,
+      compareOtherId,
+      compareOtherFrame,
+      compareBlink,
+    } satisfies WorkflowSnapshot);
+  }, [
+    session,
+    frame,
+    params,
+    tool,
+    diffType,
+    baseIndex,
+    contourLevel,
+    arMethod,
+    thresholdPct,
+    movieFmt,
+    movieFps,
+    movieMode,
+    movieResultUrl,
+    inspectMode,
+    picks,
+    measureMode,
+    lcResult,
+    htPicks,
+    htAutoAdvance,
+    htResult,
+    jmapUrl,
+    vecPrepared,
+    vecOptions,
+    sessionHistory,
+    compareOtherId,
+    compareOtherFrame,
+    compareBlink,
+  ]);
 
   function onSession(s: AnalysisSession) {
     setSession(s);
@@ -602,24 +741,7 @@ export function DataAnalysisClient() {
               }))}
               hint="Click the CME leading edge; the frame auto-advances after each pick."
             />
-            {htResult && htResult.points.filter((p) => p.time).length >= 2 && (
-              <div className="rounded-lg border border-surface-border bg-surface-card p-4">
-                <h2 className="mb-2 text-xs uppercase tracking-wider text-slate-500">
-                  Height–time profile
-                  {htResult.speed_km_s != null && ` · v = ${htResult.speed_km_s.toFixed(0)} km/s`}
-                </h2>
-                <MiniChart
-                  x={htResult.points
-                    .filter((p) => p.time)
-                    .map((p) => new Date(p.time + "Z").getTime() / 1000)}
-                  y={htResult.points.filter((p) => p.time).map((p) => p.r_rsun)}
-                  height={200}
-                  xLabel="time (UTC)"
-                  yLabel="height (R☉)"
-                  formatX={(v) => new Date(v * 1000).toISOString().slice(11, 16)}
-                />
-              </div>
-            )}
+            <HeightTimeResultView result={htResult} />
           </div>
         ) : (tool === "measure" || tool === "lightcurve") && session ? (
           <div className="space-y-4">
@@ -665,17 +787,17 @@ export function DataAnalysisClient() {
                   ROI light curve · {lcResult.statistic} [{lcResult.unit}]
                 </h2>
                 <MiniChart
-                  x={lcResult.times.map((t) => (t ? new Date(t + "Z").getTime() / 1000 : NaN))}
+                  x={lcResult.times.map((t) => parseUtcSeconds(t))}
                   y={lcResult.values}
                   height={220}
                   xLabel="time (UTC)"
                   yLabel={lcResult.unit}
-                  formatX={(v) => new Date(v * 1000).toISOString().slice(11, 16)}
+                  formatX={formatClockUtc}
                   markers={
                     lcResult.peak_time
                       ? [
                           {
-                            x: new Date(lcResult.peak_time + "Z").getTime() / 1000,
+                            x: parseUtcSeconds(lcResult.peak_time),
                             color: "#22d3ee",
                             label: "EUV peak",
                           },
@@ -686,8 +808,8 @@ export function DataAnalysisClient() {
                     lcResult.radio_start && lcResult.radio_end
                       ? [
                           {
-                            x0: new Date(lcResult.radio_start + "Z").getTime() / 1000,
-                            x1: new Date(lcResult.radio_end + "Z").getTime() / 1000,
+                            x0: parseUtcSeconds(lcResult.radio_start),
+                            x1: parseUtcSeconds(lcResult.radio_end),
                             color: "#f59e0b",
                             label: "radio burst",
                           },
