@@ -60,6 +60,11 @@ services:
     env_file: .env
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8000
+      # Docker Desktop on Windows/WSL2 does not forward inotify file-change
+      # events into bind mounts, so next dev's watcher never sees host edits and
+      # HMR silently no-ops. Force webpack to poll the filesystem so source
+      # changes on the Windows host recompile without a container restart.
+      WATCHPACK_POLLING: "true"
     ports:
       - "3000:3000"
     volumes:

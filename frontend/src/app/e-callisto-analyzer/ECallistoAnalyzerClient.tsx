@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import { api } from "@/lib/api";
 import { clsx } from "clsx";
+import { clearWorkflow, loadWorkflow, saveWorkflow } from "@/lib/workflowStorage";
 import { FitsImport } from "@/components/analyzer/FitsImport";
 import { SourcesPanel } from "@/components/analyzer/SourcesPanel";
 import { AnalyzerControls } from "@/components/analyzer/AnalyzerControls";
@@ -26,6 +27,19 @@ const DEFAULT_PARAMS: RenderParams = {
   station: "",
 };
 
+// Per-tab persistence so a refresh or back/forward navigation reopens the same
+// loaded sources and view. Analyzer sessions are referenced by id and survive on
+// the backend across a client reload, so the render URLs resolve again.
+const WORKFLOW_KEY = "e-callisto-analyzer-workflow";
+
+interface WorkflowSnapshot {
+  sessions: AnalyzerSession[];
+  activeId: string | null;
+  params: RenderParams;
+  mode: Mode;
+  restoredShock: ShockSession | null;
+}
+
 /** Debounce a value so slider drags don't spam the render endpoint. */
 function useDebounced<T>(value: T, ms: number): T {
   const [v, setV] = useState(value);
@@ -44,6 +58,36 @@ export function ECallistoAnalyzerClient() {
   const [restoredShock, setRestoredShock] = useState<ShockSession | null>(null);
 
   const session = sessions.find((s) => s.id === activeId) ?? null;
+
+  // Rehydrate the workflow saved for this tab so a refresh / back-forward
+  // navigation reopens the same loaded sources and view.
+  useEffect(() => {
+    const snap = loadWorkflow<WorkflowSnapshot>(WORKFLOW_KEY);
+    if (!snap) return;
+    setSessions(snap.sessions);
+    setActiveId(snap.activeId);
+    setParams(snap.params);
+    setMode(snap.mode);
+    setRestoredShock(snap.restoredShock);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist on change, skipping the initial default commit so the restore
+  // effect's setState is never overwritten with defaults.
+  const skipFirstSave = useRef(true);
+  useEffect(() => {
+    if (skipFirstSave.current) {
+      skipFirstSave.current = false;
+      return;
+    }
+    saveWorkflow(WORKFLOW_KEY, {
+      sessions,
+      activeId,
+      params,
+      mode,
+      restoredShock,
+    } satisfies WorkflowSnapshot);
+  }, [sessions, activeId, params, mode, restoredShock]);
 
   const { data: options } = useSWR("analyzer-options", api.analyzerOptions, {
     revalidateOnFocus: false,
@@ -97,6 +141,9 @@ export function ECallistoAnalyzerClient() {
     setSessions([]);
     setActiveId(null);
     setParams(DEFAULT_PARAMS);
+    setMode("spectrum");
+    setRestoredShock(null);
+    clearWorkflow(WORKFLOW_KEY);
   }
 
   function patch(p: Partial<RenderParams>) {
