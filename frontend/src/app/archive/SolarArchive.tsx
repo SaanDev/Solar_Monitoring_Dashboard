@@ -111,19 +111,37 @@ function utcToday(): string {
 
 export function SolarArchive() {
   const today = utcToday();
-  // Solar images are near-real-time, so this tab opens on *today* — i.e. the
-  // latest frames — with no toggle. Pick an earlier date to browse archived data.
+  // Solar images are near-real-time, so this tab opens on *today* in "latest"
+  // mode — the newest frames. Changing the Time (UTC) control (on any day,
+  // including today) drops into by-time mode to browse an earlier frame.
   const [date, setDate] = useState(today);
   const [time, setTime] = useState("12:00");
+  const [latest, setLatest] = useState(true);
   const [events, setEvents] = useState(false);
   const [active, setActive] = useState<SolarArchiveImage | null>(null);
 
-  // Today → newest near-real-time browse frames; an earlier day → archived
-  // (Helioviewer) frames at the chosen time. The selected date decides the mode.
-  const isLatest = date >= today;
+  // "Latest" (newest near-real-time browse frames) only makes sense for the
+  // current UTC day; any earlier day is always resolved by time. Picking a time
+  // exits latest mode even on today, so the present day can be scrubbed too.
+  const isToday = date >= today;
+  const isLatest = isToday && latest;
   // Browse frames can't carry the HEK active-region overlay, so it only applies
   // to archived (by-time) renders.
   const reqEvents = isLatest ? false : events;
+
+  const selectDate = (value: string) => {
+    const next = value || today;
+    setDate(next);
+    setLatest(next >= today); // a past date is always by-time; today defaults to latest
+  };
+  const pickTime = (value: string) => {
+    setTime(value || "12:00");
+    setLatest(false); // scrub to a specific frame, even on the present day
+  };
+  const jumpToLatest = () => {
+    setDate(today);
+    setLatest(true);
+  };
 
   const { data, isLoading, error } = useSWR(
     ["solar-archive", date, time, reqEvents, isLatest],
@@ -148,7 +166,16 @@ export function SolarArchive() {
               type="date"
               value={date}
               max={today}
-              onChange={(e) => setDate(e.target.value || today)}
+              onChange={(e) => selectDate(e.target.value)}
+              className="rounded border border-surface-border bg-surface-muted px-2 py-1 text-xs text-slate-300 outline-none focus:border-accent-blue"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-xs text-slate-500">
+            Time (UTC)
+            <input
+              type="time"
+              value={isLatest ? data?.time ?? time : time}
+              onChange={(e) => pickTime(e.target.value)}
               className="rounded border border-surface-border bg-surface-muted px-2 py-1 text-xs text-slate-300 outline-none focus:border-accent-blue"
             />
           </label>
@@ -159,21 +186,12 @@ export function SolarArchive() {
           ) : (
             <>
               <button
-                onClick={() => setDate(today)}
+                onClick={jumpToLatest}
                 className="rounded bg-surface-muted px-2 py-1 text-xs text-accent-blue transition-colors hover:bg-accent-blue/20"
                 title="Jump back to the latest images"
               >
                 Latest
               </button>
-              <label className="flex items-center gap-2 text-xs text-slate-500">
-                Time (UTC)
-                <input
-                  type="time"
-                  value={time}
-                  onChange={(e) => setTime(e.target.value || "12:00")}
-                  className="rounded border border-surface-border bg-surface-muted px-2 py-1 text-xs text-slate-300 outline-none focus:border-accent-blue"
-                />
-              </label>
               <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-300">
                 <input
                   type="checkbox"
