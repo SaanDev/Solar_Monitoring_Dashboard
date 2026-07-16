@@ -17,6 +17,10 @@ dependencies = [
     "alembic>=1.13",
     "redis>=5.0",
     "httpx>=0.27",
+    # Anthropic SDK — powers the natural-language "State of the Sun" briefing
+    # (app/services/briefing_service.py). A missing ANTHROPIC_API_KEY disables the
+    # feature gracefully, so the dependency is safe to ship in the base image.
+    "anthropic>=0.69",
     "astropy>=6.0",
     "numpy>=1.26",
     "scipy>=1.13",

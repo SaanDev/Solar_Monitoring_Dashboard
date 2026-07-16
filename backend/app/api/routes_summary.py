@@ -4,7 +4,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.schemas.briefing_schema import BriefingResponse
 from app.schemas.summary_schema import SummaryLatest
+from app.services.briefing_service import get_briefing
 from app.services.goes_xrs_service import get_goes_xrs_latest
 from app.services.goes_proton_service import get_goes_proton_latest
 from app.services.kp_service import get_kp_latest
@@ -76,3 +78,10 @@ async def get_summary_latest(db: AsyncSession = Depends(get_db)) -> SummaryLates
         imf_bt=imf_bt,
         active_alerts=active_alerts,
     )
+
+
+@router.get("/briefing", response_model=BriefingResponse)
+async def get_summary_briefing() -> BriefingResponse:
+    """Plain-English "State of the Sun" operator briefing (Claude-generated,
+    change-gated + cached; ``available=false`` when no API key is configured)."""
+    return await get_briefing()

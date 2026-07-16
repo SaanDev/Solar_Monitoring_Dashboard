@@ -87,6 +87,20 @@ class Settings(BaseSettings):
     notify_max_per_pass: int = 8
     notify_lookback_hours: int = 48
 
+    # ── Natural-language "State of the Sun" briefing (Anthropic) ──────────────
+    # A scheduled, change-gated pass turns the current conditions/alerts/forecast/
+    # storylines into a plain-English operator brief via Claude, cached in Redis
+    # and served to all viewers. ``anthropic_api_key`` is the one secret (kept in
+    # .env like the Telegram token); an empty key disables the feature — the
+    # Overview card simply hides, exactly like a missing ML model or bot token.
+    anthropic_api_key: str = ""
+    briefing_enabled: bool = True
+    briefing_model: str = "claude-opus-4-8"
+    # How often the scheduler re-evaluates conditions; the LLM is only actually
+    # called when the (bucketed) conditions changed since the last brief.
+    briefing_interval_seconds: int = 1800
+    briefing_max_tokens: int = 500
+
     # ── Native ML inference (burst classifier) ────────────────────────────────
     # Path to the ResNet-18 checkpoint. Relative paths are resolved from the
     # backend package root. The checkpoint ships in the repo via Git LFS at
