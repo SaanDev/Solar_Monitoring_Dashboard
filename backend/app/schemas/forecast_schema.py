@@ -39,10 +39,22 @@ class CmeItem(BaseModel):
     cme_type: str | None = None       # DONKI class: S/C/O/R/ER
     time21_5: datetime | None = None
     is_earth_directed: bool = False
-    predicted_arrival_time: datetime | None = None
+    predicted_arrival_time: datetime | None = None   # DONKI WSA-ENLIL (when modelled)
     predicted_kp: float | None = None
     note: str = ""
     catalog_link: str | None = None
+
+    # ── Independent SWDash Drag-Based Model forecast (app.processing.cme_transit) ──
+    # Computed from this CME's own cone speed + the live ambient solar-wind speed,
+    # so an arrival estimate exists even when DONKI has no ENLIL run.
+    geoeffective: bool = False              # cone contains the Sun-Earth line
+    arrival_model: str = "DBM"
+    predicted_arrival_dbm: datetime | None = None
+    arrival_earliest: datetime | None = None
+    arrival_latest: datetime | None = None
+    impact_speed_km_s: float | None = None  # DBM speed at 1 AU
+    transit_hours: float | None = None      # Sun(21.5 Rs)->Earth transit time
+    ambient_wind_km_s: float | None = None  # w fed into the model
 
 
 class CmeListResponse(BaseModel):

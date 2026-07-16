@@ -15,15 +15,34 @@ interface Props {
   limit?: number;
 }
 
+/** Effective predicted arrival: DONKI's WSA-ENLIL time when NASA modelled it,
+ * else the always-available SWDash Drag-Based-Model estimate. */
+export function effectiveArrival(c: CmeItem): { iso: string; model: string } | null {
+  if (c.predicted_arrival_time) return { iso: c.predicted_arrival_time, model: "ENLIL" };
+  if (c.predicted_arrival_dbm) return { iso: c.predicted_arrival_dbm, model: "DBM" };
+  return null;
+}
+
 function Arrival({ cme }: { cme: CmeItem }) {
-  if (!cme.predicted_arrival_time) {
-    return <span className="text-slate-600">—</span>;
-  }
-  const arrived = new Date(cme.predicted_arrival_time).getTime() < Date.now();
+  const a = effectiveArrival(cme);
+  if (!a) return <span className="text-slate-600">—</span>;
+  const arrived = new Date(a.iso).getTime() < Date.now();
+  const window =
+    a.model === "DBM" && cme.arrival_earliest && cme.arrival_latest
+      ? `DBM window ${cme.arrival_earliest.slice(5, 16).replace("T", " ")}–${cme.arrival_latest.slice(11, 16)} UTC`
+      : null;
+  const impact = cme.impact_speed_km_s != null ? `impact ${cme.impact_speed_km_s.toFixed(0)} km/s` : null;
+  const title = [window, impact].filter(Boolean).join(" · ") || undefined;
   return (
-    <span className={clsx("font-mono", arrived ? "text-slate-500" : "text-accent-orange")}>
-      {cme.predicted_arrival_time.slice(5, 16).replace("T", " ")} UTC{" "}
-      <span className="text-[10px]">({relativeTime(cme.predicted_arrival_time)})</span>
+    <span
+      className={clsx("font-mono", arrived ? "text-slate-500" : "text-accent-orange")}
+      title={title}
+    >
+      {a.iso.slice(5, 16).replace("T", " ")} UTC{" "}
+      <span className="text-[10px]">({relativeTime(a.iso)})</span>
+      <span className="ml-1 rounded border border-surface-border px-1 text-[9px] uppercase tracking-wider text-slate-500">
+        {a.model}
+      </span>
     </span>
   );
 }
@@ -39,18 +58,17 @@ export function CmeList({ days = 7, compact = false, limit }: Props) {
 
   const cmes = (data?.cmes ?? []).slice(0, limit);
   // Soonest predicted arrival first (list order is newest *launch* first).
+  // "Inbound" = Earth-directed (ENLIL) or geoeffective (cone) with an arrival
+  // still in the future, using whichever arrival estimate is available.
   const inbound = cmes
+    .map((c) => ({ c, a: effectiveArrival(c) }))
     .filter(
-      (c) =>
-        c.is_earth_directed &&
-        c.predicted_arrival_time &&
-        new Date(c.predicted_arrival_time).getTime() > Date.now()
+      ({ c, a }) =>
+        (c.is_earth_directed || c.geoeffective) && a && new Date(a.iso).getTime() > Date.now()
     )
-    .sort(
-      (a, b) =>
-        new Date(a.predicted_arrival_time!).getTime() -
-        new Date(b.predicted_arrival_time!).getTime()
-    );
+    .sort((x, y) => new Date(x.a!.iso).getTime() - new Date(y.a!.iso).getTime())
+    .map(({ c }) => c);
+  const nextArrival = inbound.length ? effectiveArrival(inbound[0])!.iso : null;
 
   return (
     <div className="flex h-full flex-col rounded-lg border border-surface-border bg-surface-card p-4">
@@ -58,19 +76,15 @@ export function CmeList({ days = 7, compact = false, limit }: Props) {
         <h3 className="text-xs uppercase tracking-wider text-slate-500">
           Coronal Mass Ejections — last {days} days
         </h3>
-        <span className="text-[10px] text-slate-600">NASA DONKI · WSA-ENLIL arrivals</span>
+        <span className="text-[10px] text-slate-600">NASA DONKI · ENLIL + DBM arrivals</span>
       </div>
 
-      {inbound.length > 0 && (
+      {inbound.length > 0 && nextArrival && (
         <div className="mb-2 flex items-center gap-2 rounded border border-accent-orange/40 bg-accent-orange/10 px-2 py-1.5 text-xs text-accent-orange">
           <Globe className="h-3.5 w-3.5 shrink-0" />
           {inbound.length === 1
-            ? `1 Earth-directed CME inbound — predicted arrival ${relativeTime(
-                inbound[0].predicted_arrival_time!
-              )}`
-            : `${inbound.length} Earth-directed CMEs inbound — next arrival ${relativeTime(
-                inbound[0].predicted_arrival_time!
-              )}`}
+            ? `1 Earth-directed CME inbound — predicted arrival ${relativeTime(nextArrival)}`
+            : `${inbound.length} Earth-directed CMEs inbound — next arrival ${relativeTime(nextArrival)}`}
         </div>
       )}
 
@@ -100,7 +114,7 @@ export function CmeList({ days = 7, compact = false, limit }: Props) {
                   key={c.activity_id}
                   className={clsx(
                     "border-b border-surface-border/50",
-                    c.is_earth_directed && "bg-accent-orange/5"
+                    (c.is_earth_directed || c.geoeffective) && "bg-accent-orange/5"
                   )}
                 >
                   <td className="py-1.5 pr-3 font-mono text-slate-300">
@@ -135,6 +149,10 @@ export function CmeList({ days = 7, compact = false, limit }: Props) {
                   <td className="py-1.5 pr-3">
                     {c.is_earth_directed ? (
                       <span className="text-accent-orange">yes</span>
+                    ) : c.geoeffective ? (
+                      <span className="text-accent-orange/70" title="Cone contains Earth (no ENLIL run)">
+                        cone
+                      </span>
                     ) : (
                       <span className="text-slate-600">no</span>
                     )}

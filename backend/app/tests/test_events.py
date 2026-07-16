@@ -17,7 +17,12 @@ from app.processing.event_detection import (
 )
 from app.repositories.event_repo import query_range as query_events, upsert_events
 from app.repositories.timeseries_repo import upsert_points
-from app.services.event_service import detect_and_store, get_events, get_latest_alerts
+from app.services.event_service import (
+    detect_and_store,
+    get_event_chains,
+    get_events,
+    get_latest_alerts,
+)
 
 _T0 = datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)
 _MIN = timedelta(minutes=1)
@@ -314,6 +319,57 @@ async def test_alert_feed_is_full_history_newest_first(db_session):
     assert flares[0].timestamp >= flares[1].timestamp    # recent one at the top
 
 
+# ── Event chains (causal storylines) ─────────────────────────────────────────
+
+
+async def _seed_flare_cme_storm(db_session):
+    """A flare -> Earth-directed CME -> geomagnetic storm chain, timed so the CME
+    'arrival' (its end_time) lands just before the storm onset. Returns the ids."""
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    flare_start = now - timedelta(hours=50)
+    cme_start = now - timedelta(hours=49, minutes=30)
+    arrival = now - timedelta(hours=2)          # CME event end_time = predicted arrival
+    storm_start = now - timedelta(hours=1, minutes=30)  # within 15 h of arrival
+    await upsert_events(
+        db_session,
+        [
+            {"type": "xray_flare", "start_time": flare_start, "end_time": flare_start + 30 * _MIN,
+             "peak_time": flare_start + 10 * _MIN, "peak_value": 5e-5, "severity": "M5.0",
+             "description": "M5.0 flare", "source_url": None},
+            {"type": "cme", "start_time": cme_start, "end_time": arrival, "peak_time": arrival,
+             "peak_value": 1120.0, "severity": "G2",
+             "description": "Earth-directed CME at 1120 km/s", "source_url": None},
+            {"type": "geomagnetic_storm_kp", "start_time": storm_start, "end_time": None,
+             "peak_time": storm_start, "peak_value": 6.0, "severity": "G2",
+             "description": "Geomagnetic storm G2", "source_url": None},
+        ],
+    )
+    return now
+
+
+async def test_get_event_chains_links_flare_cme_storm(db_session):
+    now = await _seed_flare_cme_storm(db_session)
+    # A short recent window still returns the chain: the storm intersects it and the
+    # CME/flare are pulled in from the widened (multi-day) read.
+    chains = await get_event_chains(db_session, now - timedelta(hours=3), now)
+    assert len(chains) == 1
+    c = chains[0]
+    assert [e.type for e in c.events] == ["xray_flare", "cme", "geomagnetic_storm_kp"]
+    assert c.chain_id == c.events[0].id
+    assert "CME 1120 km/s" in c.summary
+    assert c.peak_severity == "warning"  # M-flare / G2 -> warning is the peak
+
+
+async def test_get_events_stamps_chain_id(db_session):
+    now = await _seed_flare_cme_storm(db_session)
+    events = await get_events(db_session, now - timedelta(hours=51), now)
+    flare = next(e for e in events if e.type == "xray_flare")
+    storm = next(e for e in events if e.type == "geomagnetic_storm_kp")
+    # Every member carries the chain's id (the flare is the chain root).
+    assert flare.chain_id == flare.id
+    assert storm.chain_id == flare.id
+
+
 # ── API endpoints ────────────────────────────────────────────────────────────
 
 
@@ -321,6 +377,31 @@ async def test_alert_feed_is_full_history_newest_first(db_session):
 async def client():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
+
+
+def _isoz(dt: datetime) -> str:
+    """UTC ISO with a Z suffix (avoids the '+' -> space query-decoding quirk)."""
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+async def test_event_chains_endpoint(client, db_session):
+    now = await _seed_flare_cme_storm(db_session)
+    r = await client.get(
+        f"/api/event-chains?start={_isoz(now - timedelta(hours=3))}&end={_isoz(now)}"
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 1
+    assert [e["type"] for e in body[0]["events"]] == [
+        "xray_flare", "cme", "geomagnetic_storm_kp"
+    ]
+    assert body[0]["roles"][body[0]["events"][1]["id"]] == "cme"
+
+
+async def test_event_chains_endpoint_empty(client):
+    r = await client.get("/api/event-chains")
+    assert r.status_code == 200
+    assert r.json() == []
 
 
 async def test_events_endpoint_empty(client):

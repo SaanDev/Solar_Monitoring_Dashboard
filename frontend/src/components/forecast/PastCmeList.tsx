@@ -8,6 +8,7 @@ import { History } from "lucide-react";
 import { api } from "@/lib/api";
 import { relativeTime, scaleBadgeClass } from "@/lib/scales";
 import type { CmeItem } from "@/lib/types";
+import { effectiveArrival } from "./CmeList";
 
 /** YYYY-MM-DD for a Date, in the browser's local zone (matches <input type=date>). */
 function isoDate(d: Date): string {
@@ -27,18 +28,19 @@ const PRESETS = [
   { label: "30 days", days: 30 },
 ];
 
-/** Arrival cell for the history view: emphasises whether the CME has arrived. */
+/** Arrival cell for the history view: emphasises whether the CME has arrived,
+ * using DONKI's ENLIL time when modelled, else the SWDash DBM estimate. */
 function PastArrival({ cme }: { cme: CmeItem }) {
-  if (!cme.is_earth_directed || !cme.predicted_arrival_time) {
-    return <span className="text-slate-600">—</span>;
-  }
-  const arrived = new Date(cme.predicted_arrival_time).getTime() < Date.now();
-  const stamp = cme.predicted_arrival_time.slice(5, 16).replace("T", " ");
+  const a = effectiveArrival(cme);
+  if (!a) return <span className="text-slate-600">—</span>;
+  const arrived = new Date(a.iso).getTime() < Date.now();
+  const stamp = a.iso.slice(5, 16).replace("T", " ");
   return (
     <span className={clsx("font-mono", arrived ? "text-slate-400" : "text-accent-orange")}>
       {stamp} UTC{" "}
-      <span className="text-[10px]">
-        {arrived ? "· arrived" : `(${relativeTime(cme.predicted_arrival_time)})`}
+      <span className="text-[10px]">{arrived ? "· arrived" : `(${relativeTime(a.iso)})`}</span>
+      <span className="ml-1 rounded border border-surface-border px-1 text-[9px] uppercase tracking-wider text-slate-500">
+        {a.model}
       </span>
     </span>
   );
@@ -63,7 +65,7 @@ export function PastCmeList() {
   );
 
   const cmes = data?.cmes ?? [];
-  const earthDirected = cmes.filter((c) => c.is_earth_directed).length;
+  const earthDirected = cmes.filter((c) => c.is_earth_directed || c.geoeffective).length;
   const activePreset = PRESETS.find((p) => start === daysAgo(p.days) && end === daysAgo(0));
 
   return (
@@ -155,7 +157,7 @@ export function PastCmeList() {
                   key={c.activity_id}
                   className={clsx(
                     "border-b border-surface-border/50",
-                    c.is_earth_directed && "bg-accent-orange/5"
+                    (c.is_earth_directed || c.geoeffective) && "bg-accent-orange/5"
                   )}
                 >
                   <td className="py-1.5 pr-3 font-mono text-slate-300">
@@ -188,6 +190,10 @@ export function PastCmeList() {
                   <td className="py-1.5 pr-3">
                     {c.is_earth_directed ? (
                       <span className="text-accent-orange">yes</span>
+                    ) : c.geoeffective ? (
+                      <span className="text-accent-orange/70" title="Cone contains Earth (no ENLIL run)">
+                        cone
+                      </span>
                     ) : (
                       <span className="text-slate-600">no</span>
                     )}

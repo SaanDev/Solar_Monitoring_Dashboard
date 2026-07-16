@@ -17,10 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.cache import cache_get_json, cache_set_json
 from app.collectors.collect_donki import fetch_cmes
 from app.config import settings
+from app.processing.cme_transit import arrival_window, is_geoeffective
 from app.processing.geomag_scale import kp_storm_scale
 from app.repositories.cme_repo import query_between, query_since, upsert_cmes
 from app.repositories.event_repo import delete_events_of_type_since, upsert_events
 from app.repositories.status_repo import record_error, record_success
+from app.services.solar_wind_service import recent_ambient_speed
 from app.schemas.forecast_schema import (
     CmeHistogramBin,
     CmeHistogramResponse,
@@ -38,14 +40,44 @@ SOURCE = "nasa-donki"
 _CME_TTL = 300
 
 
-def cme_to_event(r: dict) -> dict:
-    """An Earth-directed catalog record as a shared-``events``-table row.
+def enrich_cme(row: dict, w: float) -> dict:
+    """Add the SWDash Drag-Based-Model transit forecast to a CME record in place.
 
-    The event spans launch -> predicted arrival (so it reads "in progress"
-    while the CME is en route and "subsided" once the arrival time passes);
-    severity is the G level the ENLIL run's max predicted Kp maps to.
+    Works on either a DB row or a freshly-parsed DONKI record (same field names).
+    ``geoeffective`` comes from the cone geometry, falling back to DONKI's own
+    Earth-directed flag when direction/width are missing. The arrival window needs
+    a cone ``speed`` and a launch epoch — ``time21_5`` (at the 21.5 Rs DBM launch
+    height) when present, else ``start_time``.
     """
-    arrival = r.get("predicted_arrival_time")
+    geo = is_geoeffective(row.get("longitude"), row.get("latitude"), row.get("half_angle"))
+    row["geoeffective"] = bool(geo) if geo is not None else bool(row.get("is_earth_directed"))
+    row["arrival_model"] = "DBM"
+    row["ambient_wind_km_s"] = w
+    speed = row.get("speed")
+    t0 = row.get("time21_5") or row.get("start_time")
+    win = arrival_window(speed, t0, w) if (speed and t0) else None
+    if win is not None:
+        row["predicted_arrival_dbm"] = win["arrival_time"]
+        row["arrival_earliest"] = win["arrival_earliest"]
+        row["arrival_latest"] = win["arrival_latest"]
+        row["impact_speed_km_s"] = win["impact_speed_km_s"]
+        row["transit_hours"] = win["transit_hours"]
+    return row
+
+
+def cme_to_event(r: dict) -> dict:
+    """An Earth-directed / geoeffective catalog record as a shared-``events`` row.
+
+    The event spans launch -> predicted arrival — DONKI's WSA-ENLIL time when NASA
+    modelled it, otherwise the SWDash DBM estimate (``enrich_cme`` must have run) —
+    so it reads "in progress" while en route and "subsided" once arrival passes.
+    Severity is the G level of the ENLIL run's max predicted Kp, or "Earth-directed"
+    when only a DBM arrival is known. The ``end_time`` (= predicted arrival) is what
+    the event-chain builder uses to link a CME to the storm it drives.
+    """
+    enlil = r.get("predicted_arrival_time")
+    arrival = enlil or r.get("predicted_arrival_dbm")
+    model = "WSA-ENLIL" if enlil else "DBM"
     speed = r.get("speed")
     parts = ["Earth-directed CME"]
     if r.get("source_location"):
@@ -54,7 +86,7 @@ def cme_to_event(r: dict) -> dict:
         parts.append(f"at {speed:.0f} km/s")
     desc = " ".join(parts)
     if arrival is not None:
-        desc += f" - predicted arrival {arrival.strftime('%Y-%m-%d %H:%M')} UTC (WSA-ENLIL)"
+        desc += f" - predicted arrival {arrival.strftime('%Y-%m-%d %H:%M')} UTC ({model})"
     kp = r.get("predicted_kp")
     if kp is not None:
         desc += f", Kp up to {kp:.0f}"
@@ -85,18 +117,23 @@ async def collect_and_store(db: AsyncSession) -> int:
 
     try:
         await upsert_cmes(db, records)
-        earth_directed = [r for r in records if r.get("is_earth_directed")]
+        # Enrich with the DBM transit forecast so a CME reaches the alert feed even
+        # without an ENLIL run (geoeffective by cone geometry, DBM arrival for the span).
+        w = await recent_ambient_speed()
+        for r in records:
+            enrich_cme(r, w)
+        directed = [r for r in records if r.get("is_earth_directed") or r.get("geoeffective")]
         if records:
-            # Reconcile: an event whose CME is no longer Earth-directed (or was
-            # merged/deleted in DONKI) must not linger in the alert feed.
+            # Reconcile: an event whose CME is no longer Earth-directed/geoeffective
+            # (or was merged/deleted in DONKI) must not linger in the alert feed.
             await delete_events_of_type_since(
-                db, "cme", start, {r["start_time"] for r in earth_directed}
+                db, "cme", start, {r["start_time"] for r in directed}
             )
-        await upsert_events(db, [cme_to_event(r) for r in earth_directed], source=SOURCE)
+        await upsert_events(db, [cme_to_event(r) for r in directed], source=SOURCE)
         await record_success(db, SOURCE_NAME)
         logger.info(
-            "DONKI pass stored %d CMEs (%d Earth-directed)",
-            len(records), len(earth_directed),
+            "DONKI pass stored %d CMEs (%d Earth-directed/geoeffective)",
+            len(records), len(directed),
         )
         return len(records)
     except Exception as exc:  # noqa: BLE001 - mirrors ingest runner
@@ -115,7 +152,10 @@ async def get_cmes(db: AsyncSession, days: int) -> CmeListResponse:
 
     since = datetime.now(timezone.utc) - timedelta(days=days)
     rows = await query_since(db, since)
-    resp = CmeListResponse(days=days, cmes=[CmeItem.model_validate(r) for r in rows])
+    w = await recent_ambient_speed()
+    resp = CmeListResponse(
+        days=days, cmes=[CmeItem.model_validate(enrich_cme(r, w)) for r in rows]
+    )
     await cache_set_json(key, resp.model_dump(mode="json"), _CME_TTL)
     return resp
 
@@ -144,8 +184,11 @@ async def get_cmes_range(db: AsyncSession, start: date, end: date) -> CmeHistory
             logger.warning("on-demand DONKI history fetch failed: %s", exc)
 
     rows = await query_between(db, start_dt, end_dt)
+    w = await recent_ambient_speed()
     resp = CmeHistoryResponse(
-        start=start_dt, end=end_dt, cmes=[CmeItem.model_validate(r) for r in rows]
+        start=start_dt,
+        end=end_dt,
+        cmes=[CmeItem.model_validate(enrich_cme(r, w)) for r in rows],
     )
     await cache_set_json(key, resp.model_dump(mode="json"), _CME_TTL)
     return resp

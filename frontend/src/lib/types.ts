@@ -185,10 +185,19 @@ export interface CmeItem {
   cme_type: string | null; // DONKI class: S/C/O/R/ER
   time21_5: string | null;
   is_earth_directed: boolean;
-  predicted_arrival_time: string | null;
+  predicted_arrival_time: string | null; // DONKI WSA-ENLIL (when modelled)
   predicted_kp: number | null;
   note: string;
   catalog_link: string | null;
+  // Independent SWDash Drag-Based Model forecast (always available).
+  geoeffective: boolean; // cone contains the Sun–Earth line
+  arrival_model: string; // "DBM"
+  predicted_arrival_dbm: string | null;
+  arrival_earliest: string | null;
+  arrival_latest: string | null;
+  impact_speed_km_s: number | null; // DBM speed at 1 AU
+  transit_hours: number | null;
+  ambient_wind_km_s: number | null;
 }
 
 export interface CmeListResponse {
@@ -633,6 +642,22 @@ export interface SpaceWeatherEvent {
   stations: string[];
   related_event_ids: string[];
   source_url: string | null;
+  /** Id of the causal storyline this event belongs to (null if it stands alone). */
+  chain_id?: string | null;
+}
+
+/** A causal storyline: physically-associated events (flare → CME → radio burst →
+ * proton event → geomagnetic storm) assembled into one sequence. */
+export interface EventChain {
+  chain_id: string;
+  start_time: string;
+  end_time: string | null;
+  summary: string;
+  peak_severity: "info" | "watch" | "warning" | "critical";
+  event_ids: string[];
+  /** Event id → causal role (flare, cme, radio_burst, sep, geomagnetic_storm, predicted_storm). */
+  roles: Record<string, string>;
+  events: SpaceWeatherEvent[];
 }
 
 // ─── e-CALLISTO Analyzer ───────────────────────────────────────────────────────

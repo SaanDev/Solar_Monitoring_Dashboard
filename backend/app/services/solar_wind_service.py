@@ -76,3 +76,24 @@ async def get_solar_wind_series(range_key: str) -> SolarWindSeries:
         range=range_key,
         data=[p for p in full.data if p.time >= cutoff],
     )
+
+
+# Fallback ambient wind (km/s) when the live feed is empty; matches the DBM default.
+_AMBIENT_DEFAULT = 400.0
+_AMBIENT_WINDOW_HOURS = 24
+
+
+async def recent_ambient_speed() -> float:
+    """Trailing-average solar-wind speed for the DBM ambient wind ``w``.
+
+    A CME's Sun->Earth drag pulls it toward the *ambient* wind ahead of it; the
+    last ~day of measured L1 bulk speed is the best cheap proxy. Degrades to
+    ``_AMBIENT_DEFAULT`` when the feed is empty (mirrors the model's own default),
+    so an arrival estimate is always available.
+    """
+    full = await _full_series()
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=_AMBIENT_WINDOW_HOURS)
+    speeds = [p.speed for p in full.data if p.time >= cutoff and p.speed is not None]
+    if not speeds:
+        speeds = [p.speed for p in full.data if p.speed is not None]  # any history
+    return sum(speeds) / len(speeds) if speeds else _AMBIENT_DEFAULT
