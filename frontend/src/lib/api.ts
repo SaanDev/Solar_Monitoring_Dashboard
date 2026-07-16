@@ -2,6 +2,7 @@ import type {
   StatusResponse,
   SourcesStatusResponse,
   SummaryLatest,
+  BriefingResponse,
   GoesXrsResponse,
   GoesXrsLatest,
   GoesProtonResponse,
@@ -248,6 +249,8 @@ export const api = {
   status: () => get<StatusResponse>("/api/status"),
   sourcesStatus: () => get<SourcesStatusResponse>("/api/sources/status"),
   summaryLatest: () => get<SummaryLatest>("/api/summary/latest"),
+  // Claude-generated "State of the Sun" operator briefing (change-gated + cached).
+  summaryBriefing: () => get<BriefingResponse>("/api/summary/briefing"),
 
   goesXrs: (start: string, end: string) =>
     get<GoesXrsResponse>(`/api/goes/xrs?start=${start}&end=${end}`),

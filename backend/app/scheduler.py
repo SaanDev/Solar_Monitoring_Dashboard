@@ -11,11 +11,16 @@ from app.config import settings
 from app.database import AsyncSessionLocal
 from app.ingest.runner import run_all, run_ingest
 from app.ingest.sources import SOURCES, IngestSource
+from app.services.briefing_service import generate_briefing
 from app.services.cme_service import collect_and_store as collect_cmes
 from app.services.event_service import detect_and_store
 from app.services.forecast_service import detect_and_store_predicted_storms
 from app.services.notification_service import dispatch_pending
 from app.services.radio_burst_service import scan_and_detect_radio_bursts
+
+
+def _briefing_active() -> bool:
+    return bool(settings.briefing_enabled and settings.anthropic_api_key)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +58,11 @@ async def _forecast_job() -> None:
 async def _notify_job() -> None:
     async with AsyncSessionLocal() as db:
         await dispatch_pending(db)
+
+
+async def _briefing_job() -> None:
+    async with AsyncSessionLocal() as db:
+        await generate_briefing(db)
 
 
 def start_scheduler() -> None:
@@ -113,6 +123,16 @@ def start_scheduler() -> None:
         max_instances=1,
         coalesce=True,
     )
+    if _briefing_active():
+        scheduler.add_job(
+            _briefing_job,
+            trigger="interval",
+            seconds=settings.briefing_interval_seconds,
+            id="briefing",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
     scheduler.start()
     logger.info(
         "scheduler started with %d ingest jobs + event detection%s",
@@ -131,6 +151,8 @@ async def run_initial_ingest() -> None:
         await detect_and_store_predicted_storms(db)
         if settings.radio_burst_enabled:
             await scan_and_detect_radio_bursts(db)
+        if _briefing_active():
+            await generate_briefing(db)
 
 
 def shutdown_scheduler() -> None:

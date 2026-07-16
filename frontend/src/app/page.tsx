@@ -1,5 +1,6 @@
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { OverviewMetrics } from "./OverviewMetrics";
+import { OverviewBriefing } from "./OverviewBriefing";
 import { OverviewForecast } from "./OverviewForecast";
 import { OverviewXrayChart } from "./OverviewXrayChart";
 import { OverviewProtonChart } from "./OverviewProtonChart";
@@ -20,6 +21,9 @@ export default function OverviewPage() {
       <div className="space-y-4">
         {/* Row 1 — summary metric cards */}
         <OverviewMetrics />
+
+        {/* Row 1.25 — AI "State of the Sun" briefing (hidden if no API key) */}
+        <OverviewBriefing />
 
         {/* Row 1.5 — forecast strip: predicted Kp, inbound CMEs, 3-day outlook */}
         <OverviewForecast />

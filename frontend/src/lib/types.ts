@@ -34,6 +34,15 @@ export interface SummaryLatest {
   active_alerts: number;
 }
 
+/** Claude-generated "State of the Sun" operator briefing. `available` is false
+ * when no API key is configured server-side (the card hides). */
+export interface BriefingResponse {
+  text: string | null;
+  generated_at: string | null;
+  model: string | null;
+  available: boolean;
+}
+
 // ─── GOES XRS ────────────────────────────────────────────────────────────────
 
 export interface GoesXrsPoint {
