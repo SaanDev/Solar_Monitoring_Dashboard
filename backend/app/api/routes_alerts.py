@@ -7,10 +7,11 @@ from app.database import get_db
 from app.schemas.alert_schema import (
     ActivityHistogramResponse,
     AlertResponse,
+    EventChain,
     EventResponse,
 )
 from app.services.activity_service import get_activity_histogram
-from app.services.event_service import get_events, get_latest_alerts
+from app.services.event_service import get_event_chains, get_events, get_latest_alerts
 
 router = APIRouter(prefix="/api", tags=["alerts"])
 
@@ -55,6 +56,18 @@ async def events(
 ) -> list[EventResponse]:
     t_start, t_end = _parse_range(start, end)
     return await get_events(db, t_start, t_end)
+
+
+@router.get("/event-chains", response_model=list[EventChain])
+async def event_chains(
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+) -> list[EventChain]:
+    """Causal storylines (flare -> CME -> radio burst -> proton -> geomagnetic
+    storm) with at least one member event in the requested window."""
+    t_start, t_end = _parse_range(start, end)
+    return await get_event_chains(db, t_start, t_end)
 
 
 @router.get("/events/activity-histogram", response_model=ActivityHistogramResponse)

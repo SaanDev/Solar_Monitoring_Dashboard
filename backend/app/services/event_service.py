@@ -19,6 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cache import cache_get_json, cache_set_json
 from app.models.timeseries import DstIndex, GoesProton, GoesXrs, KpIndex
+from app.processing.event_chains import (
+    CHAIN_MAX_SPAN,
+    build_chains,
+    chain_id_by_event,
+)
 from app.processing.event_correlation import (
     FLARE_BURST_MAX_GAP,
     correlate_events,
@@ -32,7 +37,7 @@ from app.repositories.event_repo import (
     upsert_events,
 )
 from app.repositories.timeseries_repo import safe_query_range
-from app.schemas.alert_schema import AlertResponse, EventResponse
+from app.schemas.alert_schema import AlertResponse, EventChain, EventResponse
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +108,9 @@ def _as_utc(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def _to_event_response(e: dict, related_ids: list[str] | None = None) -> EventResponse:
+def _to_event_response(
+    e: dict, related_ids: list[str] | None = None, chain_id: str | None = None
+) -> EventResponse:
     return EventResponse(
         id=_event_id(e),
         type=e["type"],
@@ -116,6 +123,14 @@ def _to_event_response(e: dict, related_ids: list[str] | None = None) -> EventRe
         stations=[s for s in (e.get("stations") or "").split(",") if s],
         related_event_ids=related_ids or [],
         source_url=e.get("source_url"),
+        chain_id=chain_id,
+    )
+
+
+def _in_range(r: dict, start: datetime, end: datetime) -> bool:
+    """An event overlaps the requested window."""
+    return _as_utc(r["start_time"]) <= end and (
+        r["end_time"] is None or _as_utc(r["end_time"]) >= start
     )
 
 
@@ -125,19 +140,74 @@ async def get_events(db: AsyncSession, start: datetime, end: datetime) -> list[E
     if cached is not None:
         return [EventResponse.model_validate(d) for d in cached]
 
-    # Read a window widened by the correlation gap so an in-range event still
-    # links to a partner sitting just outside the requested range.
-    rows = await query_range(db, start - FLARE_BURST_MAX_GAP, end + FLARE_BURST_MAX_GAP)
+    # Read a window widened by the max chain span so an in-range event still links
+    # to a partner outside the range — a flare-burst pair just past the edge, or a
+    # storm whose driving CME launched days earlier (for the chain_id stamp).
+    rows = await query_range(db, start - CHAIN_MAX_SPAN, end + FLARE_BURST_MAX_GAP)
     related = correlate_events(rows)
-    in_range = [
-        r
-        for r in rows
-        if _as_utc(r["start_time"]) <= end
-        and (r["end_time"] is None or _as_utc(r["end_time"]) >= start)
+    chain_of = chain_id_by_event(build_chains(rows))
+    in_range = [r for r in rows if _in_range(r, start, end)]
+    events = [
+        _to_event_response(r, _related_ids(r, related), chain_of.get(_event_id(r)))
+        for r in in_range
     ]
-    events = [_to_event_response(r, _related_ids(r, related)) for r in in_range]
     await cache_set_json(key, [e.model_dump(mode="json") for e in events], _EVENTS_TTL)
     return events
+
+
+# ── Event chains (causal storylines, derived on read) ────────────────────────
+
+_LEVEL_RANK = {"info": 0, "watch": 1, "warning": 2, "critical": 3}
+
+
+def _chain_peak_severity(members: list[dict]) -> str:
+    """Highest alert level among a chain's members (drives the UI accent)."""
+    best = "info"
+    for m in members:
+        lvl = _alert_level(m["type"], m.get("severity"))
+        if _LEVEL_RANK.get(lvl, 0) > _LEVEL_RANK[best]:
+            best = lvl
+    return best
+
+
+async def get_event_chains(
+    db: AsyncSession, start: datetime, end: datetime
+) -> list[EventChain]:
+    """Causal storylines with at least one member in ``[start, end]``, newest first.
+
+    Reads a window widened by the max chain span so a storm still links back to the
+    CME (and its flare) that drove it days earlier; membership is re-derived on read.
+    """
+    key = f"event-chains:{start.isoformat()}:{end.isoformat()}"
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return [EventChain.model_validate(d) for d in cached]
+
+    rows = await query_range(db, start - CHAIN_MAX_SPAN, end + FLARE_BURST_MAX_GAP)
+    related = correlate_events(rows)
+    chains = build_chains(rows)
+
+    result: list[EventChain] = []
+    for c in chains:
+        if not any(_in_range(m, start, end) for m in c["members"]):
+            continue
+        result.append(
+            EventChain(
+                chain_id=c["chain_id"],
+                start_time=c["start_time"],
+                end_time=c["end_time"],
+                summary=c["summary"],
+                peak_severity=_chain_peak_severity(c["members"]),
+                event_ids=c["event_ids"],
+                roles=c["roles"],
+                events=[
+                    _to_event_response(m, _related_ids(m, related), c["chain_id"])
+                    for m in c["members"]
+                ],
+            )
+        )
+    await cache_set_json(key, [r.model_dump(mode="json") for r in result], _EVENTS_TTL)
+    return result
 
 
 # ── Alerts (a view over current / recently-ended events) ─────────────────────

@@ -2,12 +2,14 @@
 
 import { useMemo, useState } from "react";
 import useSWR from "swr";
-import { ExternalLink } from "lucide-react";
+import { clsx } from "clsx";
+import { ExternalLink, Workflow } from "lucide-react";
 
 import { api, apiUrl } from "@/lib/api";
 import { alertLabel } from "@/lib/alerts";
 import { formatUtcShort } from "@/lib/formatting";
-import type { SpaceWeatherEvent } from "@/lib/types";
+import type { EventChain, SpaceWeatherEvent } from "@/lib/types";
+import { ROLE_LABEL } from "@/components/timeline/StorylineList";
 import { GoesXrsChart } from "@/components/charts/GoesXrsChart";
 import { ProtonFluxChart } from "@/components/charts/ProtonFluxChart";
 import { KpChart } from "@/components/charts/KpChart";
@@ -146,7 +148,55 @@ function stationsFromDescription(desc: string): string[] {
  * spectrogram, geomagnetic indices, and solar imagery around its time.
  * Radio-burst events restrict the spectrogram to their observing stations.
  */
-export function EventInspector({ event }: { event: SpaceWeatherEvent }) {
+/** The causal storyline the selected event belongs to: its ordered sequence as
+ * clickable role pills, with the current event marked. */
+function StorylineStrip({
+  chain,
+  currentId,
+  onSelect,
+}: {
+  chain: EventChain;
+  currentId: string;
+  onSelect?: (e: SpaceWeatherEvent) => void;
+}) {
+  return (
+    <div className="rounded-lg border border-accent-blue/40 bg-accent-blue/5 p-3">
+      <div className="mb-2 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-accent-blue">
+        <Workflow className="h-3.5 w-3.5" /> Storyline
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {chain.events.map((e, i) => (
+          <div key={e.id} className="flex items-center gap-1.5">
+            {i > 0 && <span className="text-slate-600">→</span>}
+            <button
+              onClick={() => onSelect?.(e)}
+              className={clsx(
+                "rounded border px-2 py-1 text-[11px] transition-colors",
+                e.id === currentId
+                  ? "border-accent-blue bg-accent-blue/20 text-accent-blue"
+                  : "border-surface-border text-slate-300 hover:bg-surface-muted"
+              )}
+            >
+              {(ROLE_LABEL[chain.roles[e.id]] ?? chain.roles[e.id])}
+              {e.severity ? ` · ${e.severity}` : ""}
+            </button>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-[11px] leading-relaxed text-slate-500">{chain.summary}</p>
+    </div>
+  );
+}
+
+export function EventInspector({
+  event,
+  chain,
+  onSelectEvent,
+}: {
+  event: SpaceWeatherEvent;
+  chain?: EventChain | null;
+  onSelectEvent?: (e: SpaceWeatherEvent) => void;
+}) {
   const isRadioBurst = event.type === "radio_burst" || event.type === "official_radio_burst";
   const stations = event.stations.length
     ? event.stations
@@ -211,6 +261,11 @@ export function EventInspector({ event }: { event: SpaceWeatherEvent }) {
         </div>
         <p className="mt-2 text-sm text-slate-300">{event.description}</p>
       </div>
+
+      {/* storyline this event belongs to (if any) */}
+      {chain && chain.events.length > 1 && (
+        <StorylineStrip chain={chain} currentId={event.id} onSelect={onSelectEvent} />
+      )}
 
       {/* instrument panels */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">

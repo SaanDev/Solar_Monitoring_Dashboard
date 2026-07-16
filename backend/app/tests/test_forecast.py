@@ -30,6 +30,13 @@ from app.schemas.forecast_schema import (
 UTC = timezone.utc
 
 
+@pytest.fixture(autouse=True)
+def stub_ambient_wind(monkeypatch):
+    """Keep CME enrichment hermetic: the DBM ambient wind is read from the live
+    NOAA solar-wind feed, so pin it to a fixed value instead of hitting the net."""
+    monkeypatch.setattr(cme_service, "recent_ambient_speed", AsyncMock(return_value=420.0))
+
+
 # ── Newell coupling / predicted Kp ───────────────────────────────────────────
 
 
@@ -181,9 +188,40 @@ def test_cme_to_event_spans_launch_to_arrival():
     e = cme_service.cme_to_event(r)
     assert e["type"] == "cme"
     assert e["start_time"] == r["start_time"]
-    assert e["end_time"] == r["predicted_arrival_time"]
+    assert e["end_time"] == r["predicted_arrival_time"]  # ENLIL arrival preferred
     assert e["severity"] == "G3"  # predicted Kp 7
-    assert "predicted arrival 2026-07-03 06:00 UTC" in e["description"]
+    assert "predicted arrival 2026-07-03 06:00 UTC (WSA-ENLIL)" in e["description"]
+
+
+# A geoeffective CME DONKI never ran ENLIL on: measured cone speed + direction,
+# but no ``estimatedShockArrivalTime`` -> no ENLIL arrival.
+_DONKI_CME_NO_ENLIL = {
+    "activityID": "2026-07-02T00:00:00-CME-009",
+    "startTime": "2026-07-02T00:00Z",
+    "sourceLocation": "S05W08",
+    "activeRegionNum": 14140,
+    "note": "",
+    "link": "https://kauai.ccmc.gsfc.nasa.gov/DONKI/view/CME/9/-1",
+    "cmeAnalyses": [
+        {
+            "isMostAccurate": True,
+            "time21_5": "2026-07-02T04:00Z",
+            "latitude": 5.0, "longitude": 8.0, "halfAngle": 40.0,
+            "speed": 850.0, "type": "C",
+            "submissionTime": "2026-07-02T06:00Z",
+            "enlilList": [],  # never modelled -> no ENLIL arrival
+        }
+    ],
+}
+
+
+def test_cme_to_event_uses_dbm_arrival_when_no_enlil():
+    r = cme_service.enrich_cme(parse_cmes([_DONKI_CME_NO_ENLIL])[0], w=420.0)
+    e = cme_service.cme_to_event(r)
+    assert e["type"] == "cme"
+    assert e["end_time"] == r["predicted_arrival_dbm"]  # DBM fills in for ENLIL
+    assert e["end_time"] is not None
+    assert "(DBM)" in e["description"]
 
 
 # ── NOAA scales + hemispheric power parsing ──────────────────────────────────
@@ -279,11 +317,34 @@ async def test_cme_collect_reconciles_events(db_session, monkeypatch):
     rows = await query_all(db_session)
     assert [e["type"] for e in rows] == ["cme"]
 
-    # A revised analysis withdraws the Earth arrival -> the event is reconciled.
-    revised = {**r, "is_earth_directed": False, "predicted_arrival_time": None}
+    # A revised analysis withdraws the Earth arrival AND re-points the cone to the
+    # limb (no longer geoeffective) -> the event is reconciled away.
+    revised = {
+        **r,
+        "is_earth_directed": False,
+        "predicted_arrival_time": None,
+        "latitude": 0.0,
+        "longitude": 120.0,
+        "half_angle": 20.0,
+    }
     monkeypatch.setattr(cme_service, "fetch_cmes", AsyncMock(return_value=[revised]))
     await cme_service.collect_and_store(db_session)
     assert await query_all(db_session) == []
+
+
+async def test_cme_collect_includes_geoeffective_without_enlil(db_session, monkeypatch):
+    # A CME DONKI never modelled still reaches the event feed via the cone-geometry
+    # geoeffective check, its span closed by the DBM arrival.
+    r = parse_cmes([_DONKI_CME_NO_ENLIL])[0]
+    monkeypatch.setattr(cme_service, "fetch_cmes", AsyncMock(return_value=[r]))
+    await cme_service.collect_and_store(db_session)
+
+    from app.repositories.event_repo import query_all
+
+    rows = await query_all(db_session)
+    assert [e["type"] for e in rows] == ["cme"]
+    assert rows[0]["end_time"] is not None
+    assert "(DBM)" in rows[0]["description"]
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -324,6 +385,22 @@ async def test_cmes_route_reads_catalog(client, db_session):
     assert body["cmes"][0]["is_earth_directed"] is True
 
     assert (await client.get("/api/forecast/cmes?days=99")).status_code == 422
+
+
+async def test_cmes_route_enriches_with_dbm_forecast(client, db_session):
+    # A CME with a cone speed but no ENLIL run still gets an SWDash DBM arrival.
+    await upsert_cmes(db_session, parse_cmes([_DONKI_CME_NO_ENLIL]))
+    r = await client.get("/api/forecast/cmes?days=30")
+    assert r.status_code == 200
+    c = r.json()["cmes"][0]
+    assert c["is_earth_directed"] is False        # DONKI never modelled it
+    assert c["geoeffective"] is True              # but its cone contains Earth
+    assert c["arrival_model"] == "DBM"
+    assert c["predicted_arrival_dbm"] is not None
+    assert c["arrival_earliest"] is not None and c["arrival_latest"] is not None
+    assert c["impact_speed_km_s"] is not None
+    assert c["transit_hours"] is not None
+    assert c["ambient_wind_km_s"] == pytest.approx(420.0)
 
 
 async def test_cmes_history_reads_catalog_within_window(client, db_session, monkeypatch):

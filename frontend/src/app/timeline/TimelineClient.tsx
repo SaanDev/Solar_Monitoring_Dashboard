@@ -24,6 +24,7 @@ import {
   LANES,
 } from "@/components/timeline/HorizontalTimeline";
 import { EventInspector } from "@/components/timeline/EventInspector";
+import { StorylineList } from "@/components/timeline/StorylineList";
 import { RangeSelector, type RangeOption } from "@/components/charts/RangeSelector";
 
 const RANGES: readonly RangeOption[] = [
@@ -140,6 +141,9 @@ export function TimelineClient() {
   // Freeze the window per range selection so blocks don't drift between polls.
   const { start, end } = useMemo(() => windowFor(hours), [hours]);
   const [selected, setSelected] = useState<SpaceWeatherEvent | null>(null);
+  // Chain currently traced on the timeline: a hovered storyline card wins,
+  // otherwise the selected event's own chain.
+  const [hoverChainId, setHoverChainId] = useState<string | null>(null);
 
   const startMs = new Date(start).getTime();
   const endMs = new Date(end).getTime();
@@ -225,6 +229,27 @@ export function TimelineClient() {
 
   const all = useMemo(() => [...(events ?? []), ...officialEvents], [events, officialEvents]);
 
+  // Causal storylines over the same window (flare → CME → burst → proton → storm).
+  const { data: chains } = useSWR(
+    ["timeline-chains", range],
+    () => api.eventChains(start, end),
+    { refreshInterval: 120000 }
+  );
+
+  const activeChainId = hoverChainId ?? selected?.chain_id ?? null;
+  const activeChain = useMemo(
+    () => chains?.find((c) => c.chain_id === activeChainId) ?? null,
+    [chains, activeChainId]
+  );
+  const highlightIds = useMemo(
+    () => (activeChain ? new Set(activeChain.event_ids) : null),
+    [activeChain]
+  );
+  const selectedChain = useMemo(
+    () => chains?.find((c) => c.chain_id === selected?.chain_id) ?? null,
+    [chains, selected]
+  );
+
   const toolBtn =
     "rounded border border-surface-border p-1 text-slate-400 transition-colors " +
     "hover:bg-surface-muted hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-40";
@@ -306,6 +331,8 @@ export function TimelineClient() {
             selectedId={selected?.id ?? null}
             onSelect={setSelected}
             onZoomAt={zoomAt}
+            highlightIds={highlightIds}
+            chainOrder={activeChain?.event_ids ?? null}
           />
         )}
 
@@ -345,8 +372,17 @@ export function TimelineClient() {
         </div>
       </div>
 
+      {chains && chains.length > 0 && (
+        <StorylineList
+          chains={chains}
+          activeId={activeChainId}
+          onHover={setHoverChainId}
+          onOpen={setSelected}
+        />
+      )}
+
       {selected ? (
-        <EventInspector event={selected} />
+        <EventInspector event={selected} chain={selectedChain} onSelectEvent={setSelected} />
       ) : (
         <div className="rounded-lg border border-dashed border-surface-border p-8 text-center text-xs text-slate-600">
           Select an event above to see the GOES X-ray curve, radio spectrogram,

@@ -44,6 +44,7 @@ import type {
   Alert,
   ActivityHistogramResponse,
   SpaceWeatherEvent,
+  EventChain,
   AnalyzerSession,
   AnalyzerStats,
   AnalyzerOptions,
@@ -371,6 +372,9 @@ export const api = {
   alertsLatest: () => get<Alert[]>("/api/alerts/latest"),
   events: (start: string, end: string) =>
     get<SpaceWeatherEvent[]>(`/api/events?start=${start}&end=${end}`),
+  // Causal storylines (flare → CME → burst → proton → geomagnetic storm).
+  eventChains: (start: string, end: string) =>
+    get<EventChain[]>(`/api/event-chains?start=${start}&end=${end}`),
   // Per-parameter, time-aligned activity histograms for the alerts page.
   activityHistogram: (start: string, end: string, interval: number) =>
     get<ActivityHistogramResponse>(

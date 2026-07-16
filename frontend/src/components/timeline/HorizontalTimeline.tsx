@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clsx } from "clsx";
 
 import type { SpaceWeatherEvent } from "@/lib/types";
@@ -208,6 +208,11 @@ interface Props {
   /** Wheel-zoom callback: fraction = cursor position across the strip (0..1),
    * factor < 1 zooms in, > 1 zooms out. Omit to disable wheel zoom. */
   onZoomAt?: (fraction: number, factor: number) => void;
+  /** Member ids of the active storyline: non-members dim, members keep full
+   * opacity. Null/undefined = no chain highlight. */
+  highlightIds?: Set<string> | null;
+  /** Member ids in causal order, for drawing the connective line across lanes. */
+  chainOrder?: string[] | null;
 }
 
 function ticks(startMs: number, endMs: number, n = 6): { pct: number; label: string }[] {
@@ -241,6 +246,8 @@ export function HorizontalTimeline({
   selectedId,
   onSelect,
   onZoomAt,
+  highlightIds,
+  chainOrder,
 }: Props) {
   const lanes = useMemo(() => {
     return LANES.map((lane) => {
@@ -272,10 +279,50 @@ export function HorizontalTimeline({
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
+  // ── Storyline connectors ────────────────────────────────────────────────
+  // Draw a line through the active chain's member blocks across lanes. Positions
+  // are measured from the rendered DOM (robust to the responsive strip width and
+  // the variable-height lanes) rather than re-derived from the layout math.
+  const blockRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const [link, setLink] = useState<{ pts: { x: number; y: number }[]; w: number; h: number }>({
+    pts: [],
+    w: 0,
+    h: 0,
+  });
+  const chainKey = chainOrder?.join("|") ?? "";
+  const dimming = !!highlightIds;
+
+  const measure = useCallback(() => {
+    const container = wrapRef.current;
+    const order = chainKey ? chainKey.split("|") : [];
+    if (!container || order.length < 2) {
+      setLink((l) => (l.pts.length ? { pts: [], w: 0, h: 0 } : l));
+      return;
+    }
+    const c = container.getBoundingClientRect();
+    const pts: { x: number; y: number }[] = [];
+    for (const id of order) {
+      const el = blockRefs.current.get(id);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      pts.push({ x: r.left + r.width / 2 - c.left, y: r.top + r.height / 2 - c.top });
+    }
+    setLink({ pts, w: c.width, h: c.height });
+  }, [chainKey]);
+
+  useLayoutEffect(() => {
+    measure();
+  }, [measure, events, startMs, endMs]);
+
+  useEffect(() => {
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [measure]);
+
   const axis = ticks(startMs, endMs);
 
   return (
-    <div ref={wrapRef} className="select-none">
+    <div ref={wrapRef} className="relative select-none">
       {lanes.map(({ lane, placed, rows }) => (
         <div
           key={lane.key}
@@ -293,14 +340,21 @@ export function HorizontalTimeline({
           >
             {placed.map(({ e, left, width, row }) => {
               const c = colorsFor(lane, e);
+              const member = highlightIds?.has(e.id);
               return (
                 <button
                   key={e.id}
+                  ref={(el) => {
+                    if (el) blockRefs.current.set(e.id, el);
+                    else blockRefs.current.delete(e.id);
+                  }}
                   onClick={() => onSelect(e)}
                   title={`${e.severity ?? ""} ${e.description}`.trim()}
                   className={clsx(
-                    "absolute rounded-sm transition-colors",
-                    selectedId === e.id ? c.selected : c.block
+                    "absolute rounded-sm transition-[colors,opacity]",
+                    selectedId === e.id ? c.selected : c.block,
+                    dimming && !member && "opacity-25",
+                    dimming && member && "ring-1 ring-accent-blue/90"
                   )}
                   style={{
                     left: `${left}%`,
@@ -314,6 +368,27 @@ export function HorizontalTimeline({
           </div>
         </div>
       ))}
+
+      {/* storyline connector: a dashed line threading the chain's member blocks */}
+      {dimming && link.pts.length >= 2 && (
+        <svg
+          className="pointer-events-none absolute inset-0 z-10 text-accent-blue"
+          width={link.w}
+          height={link.h}
+        >
+          <polyline
+            points={link.pts.map((p) => `${p.x},${p.y}`).join(" ")}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeDasharray="3 3"
+            strokeOpacity={0.85}
+          />
+          {link.pts.map((p, i) => (
+            <circle key={i} cx={p.x} cy={p.y} r={2.5} fill="currentColor" />
+          ))}
+        </svg>
+      )}
 
       {/* time axis */}
       <div className="ml-[6.5rem] mt-1 flex justify-between font-mono text-[9px] text-slate-600">
