@@ -95,7 +95,7 @@ class Settings(BaseSettings):
     # Overview card simply hides, exactly like a missing ML model or bot token.
     anthropic_api_key: str = ""
     briefing_enabled: bool = True
-    briefing_model: str = "claude-opus-4-8"
+    briefing_model: str = "claude-sonnet-5"
     # How often the scheduler re-evaluates conditions; the LLM is only actually
     # called when the (bucketed) conditions changed since the last brief.
     briefing_interval_seconds: int = 1800
