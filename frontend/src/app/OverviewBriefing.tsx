@@ -5,12 +5,14 @@ import { Sparkles } from "lucide-react";
 
 import { api } from "@/lib/api";
 
-/** Friendly model label, e.g. "claude-opus-4-8" → "Claude Opus 4.8". */
+/** Friendly model label: "claude-opus-4-8" → "Claude Opus 4.8",
+ * "claude-sonnet-5" → "Claude Sonnet 5". */
 function modelLabel(model: string | null): string {
   if (!model) return "Claude";
-  const m = model.match(/^claude-([a-z]+)-(\d)-(\d)$/);
-  if (m) return `Claude ${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}.${m[3]}`;
-  return model;
+  const m = model.match(/^claude-([a-z]+)-([\d-]+)$/);
+  if (!m) return model;
+  const name = m[1][0].toUpperCase() + m[1].slice(1);
+  return `Claude ${name} ${m[2].replace(/-/g, ".")}`;
 }
 
 /**

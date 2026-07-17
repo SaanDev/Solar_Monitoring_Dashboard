@@ -309,6 +309,11 @@ async def generate_briefing(db: AsyncSession, force: bool = False) -> BriefingRe
         return _from_cache(cached) if cached else BriefingResponse(available=True)
 
     if cached and not force and cached.get("signature") == signature:
+        # Conditions unchanged: keep the cached brief alive by refreshing its TTL
+        # (no model call). Without this, a long quiet spell — where every pass hits
+        # the change-gate and never rewrites — lets the cache expire between passes
+        # and briefly blanks the Overview card.
+        await cache_set_json(_CACHE_KEY, cached, settings.briefing_interval_seconds * 3)
         return _from_cache(cached)
 
     try:
