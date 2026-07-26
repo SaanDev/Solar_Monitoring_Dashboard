@@ -81,7 +81,9 @@ export function NoaaScalesPanel() {
         <p className="py-6 text-center text-xs text-slate-600">Forecast unavailable</p>
       ) : (
         <>
-          <div className="grid flex-1 grid-cols-3 gap-2">
+          {/* Three day-cards, each holding a badge, a text line and 3 probability
+            rows, squeezed to ~100px on a phone. Stack them below sm. */}
+        <div className="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-3">
             {days.map((d, i) => (
               <div
                 key={d.date ?? i}

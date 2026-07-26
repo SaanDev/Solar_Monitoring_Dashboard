@@ -30,7 +30,12 @@ const DARK = {
 };
 
 const LIGHT = {
-  plotBg: "#ffffff", // matches the light card surface
+  // Dark mode plots sit in a well slightly darker than the card (#0a0d14 vs
+  // #161b27), which the threshold bands in GoesXrsChart et al. rely on for
+  // separation. Light mode used pure white, i.e. no well at all, so the two
+  // themes were structurally different. --surface-muted gives light the same
+  // inset without touching any trace color.
+  plotBg: "#f8fafc", // surface-muted
   fontColor: "#475569", // slate-600
   axisColor: "#64748b", // slate-500
   gridColor: "#e2e8f0", // slate-200

@@ -6,6 +6,7 @@ import { clsx } from "clsx";
 import { History } from "lucide-react";
 
 import { api } from "@/lib/api";
+import { Segmented } from "@/components/ui/Segmented";
 import { relativeTime, scaleBadgeClass } from "@/lib/scales";
 import type { CmeItem } from "@/lib/types";
 import { effectiveArrival } from "./CmeList";
@@ -81,24 +82,19 @@ export function PastCmeList() {
       {/* Range controls: quick presets + custom start/end dates. */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="flex gap-1">
-          {PRESETS.map((p) => (
-            <button
-              key={p.days}
-              type="button"
-              onClick={() => {
-                setStart(daysAgo(p.days));
-                setEnd(daysAgo(0));
-              }}
-              className={clsx(
-                "rounded border px-2 py-1 text-[11px] transition-colors",
-                activePreset?.days === p.days
-                  ? "border-accent-blue/50 bg-accent-blue/10 text-accent-blue"
-                  : "border-surface-border text-slate-400 hover:text-slate-200"
-              )}
-            >
-              {p.label}
-            </button>
-          ))}
+          {/* Fourth of the Forecast page's range pickers — routed through the
+              same Segmented control as the others. An empty `value` when the
+              dates don't match a preset keeps the "custom range" state showing
+              nothing selected, exactly as before. */}
+          <Segmented
+            ariaLabel="Date range preset"
+            value={activePreset ? String(activePreset.days) : ""}
+            onChange={(v) => {
+              setStart(daysAgo(Number(v)));
+              setEnd(daysAgo(0));
+            }}
+            options={PRESETS.map((p) => ({ value: String(p.days), label: p.label }))}
+          />
         </div>
         <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
           <input

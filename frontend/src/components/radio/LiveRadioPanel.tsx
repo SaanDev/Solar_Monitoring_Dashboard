@@ -6,6 +6,7 @@ import { clsx } from "clsx";
 import { Pin, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatUtcShort } from "@/lib/formatting";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -262,12 +263,25 @@ export function LiveRadioPanel({
       <div className={heightClass}>
         {loading && !spec ? (
           <div className="h-full w-full animate-pulse rounded bg-surface-muted" />
-        ) : error || !spec ? (
-          <div className="flex h-full items-center justify-center text-center text-xs text-slate-600">
-            {pinned
-              ? "Could not load the pinned burst spectrum."
-              : `No recent data for ${station || "this station"}`}
-          </div>
+        ) : error ? (
+          // Split from the empty case below: a failed request and a station with
+          // nothing to show are different facts and must not share a message.
+          <EmptyState
+            tone="error"
+            message={
+              pinned
+                ? "Could not load the pinned burst spectrum."
+                : `Could not reach the feed for ${station || "this station"}.`
+            }
+          />
+        ) : !spec ? (
+          <EmptyState
+            message={
+              pinned
+                ? "No spectrum available for the pinned burst."
+                : `No recent data for ${station || "this station"}.`
+            }
+          />
         ) : (
           <img
             src={`${apiBase}${spec.image_url}`}

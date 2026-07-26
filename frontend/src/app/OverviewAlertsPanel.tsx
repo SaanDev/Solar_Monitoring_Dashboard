@@ -6,6 +6,7 @@ import { clsx } from "clsx";
 
 import { api } from "@/lib/api";
 import { AlertFeed } from "@/components/alerts/AlertFeed";
+import { AsyncPanel } from "@/components/ui/AsyncPanel";
 
 export function OverviewAlertsPanel({
   className,
@@ -15,7 +16,7 @@ export function OverviewAlertsPanel({
   /** Cap the rows shown in each dedicated area (full history is on the Events page). */
   limit?: number;
 }) {
-  const { data, isLoading } = useSWR("alerts-latest", api.alertsLatest, {
+  const { data, isLoading, error } = useSWR("alerts-latest", api.alertsLatest, {
     refreshInterval: 60000,
   });
   const alerts = data ?? [];
@@ -35,15 +36,23 @@ export function OverviewAlertsPanel({
       </div>
 
       <div className="min-h-[16rem] flex-1 overflow-y-auto">
-        {isLoading ? (
-          <div className="space-y-2">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="h-12 animate-pulse rounded bg-surface-muted" />
-            ))}
-          </div>
-        ) : (
+        {/* AlertFeed renders "No alerts" in every severity category when handed
+            an empty array, so a dropped fetch used to read as ALL CLEAR on the
+            primary screen. The error branch must win over that. */}
+        <AsyncPanel
+          isLoading={isLoading}
+          error={error}
+          errorMessage="Alert feed unavailable — this is a connection failure, not an all-clear."
+          skeleton={
+            <div className="space-y-2">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="h-12 animate-pulse rounded bg-surface-muted" />
+              ))}
+            </div>
+          }
+        >
           <AlertFeed alerts={alerts} perCategoryLimit={limit} />
-        )}
+        </AsyncPanel>
       </div>
     </div>
   );

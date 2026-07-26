@@ -24,7 +24,7 @@ export function SolarWindClient() {
   const { data: series, isLoading } = useSWR(
     ["solar-wind-series", range],
     () => api.solarWindSeries(range),
-    { refreshInterval: 60000 }
+    { refreshInterval: 60000, keepPreviousData: true }
   );
 
   const { data: latest } = useSWR("solar-wind-latest", api.solarWindLatest, {

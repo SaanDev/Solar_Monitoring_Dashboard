@@ -3,10 +3,10 @@
 import { useState } from "react";
 import dynamic from "next/dynamic";
 import useSWR from "swr";
-import { clsx } from "clsx";
 import { BarChart3 } from "lucide-react";
 
 import { api } from "@/lib/api";
+import { Segmented } from "@/components/ui/Segmented";
 import { usePlotlyTheme } from "@/components/charts/plotlyTheme";
 import type { CmeHistogramBin } from "@/lib/types";
 
@@ -161,43 +161,27 @@ export function CmeHistogram() {
         )}
       </div>
 
-      {/* Controls: period + bin interval. */}
+      {/* Controls: period + bin interval. Rendered through the shared Segmented
+          control so the Forecast page's four range pickers stop each looking
+          different. State stays per-picker — only the appearance is unified. */}
       <div className="mb-3 flex flex-wrap items-center gap-3 text-[11px]">
         <div className="flex items-center gap-1">
           <span className="text-slate-600">Period</span>
-          {PERIODS.map((p) => (
-            <button
-              key={p.days}
-              type="button"
-              onClick={() => setPeriodDays(p.days)}
-              className={clsx(
-                "rounded border px-2 py-1 transition-colors",
-                periodDays === p.days
-                  ? "border-accent-blue/50 bg-accent-blue/10 text-accent-blue"
-                  : "border-surface-border text-slate-400 hover:text-slate-200"
-              )}
-            >
-              {p.label}
-            </button>
-          ))}
+          <Segmented
+            ariaLabel="Period"
+            value={String(periodDays)}
+            onChange={(v) => setPeriodDays(Number(v))}
+            options={PERIODS.map((p) => ({ value: String(p.days), label: p.label }))}
+          />
         </div>
         <div className="flex items-center gap-1">
           <span className="text-slate-600">Bin</span>
-          {INTERVALS.map((iv) => (
-            <button
-              key={iv.days}
-              type="button"
-              onClick={() => setIntervalDays(iv.days)}
-              className={clsx(
-                "rounded border px-2 py-1 transition-colors",
-                intervalDays === iv.days
-                  ? "border-accent-blue/50 bg-accent-blue/10 text-accent-blue"
-                  : "border-surface-border text-slate-400 hover:text-slate-200"
-              )}
-            >
-              {iv.label}
-            </button>
-          ))}
+          <Segmented
+            ariaLabel="Bin interval"
+            value={String(intervalDays)}
+            onChange={(v) => setIntervalDays(Number(v))}
+            options={INTERVALS.map((iv) => ({ value: String(iv.days), label: iv.label }))}
+          />
         </div>
       </div>
 

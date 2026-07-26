@@ -12,6 +12,7 @@ import { AlertFeed } from "@/components/alerts/AlertFeed";
 import { EventTimeline } from "@/components/events/EventTimeline";
 import { ActivityHistograms } from "@/components/events/ActivityHistograms";
 import { ExportEventsButton } from "@/components/events/ExportEventsButton";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 const RANGES = [
   { key: "1d", label: "1 day", hours: 24 },
@@ -59,6 +60,7 @@ export function EventsClient() {
     error,
   } = useSWR(["events", range], () => api.events(start, end), {
     refreshInterval: 60000,
+    keepPreviousData: true,
   });
 
   return (
@@ -130,12 +132,18 @@ export function EventsClient() {
             doesn't push the histograms far down the page — scroll within instead. */}
         <div className="max-h-[36rem] overflow-y-auto pr-1">
           {error ? (
-            <div className="flex h-48 items-center justify-center text-sm text-accent-red">
-              Failed to load events
-            </div>
+            <EmptyState
+              tone="error"
+              message="Failed to load events. The feed may be unavailable."
+              className="h-48"
+            />
           ) : isLoading ? (
-            <div className="flex h-48 items-center justify-center text-sm text-slate-600">
-              Loading events…
+            // Was a bare "Loading events…" line; every other list in the app
+            // uses a skeleton, and this one shifted layout when it resolved.
+            <div className="space-y-2">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="h-12 animate-pulse rounded bg-surface-muted" />
+              ))}
             </div>
           ) : (
             <EventTimeline events={events ?? []} grouped={grouped} />

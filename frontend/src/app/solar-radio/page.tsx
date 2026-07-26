@@ -8,17 +8,17 @@ export default function SolarRadioPage() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* Left — live Sri Lanka data */}
         <section className="flex flex-col">
-          <h1 className="mb-2 text-xs uppercase tracking-widest text-slate-500">
+          <h2 className="mb-2 text-xs uppercase tracking-widest text-slate-500">
             Live Data — Sri Lanka
-          </h1>
+          </h2>
           <SriLankaLivePanel />
         </section>
 
         {/* Right — burst events */}
         <section className="flex flex-col">
-          <h1 className="mb-2 text-xs uppercase tracking-widest text-slate-500">
+          <h2 className="mb-2 text-xs uppercase tracking-widest text-slate-500">
             Burst Events
-          </h1>
+          </h2>
           <BurstEventSlider />
         </section>
       </div>

@@ -18,7 +18,7 @@ export function OverviewSunspotChart() {
   const { data, isLoading } = useSWR(
     ["overview-sunspot", scope],
     () => api.sunspotSeries(scope),
-    { refreshInterval: 300000 }
+    { refreshInterval: 300000, keepPreviousData: true }
   );
 
   return (

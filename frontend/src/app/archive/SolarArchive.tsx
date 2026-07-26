@@ -3,11 +3,12 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { clsx } from "clsx";
-import { Download, X } from "lucide-react";
+import { Download } from "lucide-react";
 
 import { api } from "@/lib/api";
 import { formatUtcShort } from "@/lib/formatting";
 import type { SolarArchiveImage } from "@/lib/types";
+import { Modal } from "@/components/ui/Modal";
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -74,34 +75,22 @@ function ImageCard({ img, onOpen }: { img: SolarArchiveImage; onOpen: () => void
 
 function Lightbox({ img, onClose }: { img: SolarArchiveImage; onClose: () => void }) {
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="flex max-h-[92vh] max-w-[92vw] flex-col items-center gap-3"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <img
-          src={img.image_url}
-          alt={img.label}
-          className="max-h-[78vh] max-w-[92vw] rounded border border-surface-border object-contain"
-        />
-        <div className="flex flex-wrap items-center justify-center gap-3 text-xs text-slate-400">
-          <span className="font-semibold text-slate-200">{img.label}</span>
-          <span>{img.source}</span>
-          <span>{img.time ? formatUtcShort(img.time) : "—"}</span>
-          <DownloadRow img={img} />
-        </div>
+    // Modal supplies role="dialog", Escape, focus trap/restore and scroll lock,
+    // none of which this hand-rolled overlay had.
+    <Modal open onClose={onClose} label={`${img.label} — full size`}>
+      {/* eslint-disable-next-line @next/next/no-img-element -- backend-rendered image */}
+      <img
+        src={img.image_url}
+        alt={img.label}
+        className="max-h-[78vh] max-w-[92vw] rounded border border-surface-border object-contain"
+      />
+      <div className="flex flex-wrap items-center justify-center gap-3 text-xs text-slate-400">
+        <span className="font-semibold text-slate-200">{img.label}</span>
+        <span>{img.source}</span>
+        <span>{img.time ? formatUtcShort(img.time) : "—"}</span>
+        <DownloadRow img={img} />
       </div>
-      <button
-        onClick={onClose}
-        className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-slate-200 hover:bg-accent-blue/70"
-        aria-label="Close"
-      >
-        <X className="h-5 w-5" />
-      </button>
-    </div>
+    </Modal>
   );
 }
 

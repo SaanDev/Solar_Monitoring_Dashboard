@@ -602,7 +602,7 @@ function ResultsTable({
           </button>
         </span>
       </div>
-      <div className="max-h-48 overflow-y-auto">
+      <div className="max-h-48 overflow-auto">
         <table className="w-full text-[10px] text-slate-400">
           <tbody>
             {rows.map((r) => (

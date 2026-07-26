@@ -409,7 +409,13 @@ export function DataAnalysisClient() {
 
   return (
     <div className="grid gap-4 lg:grid-cols-3">
-      <div className="space-y-4 lg:col-span-1">
+      {/* The control rail had no scroll container of its own. On Movie /
+          Composite / Active Regions — which each embed the whole PlotControls
+          block a second time — it grew past the viewport, so dragging a
+          percentile slider scrolled the result image out of sight. Giving the
+          rail its own overflow keeps the image fixed while the controls scroll.
+          Purely presentational: no state or handler is involved. */}
+      <div className="space-y-4 lg:col-span-1 lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto lg:pr-2">
         <DataSourcePicker
           options={options}
           onSession={onSession}

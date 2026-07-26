@@ -3,18 +3,29 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import useSWR from "swr";
-import { Bell, Calendar, Circle, Menu, Search } from "lucide-react";
+import { Bell, Calendar, Circle, Menu } from "lucide-react";
 
 import { api } from "@/lib/api";
 import { useApp } from "@/components/providers";
 import { useUnreadAlerts, unreadBadgeText } from "@/lib/useUnreadAlerts";
+import type { SourceStatus } from "@/lib/types";
 import { ThemeToggle } from "./ThemeToggle";
 
 const BRAND = "ACCIMT Space Weather Dashboard";
 
-function StatusBadge({ label, value, ok }: { label: string; value: string; ok: boolean }) {
+function StatusBadge({
+  label,
+  value,
+  ok,
+  title,
+}: {
+  label: string;
+  value: string;
+  ok: boolean;
+  title?: string;
+}) {
   return (
-    <div className="hidden flex-col items-end leading-tight sm:flex">
+    <div className="hidden flex-col items-end leading-tight sm:flex" title={title}>
       <span className="text-[9px] uppercase tracking-wider text-slate-500">{label}</span>
       <span className={ok ? "text-xs font-semibold text-accent-green" : "text-xs font-semibold text-accent-orange"}>
         {value}
@@ -23,13 +34,57 @@ function StatusBadge({ label, value, ok }: { label: string; value: string; ok: b
   );
 }
 
+/**
+ * Roll the per-source health list up into the single Data Feed badge.
+ *
+ * This badge used to be hardcoded to "LIVE", so it asserted a healthy feed even
+ * during a total backend outage — the one place on screen a user would look to
+ * check exactly that. `api.sourcesStatus()` and this shape already existed in
+ * the repo but were never called.
+ *
+ * "unknown" sources are ignored rather than counted as failures: several feeds
+ * report unknown simply because nothing has polled them yet.
+ */
+function feedHealth(
+  sources: SourceStatus[] | undefined,
+  failed: boolean
+): { value: string; ok: boolean; title: string } {
+  if (failed) {
+    return { value: "OFFLINE", ok: false, title: "Cannot reach the dashboard API" };
+  }
+  if (!sources?.length) {
+    return { value: "—", ok: true, title: "Source health not yet reported" };
+  }
+  const bad = sources.filter((s) => s.status === "error" || s.status === "degraded");
+  if (bad.length) {
+    return {
+      value: "DEGRADED",
+      ok: false,
+      title: bad.map((s) => `${s.name}: ${s.status}`).join("\n"),
+    };
+  }
+  return {
+    value: "LIVE",
+    ok: true,
+    title: `${sources.filter((s) => s.status === "ok").length}/${sources.length} sources reporting OK`,
+  };
+}
+
 export function Header({ title }: { title?: string }) {
   const { toggleSidebar } = useApp();
   const [utc, setUtc] = useState("");
-  const { data: summary } = useSWR("summary-latest", api.summaryLatest, {
-    refreshInterval: 60000,
-  });
+  const { data: summary, error: summaryError } = useSWR(
+    "summary-latest",
+    api.summaryLatest,
+    { refreshInterval: 60000 }
+  );
+  const { data: sources, error: sourcesError } = useSWR(
+    "sources-status",
+    api.sourcesStatus,
+    { refreshInterval: 60000 }
+  );
   const { unreadCount } = useUnreadAlerts();
+  const feed = feedHealth(sources?.sources, Boolean(sourcesError || summaryError));
 
   useEffect(() => {
     const tick = () => setUtc(new Date().toISOString().slice(0, 19).replace("T", " "));
@@ -70,20 +125,22 @@ export function Header({ title }: { title?: string }) {
           {today}
         </span>
 
-        <div className="relative hidden xl:block">
-          <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-500" />
-          <input
-            type="text"
-            placeholder="Search data, events…"
-            className="h-7 w-44 rounded-md border border-surface-border bg-surface-muted pl-8 pr-3 text-xs text-slate-300 placeholder-slate-500 outline-none focus:border-accent-blue"
-          />
-        </div>
+{/* A search input used to sit here. It had no value, no onChange and no
+    handler — you could type in it and nothing happened, and it couldn't even
+    retain text across a re-render. Removed rather than left as a dead
+    affordance; a real command palette over the nav routes and the reference /
+    user-guide content is tracked as a separate opt-in feature. */}
 
-        <StatusBadge label="Data Feed" value="LIVE" ok />
+        <StatusBadge
+          label="Data Feed"
+          value={feed.value}
+          ok={feed.ok}
+          title={feed.title}
+        />
         <StatusBadge
           label="SWPC Status"
-          value={activeAlerts === 0 ? "Normal" : "Active"}
-          ok={activeAlerts === 0}
+          value={summaryError ? "—" : activeAlerts === 0 ? "Normal" : "Active"}
+          ok={!summaryError && activeAlerts === 0}
         />
 
         <Link

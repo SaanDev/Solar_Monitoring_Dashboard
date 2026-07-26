@@ -8,6 +8,7 @@ import { Loader2, Send } from "lucide-react";
 import { api } from "@/lib/api";
 import type { AlertSeverity, NotificationSettings } from "@/lib/types";
 import { alertLabel } from "@/lib/alerts";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 const SEVERITIES: AlertSeverity[] = ["info", "watch", "warning", "critical"];
 
@@ -67,11 +68,14 @@ function Toggle({
  * (chat id / URL) and filtering, and can fire a test message.
  */
 export function NotificationSettingsCard() {
-  const { data, mutate } = useSWR("notification-settings", api.notificationSettings);
+  const { data, mutate, error } = useSWR("notification-settings", api.notificationSettings);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  // Success and failure used to render through one neutral grey span, so
+  // "Saved." and "Save failed: connection refused" looked identical.
+  const [statusTone, setStatusTone] = useState<"ok" | "error" | "neutral">("neutral");
 
   useEffect(() => {
     if (data && draft === null) {
@@ -85,6 +89,20 @@ export function NotificationSettingsCard() {
       });
     }
   }, [data, draft]);
+
+  // `error` was previously unread, so a failed settings fetch left this card
+  // pulsing forever with no explanation.
+  if (error) {
+    return (
+      <section className="rounded-lg border border-surface-border bg-surface-card p-5">
+        <h2 className="mb-4 text-sm font-semibold text-slate-200">Alert Notifications</h2>
+        <EmptyState
+          tone="error"
+          message="Couldn't load notification settings. Your saved preferences are unchanged."
+        />
+      </section>
+    );
+  }
 
   if (!data || !draft) {
     return (
@@ -113,8 +131,10 @@ export function NotificationSettingsCard() {
       const updated = await api.saveNotificationSettings(draft);
       await mutate(updated, { revalidate: false });
       setStatus("Saved.");
+      setStatusTone("ok");
     } catch (e) {
       setStatus(`Save failed: ${e instanceof Error ? e.message : e}`);
+      setStatusTone("error");
     } finally {
       setSaving(false);
     }
@@ -129,8 +149,14 @@ export function NotificationSettingsCard() {
       if (res.telegram) parts.push(`Telegram: ${res.telegram.ok ? "OK ✓" : res.telegram.error}`);
       if (res.webhook) parts.push(`Webhook: ${res.webhook.ok ? "OK ✓" : res.webhook.error}`);
       setStatus(parts.length ? parts.join(" · ") : "No channel enabled — save first.");
+      // A channel that reported an error is a failure even though the request
+      // itself succeeded, so tone follows the per-channel results.
+      const anyFailed =
+        (res.telegram && !res.telegram.ok) || (res.webhook && !res.webhook.ok);
+      setStatusTone(!parts.length ? "neutral" : anyFailed ? "error" : "ok");
     } catch (e) {
       setStatus(`Test failed: ${e instanceof Error ? e.message : e}`);
+      setStatusTone("error");
     } finally {
       setTesting(false);
     }
@@ -256,7 +282,22 @@ export function NotificationSettingsCard() {
             {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
             Send test
           </button>
-          {status && <span className="text-xs text-slate-400">{status}</span>}
+          {status && (
+            <span
+              role="status"
+              aria-live="polite"
+              className={clsx(
+                "text-xs",
+                statusTone === "ok"
+                  ? "text-accent-green"
+                  : statusTone === "error"
+                    ? "text-accent-red"
+                    : "text-slate-400"
+              )}
+            >
+              {status}
+            </span>
+          )}
         </div>
       </div>
     </section>

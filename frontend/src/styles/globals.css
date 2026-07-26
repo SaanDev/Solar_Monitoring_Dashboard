@@ -16,6 +16,9 @@
   --surface-border: 226 232 240; /* slate-200 */
   --surface-muted: 241 245 249;  /* slate-100 */
 
+  /* Focus ring — darkened accent-blue so it clears AA against white cards. */
+  --ring: 37 99 235;
+
   /* Slate scale inverted for light backgrounds (low = dark text). */
   --slate-50: 15 23 42;
   --slate-100: 30 41 59;
@@ -24,7 +27,9 @@
   --slate-400: 71 85 105;
   --slate-500: 100 116 139;
   --slate-600: 100 116 139;
-  --slate-700: 148 163 184;
+  /* Was 148 163 184 — only 2.6:1 on white. Collapsed into --slate-600's value
+     (4.7:1), matching the duplicate-value precedent already used by 100/200. */
+  --slate-700: 100 116 139;
   --slate-800: 203 213 225;
   --slate-900: 226 232 240;
   --slate-950: 241 245 249;
@@ -38,22 +43,32 @@
   --surface-border: 30 37 53; /* #1e2535 */
   --surface-muted: 26 32 48;  /* #1a2030 */
 
-  /* Identity to Tailwind's slate scale (original dark look). */
+  /* Focus ring — accent-blue. */
+  --ring: 59 130 246;
+
+  /* Identity to Tailwind's slate scale, EXCEPT the dim end (500/600/700).
+     Tailwind's own values scored 3.6:1 / 2.3:1 / 1.7:1 against --surface-card,
+     all failing WCAG AA for the 12px body text they actually carry. Lifting
+     only 600/700 would have pushed them past 500 and inverted the scale, so
+     all three move together and stay monotonic: 400 6.7:1 > 500 5.9:1 >
+     600 5.1:1 > 700 4.5:1. */
   --slate-50: 248 250 252;
   --slate-100: 241 245 249;
   --slate-200: 226 232 240;
   --slate-300: 203 213 225;
   --slate-400: 148 163 184;
-  --slate-500: 100 116 139;
-  --slate-600: 71 85 105;
-  --slate-700: 51 65 85;
+  --slate-500: 139 152 172;
+  --slate-600: 128 141 161;
+  --slate-700: 118 132 152;
   --slate-800: 30 41 59;
   --slate-900: 15 23 42;
   --slate-950: 2 6 23;
 }
 
 body {
-  font-family: "Inter", system-ui, sans-serif;
+  /* --font-inter is supplied by next/font in app/layout.tsx. Inter is kept in
+     the chain so a locally-installed copy still wins over system-ui. */
+  font-family: var(--font-inter), "Inter", system-ui, sans-serif;
 }
 
 /* Scrollbar */
@@ -61,3 +76,40 @@ body {
 ::-webkit-scrollbar-track { background: rgb(var(--surface)); }
 ::-webkit-scrollbar-thumb { background: rgb(var(--surface-border)); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgb(var(--slate-700)); }
+
+/*
+ * Focus ring. 30 controls carry an explicit `outline-none` utility, and
+ * Tailwind's @layer is a build-time sort rather than a native cascade layer —
+ * so specificity decides. `.outline-none` is (0,1,0); the descendant selector
+ * below is (0,1,1) and wins without needing !important. One rule covers every
+ * button, link, and form control in the app.
+ */
+html *:focus-visible {
+  outline: 2px solid rgb(var(--ring));
+  outline-offset: 2px;
+}
+
+/* Inputs sit flush inside card padding, where a +2px ring gets clipped by the
+   card's own overflow. Tuck theirs inside the border instead. */
+html input:focus-visible,
+html select:focus-visible,
+html textarea:focus-visible {
+  outline-offset: -1px;
+}
+
+/*
+ * Respect the OS reduced-motion setting. The app has ~45 `animate-pulse`
+ * skeletons plus 7 "live" indicators that pulse indefinitely, and no
+ * motion-reduce: variants anywhere. Nothing in the codebase listens for
+ * transitionend/animationend, so neutralising them cannot break any logic.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

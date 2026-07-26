@@ -3,6 +3,7 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { api } from "@/lib/api";
+import { windowFor } from "@/lib/formatting";
 import { GoesXrsChart } from "@/components/charts/GoesXrsChart";
 import { ProtonFluxChart } from "@/components/charts/ProtonFluxChart";
 import { clsx } from "clsx";
@@ -16,13 +17,6 @@ const RANGES = [
 
 type RangeKey = (typeof RANGES)[number]["key"];
 
-function windowFor(hours: number) {
-  const now = new Date();
-  const end = now.toISOString().slice(0, 19) + "Z";
-  const start = new Date(now.getTime() - hours * 3600 * 1000).toISOString().slice(0, 19) + "Z";
-  return { start, end };
-}
-
 export function XrayProtonClient() {
   const [range, setRange] = useState<RangeKey>("6h");
   const hours = RANGES.find((r) => r.key === range)!.hours;
@@ -31,7 +25,7 @@ export function XrayProtonClient() {
   const { data: xrs, isLoading: xrsLoading } = useSWR(
     ["goes-xrs", range],
     () => api.goesXrs(start, end),
-    { refreshInterval: 60000 }
+    { refreshInterval: 60000, keepPreviousData: true }
   );
 
   const { data: latest } = useSWR("goes-xrs-latest", api.goesXrsLatest, {
@@ -41,7 +35,7 @@ export function XrayProtonClient() {
   const { data: proton, isLoading: protonLoading } = useSWR(
     ["goes-proton", range],
     () => api.goesProton(start, end),
-    { refreshInterval: 60000 }
+    { refreshInterval: 60000, keepPreviousData: true }
   );
 
   const { data: protonLatest } = useSWR("goes-proton-latest", api.goesProtonLatest, {

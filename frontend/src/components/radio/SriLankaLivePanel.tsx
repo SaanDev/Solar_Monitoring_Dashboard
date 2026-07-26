@@ -3,6 +3,7 @@
 import useSWR from "swr";
 import { api } from "@/lib/api";
 import { formatUtcShort } from "@/lib/formatting";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -33,10 +34,15 @@ export function SriLankaLivePanel({
       <div className={heightClass}>
         {isLoading ? (
           <div className="h-full w-full animate-pulse rounded bg-surface-muted" />
-        ) : error || !data ? (
-          <div className="flex h-full items-center justify-center text-xs text-slate-600">
-            No recent Sri Lanka data available
-          </div>
+        ) : error ? (
+          // Previously collapsed into the "no recent data" message below, so a
+          // 500 from the station read as a quiet Sun.
+          <EmptyState
+            tone="error"
+            message="Could not reach the Sri Lanka (ACCIMT) feed."
+          />
+        ) : !data ? (
+          <EmptyState message="No recent Sri Lanka data available." />
         ) : (
           <img
             src={`${apiBase}${data.image_url}`}
