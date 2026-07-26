@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import { api } from "@/lib/api";
+import { EmptyState } from "@/components/ui/EmptyState";
 import type {
   AnalysisSession,
   CoordReadout,
@@ -171,6 +172,15 @@ export function ImageCanvas({
 
       <div
         ref={boxRef}
+        // Pointer-only by design: a keyboard equivalent needs a cursor model and
+        // key bindings for WCS pixel-picking, which is a feature rather than a
+        // polish item. Naming it at least stops it being an anonymous region.
+        role="img"
+        aria-label={
+          meta
+            ? `${meta.instrument} ${meta.detector} ${meta.measurement} frame. Pointer-driven coordinate readout.`
+            : "Solar frame viewer"
+        }
         className="relative w-full cursor-crosshair select-none overflow-hidden rounded"
         onMouseMove={onMove}
         onMouseLeave={() => setHover(null)}
@@ -180,8 +190,14 @@ export function ImageCanvas({
           // eslint-disable-next-line @next/next/no-img-element
           <img src={shownUrl} alt="solar frame" className="block w-full" draggable={false} />
         ) : (
-          <div className="flex aspect-square w-full items-center justify-center text-xs text-slate-600">
-            {error ?? "Loading frame…"}
+          // `{error ?? "Loading frame…"}` put a failure and a progress message
+          // in the same slot with the same styling — indistinguishable at a glance.
+          <div className="flex aspect-square w-full items-center justify-center">
+            {error ? (
+              <EmptyState tone="error" message={error} className="border-0 bg-transparent" />
+            ) : (
+              <span className="text-xs text-slate-500">Loading frame…</span>
+            )}
           </div>
         )}
         {shownUrl && meta && (

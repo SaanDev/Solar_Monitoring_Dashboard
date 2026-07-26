@@ -15,7 +15,12 @@ interface Props {
 /** Smoothed predicted-Kp series with the G1 storm onset marked at Kp 5. */
 export function KpForecastChart({ data, loading }: Props) {
   const theme = usePlotlyTheme();
-  if (loading) return <div className="h-full animate-pulse rounded bg-surface-muted" />;
+  // Keep the previous series on screen while a new range loads (paired with
+  // keepPreviousData at the call site). Without data this is still just
+  // `if (loading)`, so the first load is unchanged.
+  if (loading && !data.length) {
+    return <div className="h-full animate-pulse rounded bg-surface-muted" />;
+  }
   if (!data.length) {
     return (
       <div className="flex h-full items-center justify-center text-xs text-slate-700">

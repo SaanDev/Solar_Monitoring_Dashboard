@@ -195,14 +195,14 @@ export function TimelineClient() {
   const { data: events, isLoading } = useSWR(
     ["timeline-events", range],
     () => api.events(start, end),
-    { refreshInterval: 120000 }
+    { refreshInterval: 120000, keepPreviousData: true }
   );
 
   // Official e-CALLISTO list over the same window (dates are inclusive).
   const { data: official } = useSWR(
     ["timeline-official-bursts", range],
     () => api.officialBurstsRange(start.slice(0, 10), end.slice(0, 10)),
-    { refreshInterval: 600000 }
+    { refreshInterval: 600000, keepPreviousData: true }
   );
 
   // Official entries become timeline pseudo-events; their observing stations
@@ -233,7 +233,7 @@ export function TimelineClient() {
   const { data: chains } = useSWR(
     ["timeline-chains", range],
     () => api.eventChains(start, end),
-    { refreshInterval: 120000 }
+    { refreshInterval: 120000, keepPreviousData: true }
   );
 
   const activeChainId = hoverChainId ?? selected?.chain_id ?? null;

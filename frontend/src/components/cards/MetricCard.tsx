@@ -7,7 +7,8 @@ interface MetricCardProps {
   unit?: string;
   icon?: LucideIcon;
   trend?: "up" | "down" | "neutral";
-  severity?: "ok" | "watch" | "warning" | "critical";
+  /** `unknown` = the value could not be fetched; never render that as green. */
+  severity?: "ok" | "watch" | "warning" | "critical" | "unknown";
   loading?: boolean;
 }
 
@@ -16,6 +17,8 @@ const severityColor = {
   watch: "text-accent-yellow",
   warning: "text-accent-orange",
   critical: "text-accent-red",
+  // Neutral, not green — "we don't know" must not look like "all clear".
+  unknown: "text-slate-500",
 };
 
 export function MetricCard({

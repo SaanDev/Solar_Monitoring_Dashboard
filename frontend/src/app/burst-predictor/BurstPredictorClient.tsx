@@ -279,7 +279,14 @@ export function BurstPredictorClient() {
                     {job.scanned}/{job.total || "…"} ({pct}%)
                   </span>
                 </div>
-                <div className="h-1.5 w-full overflow-hidden rounded bg-surface-muted">
+                <div
+                  role="progressbar"
+                  aria-valuenow={pct}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label="Burst scan progress"
+                  className="h-1.5 w-full overflow-hidden rounded bg-surface-muted"
+                >
                   <div
                     className="h-full bg-accent-blue transition-all"
                     style={{ width: `${pct}%` }}

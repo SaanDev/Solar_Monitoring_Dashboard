@@ -49,9 +49,22 @@ export function JobProgress({ jobId, onDone, onError }: Props) {
         <span className="truncate">{job?.message || "Starting…"}</span>
         <span>{pct}%</span>
       </div>
-      <div className="h-1.5 w-full overflow-hidden rounded bg-surface-muted">
+      <div
+        role="progressbar"
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={job?.message || "Job progress"}
+        className="h-1.5 w-full overflow-hidden rounded bg-surface-muted"
+      >
+        {/* `transition-all` is on both states: the completed variant used to drop
+            it, so the final jump to 100% and the blue→green swap snapped. */}
         <div
-          className={active ? "h-full bg-accent-blue transition-all" : "h-full bg-accent-green"}
+          className={
+            active
+              ? "h-full bg-accent-blue transition-all"
+              : "h-full bg-accent-green transition-all"
+          }
           style={{ width: `${pct}%` }}
         />
       </div>

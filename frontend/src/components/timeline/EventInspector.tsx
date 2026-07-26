@@ -10,6 +10,7 @@ import { alertLabel } from "@/lib/alerts";
 import { formatUtcShort } from "@/lib/formatting";
 import type { EventChain, SpaceWeatherEvent } from "@/lib/types";
 import { ROLE_LABEL } from "@/components/timeline/StorylineList";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { GoesXrsChart } from "@/components/charts/GoesXrsChart";
 import { ProtonFluxChart } from "@/components/charts/ProtonFluxChart";
 import { KpChart } from "@/components/charts/KpChart";
@@ -95,10 +96,19 @@ function RadioPanel({
             ? "None of this burst's observing stations have archive data for this date"
             : "No stations with archive data for this date"}
         </p>
-      ) : error || !spectrum ? (
-        <p className="py-8 text-center text-xs text-slate-600">
-          No spectrogram available for this station/time
-        </p>
+      ) : error ? (
+        // Was folded into the "no spectrogram available" message, which made a
+        // failed archive request look like a station that simply wasn't observing.
+        <EmptyState
+          tone="error"
+          message="Could not load the spectrogram for this station/time."
+          className="py-8"
+        />
+      ) : !spectrum ? (
+        <EmptyState
+          message="No spectrogram available for this station/time."
+          className="py-8"
+        />
       ) : (
         // eslint-disable-next-line @next/next/no-img-element -- backend-rendered PNG
         <img src={apiUrl(spectrum.image_url)} alt="dynamic spectrum" className="w-full rounded" />

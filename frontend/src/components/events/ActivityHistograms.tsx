@@ -120,7 +120,12 @@ function SeriesPanel({
                 font: { size: 9 },
               },
               showlegend: true,
-            } as Plotly.Layout
+              // Pre-existing build blocker, unrelated to the UI pass: `fixedrange:
+              // true` narrows the inferred literal type enough that TS rejects the
+              // direct `as Plotly.Layout` assertion ("neither type sufficiently
+              // overlaps"). Widening through `unknown` is what the compiler
+              // suggests, and is compile-time only — no runtime change.
+            } as unknown as Plotly.Layout
           }
           config={{ displayModeBar: false, responsive: true }}
           style={{ width: "100%", height: "100%" }}

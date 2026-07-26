@@ -3,9 +3,10 @@
 import useSWR from "swr";
 import { api } from "@/lib/api";
 import { formatUtcShort } from "@/lib/formatting";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 export function LascoMovie({ camera }: { camera: "C2" | "C3" }) {
-  const { data, isLoading } = useSWR(
+  const { data, isLoading, error } = useSWR(
     `lasco-movie-${camera}`,
     () => api.lascoMovie(camera),
     { refreshInterval: 900000 } // refresh URL/timestamp every 15 min
@@ -35,9 +36,15 @@ export function LascoMovie({ camera }: { camera: "C2" | "C3" }) {
             preload="metadata"
           />
         ) : (
-          <div className="flex h-full items-center justify-center text-xs text-slate-700">
-            Movie unavailable
-          </div>
+          <EmptyState
+            tone={error ? "error" : "empty"}
+            message={
+              error
+                ? `Could not reach the LASCO ${camera} feed.`
+                : `No recent LASCO ${camera} movie.`
+            }
+            className="border-0 bg-transparent"
+          />
         )}
       </div>
     </div>

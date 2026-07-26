@@ -22,6 +22,13 @@ const config: Config = {
           green: "#22c55e",
           purple: "#a855f7",
         },
+        // Semantic aliases over the same variables as the slate scale below,
+        // so the two can never drift. Prefer these in new code; the existing
+        // ~600 text-slate-* call sites keep working unchanged.
+        content: "rgb(var(--slate-200) / <alpha-value>)",
+        muted: "rgb(var(--slate-400) / <alpha-value>)",
+        subtle: "rgb(var(--slate-500) / <alpha-value>)",
+        ring: "rgb(var(--ring) / <alpha-value>)",
         // Theme-aware slate scale (flips with .dark) so existing text-slate-*
         // utilities re-theme automatically.
         slate: {
@@ -39,7 +46,13 @@ const config: Config = {
         },
       },
       fontFamily: {
-        mono: ["JetBrains Mono", "Fira Code", "monospace"],
+        // var(--font-jetbrains-mono) is supplied by next/font in app/layout.tsx.
+        mono: [
+          "var(--font-jetbrains-mono)",
+          "JetBrains Mono",
+          "Fira Code",
+          "monospace",
+        ],
       },
     },
   },

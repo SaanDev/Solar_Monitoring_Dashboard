@@ -68,7 +68,9 @@ export function ShockResults({ id, summary, fit, bust }: Props) {
         <span className="text-slate-500">n = {fit.point_count}</span>
       </div>
 
-      {/* parameter table */}
+      {/* parameter table — needs its own scroll container so a narrow viewport
+          scrolls the table rather than the whole page body */}
+      <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <tbody>
           {ROWS.map((r) => (
@@ -86,6 +88,7 @@ export function ShockResults({ id, summary, fit, bust }: Props) {
           ))}
         </tbody>
       </table>
+      </div>
 
       {/* fit plot */}
       <div>

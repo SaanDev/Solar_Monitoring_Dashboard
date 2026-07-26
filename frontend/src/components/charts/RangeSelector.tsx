@@ -1,10 +1,11 @@
 "use client";
 
-import { clsx } from "clsx";
+import { Segmented } from "@/components/ui/Segmented";
 
 export interface RangeOption {
   key: string;
   label: string;
+  /** Window length used by callers via `RANGES.find(...)!.hours` — keep it. */
   hours: number;
 }
 
@@ -14,23 +15,22 @@ interface Props {
   onChange: (key: string) => void;
 }
 
+/**
+ * Thin wrapper over the shared `Segmented` control.
+ *
+ * Deliberately keeps its own `RangeOption` shape and prop names: 8+ call sites
+ * depend on both, and several read the semantic `hours` field off the same
+ * array they pass in here. Rendering now routes through Segmented so all range
+ * pickers share one appearance and gain `aria-pressed`.
+ */
 export function RangeSelector({ options, value, onChange }: Props) {
   return (
-    <div className="flex gap-1">
-      {options.map((o) => (
-        <button
-          key={o.key}
-          onClick={() => onChange(o.key)}
-          className={clsx(
-            "rounded px-2 py-0.5 text-[11px] transition-colors",
-            value === o.key
-              ? "bg-accent-blue/20 text-accent-blue"
-              : "text-slate-500 hover:bg-surface-muted hover:text-slate-300"
-          )}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
+    <Segmented
+      ariaLabel="Time range"
+      size="xs"
+      value={value}
+      onChange={onChange}
+      options={options.map((o) => ({ value: o.key, label: o.label }))}
+    />
   );
 }

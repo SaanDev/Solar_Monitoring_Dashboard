@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { api } from "@/lib/api";
 import { MagnetometerChart } from "@/components/charts/MagnetometerChart";
 import { RangeSelector, type RangeOption } from "@/components/charts/RangeSelector";
+import { UpdatingPill } from "@/components/ui/UpdatingPill";
 import { windowFor } from "@/lib/formatting";
 
 const RANGES: readonly RangeOption[] = [
@@ -19,10 +20,10 @@ export function OverviewMagnetometerChart() {
   const hours = RANGES.find((r) => r.key === range)!.hours;
   const { start, end } = windowFor(hours);
 
-  const { data, isLoading } = useSWR(
+  const { data, isLoading, isValidating } = useSWR(
     ["overview-goes-magnetometer", range],
     () => api.goesMagnetometer(start, end),
-    { refreshInterval: 60000 }
+    { refreshInterval: 60000, keepPreviousData: true }
   );
 
   return (
@@ -31,7 +32,10 @@ export function OverviewMagnetometerChart() {
         <h3 className="text-xs uppercase tracking-wider text-slate-500">
           GOES Magnetometer
         </h3>
-        <RangeSelector options={RANGES} value={range} onChange={setRange} />
+        <div className="flex items-center gap-2">
+          <UpdatingPill show={isValidating && !!data} inline />
+          <RangeSelector options={RANGES} value={range} onChange={setRange} />
+        </div>
       </div>
       <div className="flex-1">
         <MagnetometerChart data={data?.data ?? []} loading={isLoading} />

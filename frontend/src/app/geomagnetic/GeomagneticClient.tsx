@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import useSWR from "swr";
 import { api } from "@/lib/api";
+import { windowFor } from "@/lib/formatting";
 import { KpChart } from "@/components/charts/KpChart";
 import { DstChart } from "@/components/charts/DstChart";
 import { clsx } from "clsx";
@@ -17,13 +18,6 @@ const RANGES = [
 
 type RangeKey = (typeof RANGES)[number]["key"];
 
-function windowFor(hours: number) {
-  const now = new Date();
-  const end = now.toISOString().slice(0, 19) + "Z";
-  const start = new Date(now.getTime() - hours * 3600 * 1000).toISOString().slice(0, 19) + "Z";
-  return { start, end };
-}
-
 export function GeomagneticClient() {
   const [range, setRange] = useState<RangeKey>("3d");
   const hours = RANGES.find((r) => r.key === range)!.hours;
@@ -32,12 +26,12 @@ export function GeomagneticClient() {
   const { data: kpData, isLoading: kpLoading } = useSWR(
     ["kp", range],
     () => api.kp(start, end),
-    { refreshInterval: 180000 }
+    { refreshInterval: 180000, keepPreviousData: true }
   );
   const { data: dstData, isLoading: dstLoading } = useSWR(
     ["dst", range],
     () => api.dst(start, end),
-    { refreshInterval: 600000 }
+    { refreshInterval: 600000, keepPreviousData: true }
   );
   const { data: kpLatest } = useSWR("kp-latest", api.kpLatest, { refreshInterval: 180000 });
   const { data: dstLatest } = useSWR("dst-latest", api.dstLatest, { refreshInterval: 600000 });

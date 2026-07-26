@@ -104,7 +104,7 @@ export function HeightTimeControls({
       </div>
 
       {result && result.points.length > 0 && (
-        <div className="max-h-36 overflow-y-auto rounded border border-surface-border">
+        <div className="max-h-36 overflow-auto rounded border border-surface-border">
           <table className="w-full font-mono text-[10px] text-slate-400">
             <thead>
               <tr className="border-b border-surface-border text-slate-500">

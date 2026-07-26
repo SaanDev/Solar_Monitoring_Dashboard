@@ -350,6 +350,10 @@ export function HorizontalTimeline({
                   }}
                   onClick={() => onSelect(e)}
                   title={`${e.severity ?? ""} ${e.description}`.trim()}
+                  // These blocks have no children, so without an explicit name a
+                  // screen reader announced nothing at all for the page's main
+                  // visualization — `title` alone is not a reliable name here.
+                  aria-label={`${e.severity ? `${e.severity} ` : ""}${e.description}`.trim()}
                   className={clsx(
                     "absolute rounded-sm transition-[colors,opacity]",
                     selectedId === e.id ? c.selected : c.block,

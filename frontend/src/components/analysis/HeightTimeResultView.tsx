@@ -98,7 +98,7 @@ export function HeightTimeResultView({ result }: { result: HeightTimeResult | nu
         <h2 className="mb-2 text-xs uppercase tracking-wider text-slate-500">
           Track points
         </h2>
-        <div className="max-h-64 overflow-y-auto rounded border border-surface-border">
+        <div className="max-h-64 overflow-auto rounded border border-surface-border">
           <table className="w-full font-mono text-[11px] text-slate-300">
             <thead className="sticky top-0 bg-surface-card">
               <tr className="border-b border-surface-border text-slate-500">

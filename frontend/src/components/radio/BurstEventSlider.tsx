@@ -144,23 +144,32 @@ export function BurstEventSlider({
         </p>
       )}
 
-      {/* Dot indicators */}
-      <div className="mt-3 flex flex-wrap justify-center gap-1">
+      {/* Dot indicators. The dots themselves stay 6px for visual weight, but each
+          sits inside a 24px hit area (the WCAG target-size minimum) — they were
+          previously 6×6px targets with no accessible name. */}
+      <div role="tablist" aria-label="Burst events" className="mt-3 flex flex-wrap justify-center">
         {events.map((e, i) => (
           <button
             key={i}
+            role="tab"
+            aria-selected={i === index}
+            aria-label={`Burst ${i + 1} of ${events.length}: ${e.burst_type}, ${e.start}–${e.end}`}
             onClick={() => setIndex(i)}
             title={`${e.start}–${e.end} ${e.burst_type}`}
-            className={clsx(
-              "h-1.5 rounded-full transition-all",
-              i === index ? "w-5 bg-accent-blue" : "w-1.5",
-              e.stations.includes("SRI-Lanka")
-                ? "bg-accent-cyan/60"
-                : i === index
-                  ? ""
-                  : "bg-slate-700"
-            )}
-          />
+            className="flex h-6 w-6 items-center justify-center"
+          >
+            <span
+              className={clsx(
+                "h-1.5 rounded-full transition-all",
+                i === index ? "w-5 bg-accent-blue" : "w-1.5",
+                e.stations.includes("SRI-Lanka")
+                  ? "bg-accent-cyan/60"
+                  : i === index
+                    ? ""
+                    : "bg-slate-700"
+              )}
+            />
+          </button>
         ))}
       </div>
     </div>

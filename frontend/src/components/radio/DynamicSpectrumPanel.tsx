@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import type { RadioSpectrum } from "@/lib/types";
 import { formatUtcShort } from "@/lib/formatting";
 
