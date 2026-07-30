@@ -179,6 +179,65 @@ def _build_tv_backbone(normalized_name: str, in_channels: int, dropout: float, p
     raise ValueError(f"Unsupported model name: {normalized_name}")
 
 
+def _build_tv_classifier(
+    normalized_name: str, in_channels: int, num_classes: int
+) -> nn.Module:
+    """A torchvision backbone with its own head resized to ``num_classes``.
+
+    Deliberately separate from :func:`_build_tv_backbone`, which replaces the
+    head with ``Identity`` for feature extraction. The multi-class burst-type
+    checkpoint was saved from a plain torchvision model whose head was swapped
+    in place, so its state-dict keys are ``conv1.*`` / ``fc.*``. Wrapping a
+    feature backbone in ``nn.Sequential`` would produce ``0.*`` / ``1.*`` instead
+    and fail a strict load.
+    """
+    try:
+        import torchvision.models as tv
+    except ImportError as exc:
+        raise ImportError(
+            "torchvision is required for ResNet/EfficientNet models. "
+            "Install with: pip install -e '.[ml]'"
+        ) from exc
+
+    if normalized_name == "resnet18":
+        model = tv.resnet18(weights=None)
+        _replace_first_conv(model, in_channels)
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
+        return model
+
+    if normalized_name in {"efficientnet_b0", "mobilenet_v3_small"}:
+        factory = getattr(tv, normalized_name)
+        model = factory(weights=None)
+        _replace_first_conv(model, in_channels)
+        head = model.classifier[-1]
+        model.classifier[-1] = nn.Linear(head.in_features, num_classes)
+        return model
+
+    raise ValueError(f"Unsupported model name: {normalized_name}")
+
+
+def create_type_model(
+    name: str,
+    in_channels: int = 1,
+    dropout: float = 0.25,
+    *,
+    num_classes: int = 3,
+) -> nn.Module:
+    """Create the multi-class burst-type classifier (image-only, softmax head).
+
+    ``dropout`` is accepted for config symmetry but not applied: the trainer
+    wraps ``avgpool`` in a Dropout, which contributes no parameters and is inert
+    in ``eval()`` mode, so omitting it keeps the state dict loadable and the
+    outputs identical.
+    """
+    normalized = name.lower().replace("-", "_")
+    if normalized in {"simple_cnn", "small_cnn", "baseline"}:
+        base = SmallBurstCNN(in_channels=in_channels, dropout=dropout)
+        base.classifier[-1] = nn.Linear(128, num_classes)
+        return base
+    return _build_tv_classifier(normalized, in_channels, num_classes)
+
+
 def create_model(
     name: str,
     in_channels: int = 1,

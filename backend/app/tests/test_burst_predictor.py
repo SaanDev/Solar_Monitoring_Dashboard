@@ -191,7 +191,7 @@ async def test_job_lifecycle_scores_and_assembles(monkeypatch):
     async def _list_day_files(day):
         return files
 
-    async def _predict_url(url, filename=None):
+    async def _predict_url(url, filename=None, **kwargs):
         return {"predicted_label": "Burst", "burst_probability": 0.95, "alert_level": "High-confidence burst"}
 
     monkeypatch.setattr(bps, "list_day_files", _list_day_files)
@@ -228,7 +228,7 @@ async def test_predict_route_scopes_official_to_selected_stations(client, monkey
     async def _list_day_files(day):
         return files
 
-    async def _predict_url(url, filename=None):
+    async def _predict_url(url, filename=None, **kwargs):
         return {"predicted_label": "Burst", "burst_probability": 0.95, "alert_level": "High-confidence burst"}
 
     async def _official(day):
@@ -272,7 +272,7 @@ async def test_predict_status_raw_query_toggles_mode(client, monkeypatch):
     async def _list_day_files(day):
         return files
 
-    async def _predict_url(url, filename=None):
+    async def _predict_url(url, filename=None, **kwargs):
         return {"predicted_label": "Burst", "burst_probability": 0.95, "alert_level": "High-confidence burst"}
 
     monkeypatch.setattr(bps, "list_day_files", _list_day_files)
@@ -316,7 +316,7 @@ async def test_predict_processes_all_files_when_uncapped(monkeypatch):
     async def _list_day_files(day):
         return files
 
-    async def _predict_url(url, filename=None):
+    async def _predict_url(url, filename=None, **kwargs):
         return {"predicted_label": "No_Burst", "burst_probability": 0.1, "alert_level": "No alert"}
 
     monkeypatch.setattr(bps, "list_day_files", _list_day_files)

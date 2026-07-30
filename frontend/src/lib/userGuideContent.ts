@@ -444,8 +444,8 @@ const RADIO: GuideEntry[] = [
     title: "Burst Detector",
     category: "radio",
     short:
-      "Run the ML burst classifier over a day of e-CALLISTO data, then review, corroborate and export detected bursts.",
-    tags: ["burst", "ML", "detection", "e-CALLISTO"],
+      "Run a burst classifier over a day of e-CALLISTO data, optionally label burst types, then review, corroborate and export what it found.",
+    tags: ["burst", "ML", "detection", "e-CALLISTO", "CCM", "CCMT", "burst type"],
     body: [
       {
         kind: "para",
@@ -456,17 +456,24 @@ const RADIO: GuideEntry[] = [
         kind: "list",
         items: [
           "Pick a date (defaults to yesterday) and, optionally, which stations to include.",
-          "Click Run Scan to submit the job; the page polls its progress and shows results when finished.",
-          "After a scan, toggle between two views without re-scanning: Corroboration mode (default) keeps only detections that meet alert criteria (fewer, higher-confidence bursts), while Raw mode lists every segment the model flagged.",
-          "Each detected segment shows its probability (color-coded by confidence) and a dynamic-spectrum preview; segments seen by multiple stations are highlighted.",
-          "Compare to Official cross-checks detections against the e-CALLISTO daily burst list.",
-          "Export Events downloads the detections as CSV with timestamps.",
+          "Pick a Model: CCM v1.1.0 (default, newer, decision threshold 0.51) or CCM v1.0.0 (the original, threshold 0.595). A model shown as unavailable means its checkpoint has not been fetched — run 'git lfs pull'.",
+          "Tick 'Classify burst types' to also label each burst as Type II, Type III or Other using CCMT v1.0.0. This adds a second pass, so runs take longer.",
+          "Click Predict bursts to submit the job; the page polls its progress and shows results when finished.",
+          "After a scan, toggle between two views without re-scanning: Criteria mode (default) keeps only detections that meet alert criteria (fewer, higher-confidence bursts), while Raw mode lists every segment the model flagged. Changing the model or the type toggle does require a new run, because those change the scores.",
+          "Each detected segment shows its probability (color-coded by confidence), any burst type, and a dynamic-spectrum preview; segments seen by multiple stations are highlighted.",
+          "The Official e-CALLISTO Burst List panel cross-checks detections against the published daily list.",
+          "Export Events downloads the day's events as a .txt report, stamped with the model that produced them.",
         ],
       },
       {
         kind: "para",
         text:
-          "Tip: opening this page with a ?date=YYYY-MM-DD in the URL (for example from an alert link) pre-fills that date and shows the stored real-time detections for it.",
+          "How to read burst types: they are estimates, not measurements. The burst has to be found first by the binary model, then bright regions inside the segment are cropped and classified. If no region is large enough to classify reliably, the segment stays a burst with no type rather than being given a guess — 'mixed' on an event means its stations disagreed. Type III is the most reliable class; Other is the weakest. When the type matters, confirm it against the official burst list or in the e-CALLISTO Analyzer.",
+      },
+      {
+        kind: "para",
+        text:
+          "Tip: opening this page with a ?date=YYYY-MM-DD in the URL (for example from an alert link) pre-fills that date and shows the stored real-time detections for it. Those come from the background scan, which uses whichever model the server is configured with.",
       },
     ],
     link: { label: "Open Burst Detector", href: "/burst-predictor" },

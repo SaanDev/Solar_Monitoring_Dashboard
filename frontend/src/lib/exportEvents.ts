@@ -51,17 +51,22 @@ export function alertsToReportEvents(alerts: Alert[]): ReportEvent[] {
   return out;
 }
 
-/** Predicted burst-prediction events → radio-burst report rows. */
+/** Predicted burst-prediction events → radio-burst report rows.
+ *
+ * The model name is stamped into every row: a report that says "model
+ * prediction" without saying which model is not reproducible. */
 export function predictedToReportEvents(result: BurstPredictionResult): ReportEvent[] {
+  const model = result.model_name || result.model_id;
   return result.events.map((ev) => ({
     category: "radio_burst" as const,
     // ev.start is HH:MM UTC on the result's day; anchor it as a UTC instant.
     time: `${result.date}T${ev.start.length === 5 ? `${ev.start}:00` : ev.start}Z`,
-    title: "Radio Burst (model prediction)",
+    title: `Radio Burst (${model ? `${model} prediction` : "model prediction"})`,
     severity: ev.alert_level || "—",
     detail:
       `${ev.start}–${ev.end} UTC · ${ev.n_stations} station(s) · ` +
       `${ev.n_detections} detection(s) · peak p=${ev.max_probability.toFixed(3)}` +
+      (ev.dominant_type ? ` · type ${ev.dominant_type} (estimated)` : "") +
       (ev.matched_official ? " · matches official burst list" : ""),
   }));
 }

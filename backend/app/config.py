@@ -11,7 +11,7 @@ _DEFAULT_DATA_DIR = str(_BACKEND_ROOT / "data")
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    version: str = "0.1.0"
+    version: str = "1.0.0"
     log_level: str = "info"
 
     database_url: str = "postgresql+asyncpg://swdash:swdash@localhost:5432/swdash"
@@ -36,7 +36,10 @@ class Settings(BaseSettings):
     # the first-run backlog and keeps alerting focused on recent activity).
     radio_burst_max_age_hours: int = 3
     # Minimum burst probability for a detection to contribute to an alert/event.
-    radio_burst_alert_min_probability: float = 0.595
+    # 0 (default) = use the active model's own tuned decision threshold, which is
+    # per-model (CCM v1.0.0 = 0.595, CCM v1.1.0 = 0.51) and read from its
+    # checkpoint. Set a positive value only to deliberately gate *above* that.
+    radio_burst_alert_min_probability: float = 0.0
     # Corroboration filter for raising a burst ALERT: a 15-min window only becomes
     # a radio_burst event when at least this many distinct stations detected the
     # burst, with at least this many of them above the high-confidence probability.
@@ -49,6 +52,25 @@ class Settings(BaseSettings):
     # 0 (default) = no limit: process every available segment for the day across
     # all selected stations. Set a positive value only to bound a very large run.
     radio_burst_predict_max_files: int = 0
+    # Which binary model the automatic scan uses, and the page's default choice.
+    # Ids come from app/ml/registry.py: "ccm-1.0.0" | "ccm-1.1.0".
+    radio_burst_binary_model: str = "ccm-1.1.0"
+    # Second stage: classify the burst TYPE of every burst-positive file with
+    # CCMT. Runs on region crops (see app/ml/regions.py), never whole files.
+    radio_burst_classify_types: bool = True
+    radio_burst_type_model: str = "ccmt-1.0.0"
+    # Region proposals fed to the type model. Brightness in normalised [0,1]
+    # units where 0 = -1 dB and 1 = +8 dB above background; the effective
+    # threshold is capped adaptively per spectrum (see regions.resolve_threshold).
+    radio_burst_region_threshold: float = 0.35
+    radio_burst_region_min_area: int = 60
+    radio_burst_region_max: int = 8
+    # Smallest region worth typing, in pixels (frequency rows x time samples).
+    # Matches the smallest box CCMT was trained on, and drops e-CALLISTO's
+    # periodic narrow-band calibration marker, which otherwise fills every
+    # candidate slot. See app/ml/regions.py.
+    radio_burst_region_min_rows: int = 12
+    radio_burst_region_min_cols: int = 9
 
     # Subdirectories are derived from data_dir (see properties below) so a single
     # DATA_DIR controls all file storage.
@@ -101,17 +123,23 @@ class Settings(BaseSettings):
     briefing_interval_seconds: int = 1800
     briefing_max_tokens: int = 500
 
-    # ── Native ML inference (burst classifier) ────────────────────────────────
-    # Path to the ResNet-18 checkpoint. Relative paths are resolved from the
-    # backend package root. The checkpoint ships in the repo via Git LFS at
-    # backend/ml_model/best.pt, so a normal `git clone` + `git lfs pull` brings
-    # it down automatically — no manual download needed.
-    ml_model_path: str = "ml_model/best.pt"
-    # Optional direct download URL — only a fallback for environments without
+    # ── Native ML inference (burst classifiers) ───────────────────────────────
+    # Paths to the ResNet-18 checkpoints. Relative paths are resolved from the
+    # backend package root. They ship in the repo via Git LFS under
+    # backend/ml_model/, so a normal `git clone` + `git lfs pull` brings them
+    # down automatically — no manual download needed. See app/ml/registry.py for
+    # which id maps to which path.
+    ml_model_path: str = "ml_model/best.pt"            # CCM v1.0.0 (binary)
+    ml_ccm_v110_path: str = "ml_model/ccm_v1_1_0.pt"   # CCM v1.1.0 (binary)
+    ml_ccmt_v100_path: str = "ml_model/ccmt_v1_0_0.pt"  # CCMT v1.0.0 (burst type)
+    # Optional direct download URLs — only a fallback for environments without
     # Git LFS (e.g. a GitHub "Download ZIP" that ships LFS pointer files).
-    # Set via ML_MODEL_URL in .env; leave empty to rely on the LFS copy.
+    # Set via ML_MODEL_URL / ML_CCM_V110_URL / ML_CCMT_V100_URL in .env; leave
+    # empty to rely on the LFS copies.
     ml_model_url: str = ""
-    # When True and the checkpoint is missing AND a URL is set, download on startup.
+    ml_ccm_v110_url: str = ""
+    ml_ccmt_v100_url: str = ""
+    # When True and a checkpoint is missing AND its URL is set, download on startup.
     ml_model_auto_download: bool = True
     # Device for torch inference: "auto" (CUDA > MPS > CPU), "cpu", "cuda", "mps".
     ml_inference_device: str = "auto"

@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cache import cache_get_json, cache_set_json
 from app.collectors.collect_burst_list import BurstEvent, fetch_burst_list_text, parse_burst_list
-from app.config import settings
+from app.ml.registry import alert_min_probability, resolve_binary
 from app.repositories.radio_detection_repo import detections_for_range
 from app.schemas.radio_schema import (
     BurstScorecardResponse,
@@ -55,10 +55,21 @@ def _seconds(t: time_cls) -> int:
     return t.hour * 3600 + t.minute * 60 + t.second
 
 
-def day_stats(day: date_cls, rows: list[dict], official: list[BurstEvent]) -> dict:
+def day_stats(
+    day: date_cls,
+    rows: list[dict],
+    official: list[BurstEvent],
+    min_prob: float | None = None,
+) -> dict:
     """Pure per-day comparison (unit-testable): stored detection rows +
-    official events -> counts and two-way match totals."""
-    min_prob = settings.radio_burst_alert_min_probability
+    official events -> counts and two-way match totals.
+
+    ``min_prob`` defaults to the active model's alert minimum — it has to be
+    per-model, since the two binary classifiers have different thresholds and a
+    single figure would score one of them unfairly.
+    """
+    if min_prob is None:
+        min_prob = alert_min_probability(resolve_binary())
     bursts = [
         _detection_dict(r)
         for r in rows
@@ -156,7 +167,11 @@ async def get_official_bursts_range(
 
 
 async def get_scorecard(db: AsyncSession, days: int) -> BurstScorecardResponse:
-    key = f"radio:scorecard:{days}"
+    # Cache per model: the window's recall/precision belongs to whichever model
+    # scored it, so a model switch must not serve the previous one's figures.
+    spec = resolve_binary()
+    min_prob = alert_min_probability(spec)
+    key = f"radio:scorecard:{days}:{spec.id}"
     cached = await cache_get_json(key)
     if cached is not None:
         return BurstScorecardResponse.model_validate(cached)
@@ -170,7 +185,7 @@ async def get_scorecard(db: AsyncSession, days: int) -> BurstScorecardResponse:
         day = first + timedelta(days=i)
         start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
         rows = await detections_for_range(db, start, start + timedelta(days=1))
-        stats = day_stats(day, rows, official.get(day, []))
+        stats = day_stats(day, rows, official.get(day, []), min_prob=min_prob)
         stats["pending"] = (today - day).days < PENDING_DAYS
         daily.append(stats)
 

@@ -922,22 +922,40 @@ const METHODS: ReferenceEntry[] = [
     title: "Machine-Learning Burst Detection",
     category: "methods",
     short:
-      "A neural-network model that scans daily CALLISTO spectrograms to detect and score candidate radio bursts, corroborated across stations.",
-    aka: ["burst predictor", "CNN", "classification", "scorecard", "precision recall"],
+      "Neural-network models that scan daily CALLISTO spectrograms to detect and score candidate radio bursts, corroborated across stations, with an optional burst-type stage.",
+    aka: [
+      "burst predictor", "CNN", "classification", "scorecard", "precision recall",
+      "CCM", "CCMT", "burst type", "Type II", "Type III",
+    ],
     tags: ["machine learning", "radio", "detection"],
     body: [
       {
         kind: "para",
         text:
-          "The Burst Detector runs the day's CALLISTO spectrograms through a trained classifier (served by a companion Burst Identifier microservice). Each spectrogram segment receives a burst probability and alert level.",
+          "The Burst Detector runs the day's CALLISTO spectrograms through a trained classifier inside the dashboard backend. Each spectrogram segment receives a burst probability and alert level. Two binary classifiers are selectable: CCM v1.0.0 (the original, decision threshold 0.595) and CCM v1.1.0 (retrained, threshold 0.51, validation F1 0.92). Both are ResNet-18 networks that see the whole 15-minute segment as a 224x224 image, fused with station, frequency-range and date metadata.",
       },
       {
         kind: "para",
         text:
-          "To suppress false alarms from local RFI, detections are corroborated across multiple stations before being grouped into events; a 'raw' mode exposes the unfiltered model output. Performance is tracked against the official e-CALLISTO burst list on a trailing scorecard reporting precision (fraction of predicted events that were real) and recall (fraction of official bursts the model caught).",
+          "A second, optional stage labels the burst TYPE. CCMT v1.0.0 is a 3-class classifier over Type II, Type III and Other, and it runs only on segments a binary model already flagged as a burst. Because it was trained on tight crops around individual bursts rather than whole files, the segment is first searched for bright connected regions, each region is cropped, and CCMT classifies the crops; the largest classified region gives the segment its type.",
+      },
+      {
+        kind: "para",
+        text:
+          "Treat types as estimates. The region search is a brightness heuristic, not a detector — it cannot tell a burst from strong RFI — and CCMT has no background class, so regions too small to be in its training distribution are discarded rather than guessed at. A burst can therefore be detected but left untyped, which is the honest outcome when nothing classifiable was found. The weakest class is Other (validation F1 0.75 on only 13 samples).",
+      },
+      {
+        kind: "para",
+        text:
+          "To suppress false alarms from local RFI, detections are corroborated across multiple stations before being grouped into events; a 'raw' mode exposes the unfiltered model output. Performance is tracked against the official e-CALLISTO burst list on a trailing scorecard reporting precision (fraction of predicted events that were real) and recall (fraction of official bursts the model caught). The scorecard is scoped to one model at a time, since each has its own decision threshold.",
       },
     ],
-    dataSources: ["e-CALLISTO spectra", "Burst Identifier ML service", "Official burst list"],
+    dataSources: [
+      "e-CALLISTO spectra",
+      "CCM v1.0.0 / v1.1.0 burst classifiers",
+      "CCMT v1.0.0 burst-type classifier",
+      "Official burst list",
+    ],
     usedIn: ["Burst Detector"],
   },
   {

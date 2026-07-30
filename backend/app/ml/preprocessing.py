@@ -11,6 +11,11 @@ Pipeline per file:
   5. Resize to the model's target shape (224×224).
   6. Return [1, H, W] float32 numpy array + metadata dict.
 
+Steps 2-4 are split out as :func:`normalize_full_spectrum` because the burst-type
+model (CCMT) is fed *crops*: background subtraction must run over the whole
+file's time axis **before** slicing, otherwise a burst becomes its own baseline
+and is erased. :func:`crop_from_normalized` then slices and resizes.
+
 All numeric steps are pure NumPy — identical results on every machine.
 """
 from __future__ import annotations
@@ -111,14 +116,69 @@ def _compute_frequency_bounds(
     return float(min(first, last)), float(max(first, last))
 
 
-def _extract_metadata(path: str | Path, hdul: Any) -> dict[str, Any]:
+def _column_array(table: Any, name: str) -> np.ndarray | None:
+    """A FITS bintable column as a flat float array, or None.
+
+    e-CALLISTO ``AXES`` tables store each axis as one row holding an array cell,
+    so the raw column comes back shaped (1, N); ravel handles both that and the
+    plain (N,) layout.
+    """
+    try:
+        column = table.data[name]
+    except (KeyError, TypeError, AttributeError):
+        return None
+    try:
+        values = np.asarray(column, dtype=np.float64).ravel()
+    except (TypeError, ValueError):
+        return None
+    return values if values.size else None
+
+
+def _find_axes_frequencies(
+    hdul: Any, n_freq: int | None, n_time: int | None
+) -> np.ndarray | None:
+    """The FREQUENCY axis from an ``AXES``-style bintable, if one is present.
+
+    Located by structure rather than by name — the extension carries both TIME
+    and FREQUENCY columns whose lengths match the image axes — with an extension
+    literally named AXES preferred. This is the axis the training pipeline used
+    (``freq_axis_source == "axes_table"`` on every training row); the
+    CRVAL2/CDELT2 header fallback is known to be wrong on many stations.
+    """
+    if not n_freq:
+        return None
+    candidates = list(hdul[1:])
+    candidates.sort(key=lambda h: 0 if str(getattr(h, "name", "")).upper() == "AXES" else 1)
+    for hdu in candidates:
+        freqs = _column_array(hdu, "FREQUENCY")
+        if freqs is None or freqs.size != n_freq:
+            continue
+        times = _column_array(hdu, "TIME")
+        if times is None or (n_time and times.size != n_time):
+            continue
+        return freqs
+    return None
+
+
+def _extract_metadata(
+    path: str | Path, hdul: Any, freq_source: str = "header"
+) -> dict[str, Any]:
     fallback = parse_filename_fallback(path)
     header = hdul[0].header
     data = hdul[0].data
     shape = tuple(data.shape) if data is not None else ()
     n_freq = int(shape[-2]) if len(shape) >= 2 else None
     n_time = int(shape[-1]) if len(shape) >= 2 else None
-    freq_min, freq_max = _compute_frequency_bounds(header, n_freq=n_freq)
+
+    freq_axis: np.ndarray | None = None
+    freq_min = freq_max = None
+    if freq_source == "axes":
+        freq_axis = _find_axes_frequencies(hdul, n_freq, n_time)
+        if freq_axis is not None:
+            freq_min = float(np.min(freq_axis))
+            freq_max = float(np.max(freq_axis))
+    if freq_min is None:
+        freq_min, freq_max = _compute_frequency_bounds(header, n_freq=n_freq)
 
     header_date = _format_date_token(_clean_header_string(header.get("DATE-OBS")))
     header_time = _format_time_token(_clean_header_string(header.get("TIME-OBS")))
@@ -132,10 +192,18 @@ def _extract_metadata(path: str | Path, hdul: Any) -> dict[str, Any]:
         "freq_max_mhz": freq_max,
         "n_freq": n_freq,
         "n_time": n_time,
+        # Per-row frequencies when available (row 0 is normally the HIGHEST
+        # frequency — the FREQUENCY column is stored descending). Used to label
+        # burst-type region proposals in MHz; None falls back to interpolating
+        # between freq_min/freq_max.
+        "freq_axis": freq_axis,
+        "freq_axis_source": "axes_table" if freq_axis is not None else "header",
     }
 
 
-def read_fits_spectrum(path: str | Path) -> tuple[np.ndarray, dict[str, Any]]:
+def read_fits_spectrum(
+    path: str | Path, freq_source: str = "header"
+) -> tuple[np.ndarray, dict[str, Any]]:
     """Return (spectrum [freq, time] float32, metadata dict)."""
     fits = _import_fits()
     with fits.open(path, memmap=False) as hdul:
@@ -147,7 +215,7 @@ def read_fits_spectrum(path: str | Path) -> tuple[np.ndarray, dict[str, Any]]:
             raise ValueError(
                 f"Expected a 2D spectrum in {path}, got shape {spectrum.shape}"
             )
-        metadata = _extract_metadata(path, hdul)
+        metadata = _extract_metadata(path, hdul, freq_source=freq_source)
     return spectrum, metadata
 
 
@@ -219,48 +287,158 @@ def resize_spectrum(spectrum: np.ndarray, target_shape: tuple[int, int] = (224, 
     return data.astype(np.float32)
 
 
-def preprocess_array(spectrum: np.ndarray, config: dict[str, Any]) -> np.ndarray:
-    """Full pipeline: clean → background → normalize → resize → [1, H, W]."""
+def target_shape_of(config: dict[str, Any]) -> tuple[int, int]:
+    shape = tuple(config["data"]["target_shape"])
+    return int(shape[0]), int(shape[1])
+
+
+def normalize_full_spectrum(spectrum: np.ndarray, config: dict[str, Any]) -> np.ndarray:
+    """clean → background → normalize on the **whole** file, without resizing.
+
+    Kept separate from the resize so a crop can be taken afterwards: the
+    row-median baseline must be computed over the file's full time axis, or a
+    burst that fills its own crop would be subtracted away.
+    """
     prep = config["preprocessing"]
-    target_shape = tuple(config["data"]["target_shape"])
     data = clean_invalid_values(spectrum)
     data = plotutil_median_db(data)
-    data = db_window_normalize(
+    return db_window_normalize(
         data,
         vmin=float(prep.get("db_vmin", PLOTUTIL_DISPLAY_LIMITS[0])),
         vmax=float(prep.get("db_vmax", PLOTUTIL_DISPLAY_LIMITS[1])),
     )
-    data = resize_spectrum(data, target_shape=target_shape)
+
+
+def expand_box(
+    box: tuple[int, int, int, int],
+    shape: tuple[int, int],
+    context_margin: float = 0.0,
+    min_rows: int = 1,
+    min_cols: int = 1,
+) -> tuple[int, int, int, int]:
+    """Grow a half-open pixel box by a fractional margin, clipped to ``shape``.
+
+    Both trained runs use ``context_margin: 0.0``, so this is a no-op today; it
+    exists so a checkpoint retrained with a margin still crops the way it was
+    trained.
+    """
+    row0, row1, col0, col1 = (int(v) for v in box)
+    n_rows, n_cols = int(shape[0]), int(shape[1])
+    margin = float(context_margin)
+
+    if margin > 0:
+        pad_rows = int(round((row1 - row0) * margin))
+        pad_cols = int(round((col1 - col0) * margin))
+        row0, row1 = row0 - pad_rows, row1 + pad_rows
+        col0, col1 = col0 - pad_cols, col1 + pad_cols
+
+    row0, col0 = max(0, row0), max(0, col0)
+    row1, col1 = min(n_rows, row1), min(n_cols, col1)
+    # Guarantee the minimum extent even at an edge, by growing away from it.
+    if row1 - row0 < min_rows:
+        row1 = min(n_rows, row0 + min_rows)
+        row0 = max(0, row1 - min_rows)
+    if col1 - col0 < min_cols:
+        col1 = min(n_cols, col0 + min_cols)
+        col0 = max(0, col1 - min_cols)
+    return row0, row1, col0, col1
+
+
+def crop_from_normalized(
+    normalized: np.ndarray,
+    box: tuple[int, int, int, int],
+    target_shape: tuple[int, int] = (224, 224),
+    context_margin: float = 0.0,
+    min_rows: int = 1,
+    min_cols: int = 1,
+) -> np.ndarray:
+    """Slice an already-normalized spectrum and resize the patch to [1, H, W].
+
+    ``box`` is half-open ``(row0, row1, col0, col1)`` — rows are frequency
+    channels, columns time samples. ``normalized`` must be the output of
+    :func:`normalize_full_spectrum` for the whole file.
+    """
+    if normalized.ndim != 2:
+        raise ValueError(f"Expected a 2D normalized spectrum, got {normalized.shape}")
+    row0, row1, col0, col1 = expand_box(
+        box, normalized.shape, context_margin, min_rows, min_cols
+    )
+    if row1 <= row0 or col1 <= col0:
+        raise ValueError(f"Empty crop for box {box} in shape {normalized.shape}")
+    patch = normalized[row0:row1, col0:col1]
+    resized = resize_spectrum(patch, target_shape=target_shape)
+    return resized[np.newaxis, :, :].astype(np.float32)
+
+
+def whole_file_box(shape: tuple[int, int]) -> tuple[int, int, int, int]:
+    return 0, int(shape[0]), 0, int(shape[1])
+
+
+def preprocess_array(spectrum: np.ndarray, config: dict[str, Any]) -> np.ndarray:
+    """Full pipeline: clean → background → normalize → resize → [1, H, W]."""
+    data = normalize_full_spectrum(spectrum, config)
+    data = resize_spectrum(data, target_shape=target_shape_of(config))
     return data[np.newaxis, :, :].astype(np.float32)
 
 
 def preprocess_file(
     file_path: str | Path,
     config: dict[str, Any],
+    freq_source: str = "header",
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Read a FITS file and return (tensor [1,H,W], metadata dict)."""
-    spectrum, metadata = read_fits_spectrum(file_path)
+    spectrum, metadata = read_fits_spectrum(file_path, freq_source=freq_source)
     tensor = preprocess_array(spectrum, config)
     return tensor, metadata
+
+
+def _with_real_filename(content: bytes, filename: str):
+    """Context helper: write bytes to a temp dir under their real filename.
+
+    The binary models are metadata-conditioned on station and date, which are
+    parsed from the e-CALLISTO filename ``STATION_YYYYMMDD_HHMMSS_NN.fit.gz``, so
+    a random tmp name would change the features. Returns a context manager
+    yielding the path.
+    """
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _ctx():
+        safe = Path(filename).name or "remote.fit.gz"
+        tmpdir = Path(tempfile.mkdtemp(prefix="swd_ml_"))
+        try:
+            path = tmpdir / safe
+            path.write_bytes(content)
+            yield path
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    return _ctx()
 
 
 def preprocess_bytes(
     content: bytes,
     filename: str,
     config: dict[str, Any],
+    freq_source: str = "header",
 ) -> tuple[np.ndarray, dict[str, Any]]:
-    """Preprocess raw FITS bytes preserving the real filename.
+    """Preprocess raw FITS bytes preserving the real filename."""
+    with _with_real_filename(content, filename) as path:
+        return preprocess_file(path, config, freq_source=freq_source)
 
-    The model is metadata-conditioned: date and station are parsed from the
-    e-CALLISTO filename ``STATION_YYYYMMDD_HHMMSS_NN.fit.gz``.  Writing the
-    bytes under the real filename (not a random tmp name) keeps the metadata
-    features identical to scoring the file directly from the archive.
+
+def read_and_normalize_bytes(
+    content: bytes,
+    filename: str,
+    config: dict[str, Any],
+    freq_source: str = "header",
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Raw FITS bytes → (normalized full spectrum [freq, time], metadata).
+
+    The un-resized normalized array is what both stages of the burst cascade
+    need: the whole-file crop for the binary model and per-region crops for the
+    type model, from one read and one background pass.
     """
-    safe = Path(filename).name or "remote.fit.gz"
-    tmpdir = Path(tempfile.mkdtemp(prefix="swd_ml_"))
-    try:
-        path = tmpdir / safe
-        path.write_bytes(content)
-        return preprocess_file(path, config)
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+    with _with_real_filename(content, filename) as path:
+        spectrum, metadata = read_fits_spectrum(path, freq_source=freq_source)
+    return normalize_full_spectrum(spectrum, config), metadata

@@ -67,14 +67,20 @@ Open [http://localhost:3000](http://localhost:3000).
 docker compose up postgres redis
 ```
 
-### 5. Radio-burst ML model (native inference)
+### 5. Radio-burst ML models (native inference)
 
-The solar radio-burst classifier (ResNet-18) runs **natively inside the backend**
-— no separate microservice. The trained checkpoint ships in the repo via Git LFS
-at `backend/ml_model/best.pt`.
+The solar radio-burst classifiers (ResNet-18) run **natively inside the backend**
+— no separate microservice. Three checkpoints ship in the repo via Git LFS under
+`backend/ml_model/`:
+
+| Model | File | Task | Notes |
+|---|---|---|---|
+| **CCM v1.0.0** | `best.pt` | burst / no-burst | The original classifier. Threshold 0.595. Unchanged — kept selectable so past results stay comparable. |
+| **CCM v1.1.0** | `ccm_v1_1_0.pt` | burst / no-burst | Retrained. Threshold 0.51, validation F1 0.920, test F1 0.932. **Default.** |
+| **CCMT v1.0.0** | `ccmt_v1_0_0.pt` | burst type | 3-class (Type II / Type III / Other), validation accuracy 0.966, macro-F1 0.889. Runs only on segments a CCM model flagged as a burst. |
 
 ```bash
-# One-time per machine, then fetch the checkpoint:
+# One-time per machine, then fetch the checkpoints:
 git lfs install
 git lfs pull
 
@@ -83,9 +89,29 @@ cd backend
 pip install -e ".[ml]"
 ```
 
-On Apple Silicon Macs, PyTorch automatically uses the MPS backend. The model is
+Which model the *automatic* scan uses is configuration
+(`RADIO_BURST_BINARY_MODEL`, `RADIO_BURST_CLASSIFY_TYPES`); the Burst Detector
+page lets you pick per run. `GET /api/radio/models` lists what is available.
+`app/ml/registry.py` is the single source of truth for model ids and paths.
+
+CCMT is a *classifier*, not a detector: it was trained on hand-drawn crops around
+individual bursts, so the cascade finds bright connected regions inside a
+burst-positive segment, crops each, and classifies the crops. Regions smaller
+than CCMT's training distribution are discarded rather than guessed at, so a
+burst may legitimately come back untyped. Treat types as estimates.
+
+On Apple Silicon Macs, PyTorch automatically uses the MPS backend. Models are
 loaded once at startup; a missing checkpoint or missing PyTorch is non-fatal —
-burst detection is simply disabled and logged.
+that model is simply unavailable and logged.
+
+**Adding a retrained checkpoint.** Trainer `best.pt` files carry optimizer state
+(~128 MB). `scripts/repack_model.py` strips it down to `{model_state, config}`
+(~43 MB), which is all the loader reads, and prints the architecture, threshold
+and class map so the right run can be confirmed before committing:
+
+```bash
+python scripts/repack_model.py --all
+```
 
 ## Full stack with Docker
 

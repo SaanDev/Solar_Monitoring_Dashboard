@@ -119,7 +119,7 @@ def _install_archive(monkeypatch, files: list[FitsFile]) -> None:
 
 
 def _install_inference(monkeypatch, burst_stations: set[str], counter: list[int]) -> None:
-    async def _predict_url(url, filename=None):
+    async def _predict_url(url, filename=None, **kwargs):
         counter[0] += 1
         is_burst = any(s in (filename or url) for s in burst_stations)
         return {
@@ -178,7 +178,7 @@ async def test_scan_resilient_when_inference_unavailable(db_session, monkeypatch
     files = [_file_at("SRI-Lanka", _recent_start())]
     _install_archive(monkeypatch, files)
 
-    async def _predict_url(url, filename=None):
+    async def _predict_url(url, filename=None, **kwargs):
         return None  # service unreachable -> client returns None
 
     monkeypatch.setattr(rbs, "predict_url", _predict_url)
@@ -213,13 +213,13 @@ async def test_scan_records_ok_status(db_session, monkeypatch):
 
 
 async def test_scan_reports_inference_unreachable(db_session, monkeypatch):
-    # Files exist to score, but the inference client returns None for all of them
-    # (microservice down) — the scan must surface this, not fail silently.
+    # Files exist to score, but inference returns None for all of them (model
+    # never loaded) — the scan must surface this, not fail silently.
     _install_archive(
         monkeypatch, [_file_at("SRI-Lanka", _recent_start()), _file_at("HUMAIN", _recent_start())]
     )
 
-    async def _down(url, filename=None):
+    async def _down(url, filename=None, **kwargs):
         return None
 
     monkeypatch.setattr(rbs, "predict_url", _down)
@@ -228,7 +228,8 @@ async def test_scan_reports_inference_unreachable(db_session, monkeypatch):
 
     status = await get_all(db_session)
     assert status[rbs.SOURCE_NAME].status == "error"
-    assert "inference service unreachable" in (status[rbs.SOURCE_NAME].last_error or "")
+    # The message names the model that produced nothing.
+    assert "produced no results" in (status[rbs.SOURCE_NAME].last_error or "")
 
 
 async def test_scan_reports_archive_unreachable(db_session, monkeypatch):
