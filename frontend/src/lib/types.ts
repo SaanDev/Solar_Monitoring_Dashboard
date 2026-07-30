@@ -473,7 +473,42 @@ export interface BurstCandidate {
   status: "pending" | "accepted" | "rejected";
 }
 
+// ─── Burst classifier registry (selectable models) ───────────────────────────
+
+export interface ModelInfo {
+  id: string; // "ccm-1.1.0"
+  name: string; // "CCM v1.1.0"
+  full_name: string;
+  kind: "binary" | "type";
+  version: string;
+  description: string;
+  /** False when the checkpoint is missing or an unpulled Git LFS pointer. */
+  available: boolean;
+  threshold: number | null; // binary models only
+  classes: string[];
+  metrics: Record<string, number>;
+  is_default: boolean;
+}
+
+export interface ModelsResponse {
+  models: ModelInfo[];
+  default_binary: string;
+  type_model: string | null;
+  classify_types: boolean;
+}
+
 // ─── Burst Predictor (ML daily prediction vs official burst list) ─────────────
+
+/** A bright region inside one segment, with its predicted burst type. */
+export interface TypedRegion {
+  freq_min_mhz: number | null;
+  freq_max_mhz: number | null;
+  start_seconds: number; // from the start of the segment
+  end_seconds: number;
+  burst_type: string | null;
+  confidence: number | null;
+  area: number;
+}
 
 export interface PredictedDetection {
   station: string;
@@ -482,6 +517,10 @@ export interface PredictedDetection {
   time: string; // HH:MM:SS UTC
   probability: number;
   alert_level: string;
+  /** Null when typing was off or nothing in-distribution was found to classify. */
+  burst_type: string | null;
+  type_confidence: number | null;
+  regions: TypedRegion[];
 }
 
 export interface PredictedEvent {
@@ -495,6 +534,9 @@ export interface PredictedEvent {
   stations: string[];
   max_probability: number;
   alert_level: string;
+  /** Type of the most confident typed detection, and how the others voted. */
+  dominant_type: string | null;
+  type_counts: Record<string, number>;
   matched_official: boolean;
   detections: PredictedDetection[];
 }
@@ -518,6 +560,11 @@ export interface BurstPredictionResult {
   official_events: OfficialBurstCompare[];
   official_count: number;
   matched_count: number;
+  model_id: string; // binary classifier that scored these rows
+  model_name: string;
+  classify_types: boolean;
+  type_model_id: string | null;
+  type_counts: Record<string, number>; // burst files per type
 }
 
 export interface BurstPredictionJob {
@@ -527,6 +574,8 @@ export interface BurstPredictionJob {
   total: number;
   date: string;
   stations: string[];
+  model_id: string;
+  classify_types: boolean;
   error: string | null;
   result: BurstPredictionResult | null;
 }

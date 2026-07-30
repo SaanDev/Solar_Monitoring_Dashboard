@@ -108,6 +108,9 @@ class RadioBurstDetectionResponse(BaseModel):
     probability: float
     predicted_label: str
     alert_level: str
+    model_id: str = ""                 # which classifier produced this verdict
+    burst_type: str | None = None      # "Type II" | "Type III" | "Other"
+    type_confidence: float | None = None
 
 
 class RadioBurstDetectionsResponse(BaseModel):
@@ -115,6 +118,33 @@ class RadioBurstDetectionsResponse(BaseModel):
     count: int = 0
     burst_count: int = 0  # how many were classified Burst
     detections: list[RadioBurstDetectionResponse] = []
+
+
+# ── Model registry (which classifiers are available to run) ───────────────────
+
+
+class ModelInfo(BaseModel):
+    """One selectable classifier, as advertised to the UI."""
+    id: str                            # "ccm-1.1.0"
+    name: str                          # "CCM v1.1.0"
+    full_name: str
+    kind: str                          # "binary" (burst / no-burst) | "type"
+    version: str
+    description: str
+    # False when the checkpoint is missing or still a Git LFS pointer — the UI
+    # greys the option out instead of letting a run fail mid-scan.
+    available: bool = True
+    threshold: float | None = None     # binary models only
+    classes: list[str] = []
+    metrics: dict[str, float] = {}
+    is_default: bool = False
+
+
+class ModelsResponse(BaseModel):
+    models: list[ModelInfo] = []
+    default_binary: str                # id the page should preselect
+    type_model: str | None = None      # id used for the burst-type stage
+    classify_types: bool = True        # server default for the type stage
 
 
 # ── Burst Predictor (on-demand daily prediction vs official burst list) ───────
@@ -127,6 +157,22 @@ class BurstPredictionRequest(BaseModel):
     # alert filter). True = raw model output: every segment the model labels
     # "Burst" becomes an event, so a narrow station selection never hides bursts.
     raw: bool = False
+    # Binary classifier id; null = the server default. Unlike `raw`, this changes
+    # the scores, so it is fixed for the job's lifetime.
+    model: str | None = None
+    # Run the burst-type stage on burst-positive files; null = server default.
+    classify_types: bool | None = None
+
+
+class TypedRegion(BaseModel):
+    """A bright region inside one segment, with its predicted burst type."""
+    freq_min_mhz: float | None = None
+    freq_max_mhz: float | None = None
+    start_seconds: int                 # from the start of the segment
+    end_seconds: int
+    burst_type: str | None = None
+    confidence: float | None = None
+    area: int = 0                      # pixels above the brightness threshold
 
 
 class PredictedDetection(BaseModel):
@@ -136,6 +182,10 @@ class PredictedDetection(BaseModel):
     time: str                          # HH:MM:SS UTC
     probability: float
     alert_level: str
+    # Null when typing was off or nothing in-distribution was found to classify.
+    burst_type: str | None = None
+    type_confidence: float | None = None
+    regions: list[TypedRegion] = []
 
 
 class PredictedEvent(BaseModel):
@@ -149,6 +199,9 @@ class PredictedEvent(BaseModel):
     stations: list[str]
     max_probability: float
     alert_level: str
+    # Type of the most confident typed detection, and how the others voted.
+    dominant_type: str | None = None
+    type_counts: dict[str, int] = {}
     matched_official: bool = False     # overlaps an official burst-list event
     detections: list[PredictedDetection] = []
 
@@ -172,6 +225,11 @@ class BurstPredictionResult(BaseModel):
     official_events: list[OfficialBurstCompare] = []
     official_count: int = 0
     matched_count: int = 0             # predicted events matching the official list
+    model_id: str = ""                 # binary classifier that scored these rows
+    model_name: str = ""
+    classify_types: bool = False
+    type_model_id: str | None = None
+    type_counts: dict[str, int] = {}   # burst files per type, e.g. {"Type III": 4}
 
 
 class BurstPredictionJob(BaseModel):
@@ -181,6 +239,8 @@ class BurstPredictionJob(BaseModel):
     total: int = 0
     date: str
     stations: list[str] = []
+    model_id: str = ""
+    classify_types: bool = False
     error: str | None = None
     result: BurstPredictionResult | None = None
 

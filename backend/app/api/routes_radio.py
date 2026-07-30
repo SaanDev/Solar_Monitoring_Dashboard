@@ -25,8 +25,11 @@ from app.schemas.radio_schema import (
     BurstPredictionJob,
     BurstPredictionResult,
     BurstScorecardResponse,
+    ModelInfo,
+    ModelsResponse,
     OfficialBurstRangeResponse,
 )
+from app.ml import registry
 from app.services import burst_predictor_service as predictor
 from app.services.burst_scorecard_service import get_official_bursts_range, get_scorecard
 from app.services.ecallisto_service import (
@@ -125,6 +128,9 @@ async def burst_detections(
             probability=r["probability"],
             predicted_label=r["predicted_label"],
             alert_level=r["alert_level"],
+            model_id=r.get("model_id") or "",
+            burst_type=r.get("burst_type"),
+            type_confidence=r.get("type_confidence"),
         )
         for r in rows
     ]
@@ -134,6 +140,43 @@ async def burst_detections(
         count=len(detections),
         burst_count=burst_count,
         detections=detections,
+    )
+
+
+@router.get("/models", response_model=ModelsResponse)
+async def list_models() -> ModelsResponse:
+    """The burst classifiers this backend can run, for the model selector.
+
+    ``available`` reflects whether each checkpoint is actually on disk (and not
+    an unpulled Git LFS pointer), so the UI can disable a model up front rather
+    than surfacing a mid-scan failure.
+
+    Declared before ``/predict/{job_id}`` for consistency with the other fixed
+    paths in this router.
+    """
+    default_binary = registry.resolve_binary()
+    type_spec = registry.resolve_type()
+    models = [
+        ModelInfo(
+            id=spec.id,
+            name=spec.name,
+            full_name=spec.full_name,
+            kind=spec.kind,
+            version=spec.version,
+            description=spec.description,
+            available=registry.is_available(spec),
+            threshold=spec.metrics.get("threshold") if spec.kind == "binary" else None,
+            classes=list(spec.classes),
+            metrics=dict(spec.metrics),
+            is_default=spec.id in (default_binary.id, type_spec.id),
+        )
+        for spec in registry.list_specs()
+    ]
+    return ModelsResponse(
+        models=models,
+        default_binary=default_binary.id,
+        type_model=type_spec.id,
+        classify_types=registry.classify_types_default(),
     )
 
 
@@ -147,9 +190,22 @@ async def start_prediction(req: BurstPredictionRequest) -> BurstPredictionJob:
     if day > datetime.now(timezone.utc).date():
         raise HTTPException(status_code=400, detail="date is in the future")
     stations = [s for s in (req.stations or []) if s]
-    job_id = predictor.start_prediction(day, stations, req.raw)
+    try:
+        job_id = predictor.start_prediction(
+            day, stations, req.raw, model_id=req.model, classify_types=req.classify_types
+        )
+    except registry.UnknownModelError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     job = predictor.get_job(job_id)
-    return BurstPredictionJob(**{k: job[k] for k in ("job_id", "status", "scanned", "total", "date", "stations", "error")})
+    return BurstPredictionJob(
+        **{
+            k: job[k]
+            for k in (
+                "job_id", "status", "scanned", "total", "date", "stations",
+                "model_id", "classify_types", "error",
+            )
+        }
+    )
 
 
 @router.get("/predict/stored", response_model=BurstPredictionResult)
@@ -164,6 +220,9 @@ async def prediction_stored(
 ) -> BurstPredictionResult:
     """Burst-prediction result assembled from already-stored real-time detections
     for a date (no re-scoring) — backs the 'view bursts' link from an alert.
+
+    The model is taken from the stored rows themselves, so a day scanned by an
+    earlier model is scored against *that* model's threshold.
 
     Declared before ``/predict/{job_id}`` so that path param doesn't capture it.
     """
@@ -207,7 +266,14 @@ async def prediction_status(
         day = _parse_date(job["date"])
         effective_raw = job.get("raw", False) if raw is None else raw
         result = BurstPredictionResult(
-            **await predictor.assemble_result(job["rows"], day, job["stations"], effective_raw)
+            **await predictor.assemble_result(
+                job["rows"],
+                day,
+                job["stations"],
+                effective_raw,
+                model_id=job.get("model_id"),
+                classify_types=job.get("classify_types"),
+            )
         )
     return BurstPredictionJob(
         job_id=job["job_id"],
@@ -216,6 +282,8 @@ async def prediction_status(
         total=job["total"],
         date=job["date"],
         stations=job["stations"],
+        model_id=job.get("model_id", ""),
+        classify_types=bool(job.get("classify_types", False)),
         error=job["error"],
         result=result,
     )

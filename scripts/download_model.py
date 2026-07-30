@@ -1,15 +1,21 @@
-"""Download the burst-classifier checkpoint from a URL (Git LFS fallback).
+"""Download a burst-classifier checkpoint from a URL (Git LFS fallback).
 
-The checkpoint normally ships in the repo via Git LFS at
-backend/ml_model/best.pt — a clone with Git LFS installed already has it
-(`git lfs pull`). This script is a fallback for environments WITHOUT Git LFS
-(e.g. a "Download ZIP" that ships only LFS pointer files).
+The checkpoints normally ship in the repo via Git LFS under backend/ml_model/ —
+a clone with Git LFS installed already has them (`git lfs pull`). This script is
+a fallback for environments WITHOUT Git LFS (e.g. a "Download ZIP" that ships
+only LFS pointer files).
+
+Three models ship: CCM v1.0.0 and v1.1.0 (binary burst / no-burst) and
+CCMT v1.0.0 (burst type). Each has its own destination filename and its own
+URL environment variable.
 
 Usage
 -----
 From the repo root:
 
-    python scripts/download_model.py
+    python scripts/download_model.py                      # CCM v1.0.0
+    python scripts/download_model.py --model ccm-1.1.0
+    python scripts/download_model.py --model ccmt-1.0.0
 
 Or with an explicit URL / destination:
 
@@ -17,9 +23,11 @@ Or with an explicit URL / destination:
         --url https://example.com/best.pt \\
         --dest backend/ml_model/best.pt
 
-Environment variables
----------------------
-ML_MODEL_URL   — set in backend/.env; read automatically if --url is omitted.
+Environment variables (set in backend/.env; read when --url is omitted)
+----------------------------------------------------------------------
+ML_MODEL_URL        CCM v1.0.0  (backend/ml_model/best.pt)
+ML_CCM_V110_URL     CCM v1.1.0  (backend/ml_model/ccm_v1_1_0.pt)
+ML_CCMT_V100_URL    CCMT v1.0.0 (backend/ml_model/ccmt_v1_0_0.pt)
 
 The script works standalone: it does NOT import from the backend package so it
 can run before dependencies are installed (it only needs stdlib).
@@ -35,19 +43,28 @@ from pathlib import Path
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_DEFAULT_DEST = _REPO_ROOT / "backend" / "ml_model" / "best.pt"
+_ML_DIR = _REPO_ROOT / "backend" / "ml_model"
+_DEFAULT_DEST = _ML_DIR / "best.pt"
 _ENV_FILE = _REPO_ROOT / "backend" / ".env"
 
+# model id -> (destination filename, URL environment variable). Mirrors the
+# registry in backend/app/ml/registry.py; keep the two in step.
+_KNOWN: dict[str, tuple[str, str]] = {
+    "ccm-1.0.0": ("best.pt", "ML_MODEL_URL"),
+    "ccm-1.1.0": ("ccm_v1_1_0.pt", "ML_CCM_V110_URL"),
+    "ccmt-1.0.0": ("ccmt_v1_0_0.pt", "ML_CCMT_V100_URL"),
+}
 
-def _read_env_url() -> str:
-    """Read ML_MODEL_URL from the environment or backend/.env."""
-    url = os.environ.get("ML_MODEL_URL", "").strip()
+
+def _read_env_url(var: str = "ML_MODEL_URL") -> str:
+    """Read ``var`` from the environment or backend/.env."""
+    url = os.environ.get(var, "").strip()
     if url:
         return url
     if _ENV_FILE.exists():
         for line in _ENV_FILE.read_text().splitlines():
             line = line.strip()
-            if line.startswith("ML_MODEL_URL"):
+            if line.startswith(var):
                 _, _, val = line.partition("=")
                 return val.strip().strip('"').strip("'")
     return ""
@@ -96,11 +113,17 @@ def download(url: str, dest: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--url", default="", help="Direct download URL for best.pt")
+    parser.add_argument(
+        "--model",
+        choices=sorted(_KNOWN),
+        default="ccm-1.0.0",
+        help="Which model to fetch (default: ccm-1.0.0)",
+    )
+    parser.add_argument("--url", default="", help="Direct download URL for the checkpoint")
     parser.add_argument(
         "--dest",
-        default=str(_DEFAULT_DEST),
-        help=f"Destination path (default: {_DEFAULT_DEST})",
+        default="",
+        help="Destination path (default: derived from --model)",
     )
     parser.add_argument(
         "--force",
@@ -109,23 +132,24 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    dest = Path(args.dest)
+    filename, url_var = _KNOWN[args.model]
+    dest = Path(args.dest) if args.dest else _ML_DIR / filename
     if dest.exists() and not args.force:
         size_mb = dest.stat().st_size / 1_048_576
         print(f"Checkpoint already exists ({size_mb:.1f} MB): {dest}")
         print("Pass --force to re-download.")
         return
 
-    url = args.url or _read_env_url()
+    url = args.url or _read_env_url(url_var)
     if not url:
         print(
-            "Error: no URL supplied.\n"
-            "  Set ML_MODEL_URL in backend/.env, or pass --url <url>.\n\n"
-            "  Upload best.pt to a GitHub Release on your repo, then copy the\n"
+            f"Error: no URL supplied for {args.model}.\n"
+            f"  Set {url_var} in backend/.env, or pass --url <url>.\n\n"
+            f"  Upload {filename} to a GitHub Release on your repo, then copy the\n"
             "  asset URL and either:\n"
-            "    echo 'ML_MODEL_URL=<url>' >> backend/.env\n"
+            f"    echo '{url_var}=<url>' >> backend/.env\n"
             "  or:\n"
-            "    python scripts/download_model.py --url <url>",
+            f"    python scripts/download_model.py --model {args.model} --url <url>",
             file=sys.stderr,
         )
         sys.exit(1)
