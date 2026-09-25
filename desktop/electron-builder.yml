@@ -14,6 +14,8 @@ files:
   - out/**/*
   - assets/**/*
   - "!assets/installer.nsh"
+  # Full-size source art; icon.ico/icon.png are generated from it.
+  - "!assets/Logo.png"
   - package.json
 
 # Shipped unpacked next to the app (process.resourcesPath) — python.exe has to

@@ -11,7 +11,7 @@ _DEFAULT_DATA_DIR = str(_BACKEND_ROOT / "data")
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    version: str = "1.0.0"
+    version: str = "1.0.0-beta"
     log_level: str = "info"
 
     database_url: str = "postgresql+asyncpg://swdash:swdash@localhost:5432/swdash"
