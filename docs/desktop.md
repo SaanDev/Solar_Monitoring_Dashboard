@@ -104,19 +104,30 @@ backend\.venv\Scripts\python.exe -m app.desktop     # http://127.0.0.1:47800
 1. Bump `version` in [`desktop/package.json`](../desktop/package.json) and commit.
 2. Tag and push:
    ```bash
-   git tag desktop-v0.2.0
-   git push origin desktop-v0.2.0
+   git tag v1.0.0-beta
+   git push origin v1.0.0-beta
    ```
 3. [`.github/workflows/desktop-release.yml`](../.github/workflows/desktop-release.yml)
    builds the runtime and runs the backend test suite on it. It then builds the
    installer and uploads it, with `latest.yml`, to a **draft** release
-   `desktop-v0.2.0`. The job fails if the tag and `package.json` disagree.
+   `v1.0.0-beta`. Betas use `latest.yml` too: a beta install first asks for
+   `beta.yml`, then falls back to it. The job fails if the tag and
+   `package.json` disagree.
 4. Review the draft on GitHub and **publish** it. Installed apps check for updates
    at startup and every 6 hours, download the update in the background, and offer
    to restart.
 
-The updater follows the release GitHub marks as **Latest**, so only desktop
-releases should carry that mark. Builds are currently unsigned, so Windows
+How installed apps find updates:
+
+- **A prerelease install** (such as `1.0.0-beta`) scans every published release,
+  newest first, and takes the first one with a semver tag. This covers later
+  betas and the final `1.0.0`.
+- **A stable install** only follows the release GitHub marks as **Latest**. Mark
+  betas as *pre-release* on GitHub so stable users stay on stable releases.
+
+Keep the plain `v<version>` tags: the prerelease scan skips any tag that isn't
+valid semver, such as a `desktop-v…` prefix, so beta installs would never update.
+Every `v*` release should carry the installer. Builds are currently unsigned, so Windows
 SmartScreen shows "Windows protected your PC" on first install (*More info →
 Run anyway*). Code signing (e.g. Azure Trusted Signing via electron-builder's
 `win.azureSignOptions`) removes that.

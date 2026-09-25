@@ -1,14 +1,14 @@
 # Builds the Windows desktop installer and uploads it to a DRAFT GitHub release.
 #
 # Release: bump "version" in desktop/package.json, commit, then
-#   git tag desktop-v<version> && git push origin desktop-v<version>
+#   git tag v<version> && git push origin v<version>      (e.g. v1.0.0-beta)
 # When the job finishes, review the draft release on GitHub and publish it —
 # installed apps pick the update up from the published release (see docs/desktop.md).
 name: Desktop release
 
 on:
   push:
-    tags: ["desktop-v*"]
+    tags: ["v*"]
   workflow_dispatch: # manual dry run: builds and uploads the installer as an artifact only
 
 permissions:
@@ -37,13 +37,13 @@ jobs:
         run: git lfs pull
 
       - name: Tag matches desktop/package.json version
-        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
-          tag="${GITHUB_REF_NAME#desktop-v}"
+          tag="${GITHUB_REF_NAME#v}"
           pkg="$(node -p "require('./desktop/package.json').version")"
           if [ "$tag" != "$pkg" ]; then
-            echo "::error::tag desktop-v$tag does not match desktop/package.json version $pkg"
+            echo "::error::tag v$tag does not match desktop/package.json version $pkg"
             exit 1
           fi
 
@@ -90,25 +90,25 @@ jobs:
         run: npm ci
 
       - name: Build installer and upload to draft release
-        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        if: startsWith(github.ref, 'refs/tags/v')
         working-directory: desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run release
 
       - name: Build installer (dry run)
-        if: ${{ !startsWith(github.ref, 'refs/tags/desktop-v') }}
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         working-directory: desktop
         run: npm run dist
 
       # Tag builds already attach the installer to the release; only a manual
       # dry run needs it as an artifact (~1 GB, so kept briefly).
       - name: Upload installer artifact
-        if: ${{ !startsWith(github.ref, 'refs/tags/desktop-v') }}
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/upload-artifact@v4
         with:
           name: desktop-installer
           path: |
             desktop/dist/*.exe
-            desktop/dist/latest.yml
+            desktop/dist/*.yml
           retention-days: 3

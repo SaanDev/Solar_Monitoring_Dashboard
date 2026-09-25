@@ -16,7 +16,7 @@
   Reuse desktop/build/runtime from a previous build (UI/shell-only changes).
 
 .PARAMETER Publish
-  Upload the installer + latest.yml to a draft GitHub release desktop-v<version>
+  Upload the installer + latest.yml to a draft GitHub release v<version>
   instead of only building locally. Needs GH_TOKEN. CI normally does this.
 #>
 param(

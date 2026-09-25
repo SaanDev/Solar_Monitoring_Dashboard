@@ -19,6 +19,8 @@ out/
 
 # Desktop app: staged Python runtime + download caches (desktop/scripts/build-runtime.ps1)
 desktop/build/
+# setuptools output from non-editable installs of the backend
+backend/build/
 
 # Env
 .env

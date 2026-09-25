@@ -53,10 +53,10 @@ publish:
   provider: github
   owner: SaanDev
   repo: Solar_Monitoring_Dashboard
-  # Releases are tagged desktop-v<version> (the tag that triggers CI), keeping
-  # them apart from anything else released from this repo. The installed app
-  # updates from whichever release GitHub marks "Latest", so only desktop
-  # releases should carry that mark.
-  tagNamePrefix: desktop-v
+  # Releases use the default tag v<version> (e.g. v1.0.0-beta) — the tag that
+  # triggers CI. Keep it: an installed prerelease (x.y.z-beta) checks for
+  # updates by reading every release tag as semver, and a custom prefix like
+  # "desktop-v" fails that parse, so such installs would never see an update.
+  # Every v* release should therefore carry the desktop installer.
   # CI uploads to a draft; publishing it on GitHub is what ships the update.
   releaseType: draft
