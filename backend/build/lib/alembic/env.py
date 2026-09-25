@@ -34,7 +34,16 @@ def run_migrations_offline() -> None:
 
 
 def _do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        # SQLite (the desktop app's database) can't ALTER most column/constraint
+        # properties in place. With this, autogenerate emits
+        # `op.batch_alter_table(...)` blocks, which rebuild the table on SQLite
+        # and are plain ALTERs on Postgres. Hand-written migrations that alter
+        # columns must use batch_alter_table themselves to stay desktop-safe.
+        render_as_batch=connection.dialect.name == "sqlite",
+    )
     with context.begin_transaction():
         context.run_migrations()
 

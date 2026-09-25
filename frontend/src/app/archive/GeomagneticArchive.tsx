@@ -4,11 +4,11 @@ import { useState } from "react";
 import useSWR from "swr";
 import { Download } from "lucide-react";
 
-import { api } from "@/lib/api";
+import { API_BASE, api } from "@/lib/api";
 import { KpChart } from "@/components/charts/KpChart";
 import { DstChart } from "@/components/charts/DstChart";
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const apiBase = API_BASE;
 
 function shiftDays(d: string, days: number): string {
   const t = new Date(d + "T00:00:00Z").getTime() + days * 86400000;

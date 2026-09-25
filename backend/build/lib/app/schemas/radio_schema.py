@@ -1,4 +1,6 @@
 from datetime import datetime
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -108,6 +110,9 @@ class RadioBurstDetectionResponse(BaseModel):
     probability: float
     predicted_label: str
     alert_level: str
+    model_id: str = ""                 # which classifier produced this verdict
+    burst_type: str | None = None      # "Type II" | "Type III" | "Other"
+    type_confidence: float | None = None
 
 
 class RadioBurstDetectionsResponse(BaseModel):
@@ -115,6 +120,42 @@ class RadioBurstDetectionsResponse(BaseModel):
     count: int = 0
     burst_count: int = 0  # how many were classified Burst
     detections: list[RadioBurstDetectionResponse] = []
+
+
+# ── Model registry (which classifiers are available to run) ───────────────────
+
+
+class ModelInfo(BaseModel):
+    """One selectable classifier, as advertised to the UI."""
+    id: str                            # "ccm-1.1.0"
+    name: str                          # "CCM v1.1.0"
+    full_name: str
+    kind: str                          # "binary" (burst / no-burst) | "type"
+    version: str
+    description: str
+    # False when the checkpoint is missing or still a Git LFS pointer — the UI
+    # greys the option out instead of letting a run fail mid-scan.
+    available: bool = True
+    threshold: float | None = None     # binary models only
+    classes: list[str] = []
+    metrics: dict[str, float] = {}
+    is_default: bool = False
+
+
+class ModelsResponse(BaseModel):
+    models: list[ModelInfo] = []
+    default_binary: str                # id the page should preselect
+    # Where `default_binary` comes from: "selected" = chosen on the Settings page
+    # and stored in the database; "config" = still following the deployment's
+    # RADIO_BURST_BINARY_MODEL. Lets the UI say which one is in force.
+    default_binary_source: Literal["selected", "config"] = "config"
+    type_model: str | None = None      # id used for the burst-type stage
+    classify_types: bool = True        # server default for the type stage
+
+
+class BinaryModelSelection(BaseModel):
+    """PUT body: which binary classifier the automatic scan should run."""
+    model_id: str                      # "ccm-1.0.0" | "ccm-1.1.0"
 
 
 # ── Burst Predictor (on-demand daily prediction vs official burst list) ───────
@@ -127,6 +168,22 @@ class BurstPredictionRequest(BaseModel):
     # alert filter). True = raw model output: every segment the model labels
     # "Burst" becomes an event, so a narrow station selection never hides bursts.
     raw: bool = False
+    # Binary classifier id; null = the server default. Unlike `raw`, this changes
+    # the scores, so it is fixed for the job's lifetime.
+    model: str | None = None
+    # Run the burst-type stage on burst-positive files; null = server default.
+    classify_types: bool | None = None
+
+
+class TypedRegion(BaseModel):
+    """A bright region inside one segment, with its predicted burst type."""
+    freq_min_mhz: float | None = None
+    freq_max_mhz: float | None = None
+    start_seconds: int                 # from the start of the segment
+    end_seconds: int
+    burst_type: str | None = None
+    confidence: float | None = None
+    area: int = 0                      # pixels above the brightness threshold
 
 
 class PredictedDetection(BaseModel):
@@ -136,6 +193,10 @@ class PredictedDetection(BaseModel):
     time: str                          # HH:MM:SS UTC
     probability: float
     alert_level: str
+    # Null when typing was off or nothing in-distribution was found to classify.
+    burst_type: str | None = None
+    type_confidence: float | None = None
+    regions: list[TypedRegion] = []
 
 
 class PredictedEvent(BaseModel):
@@ -149,6 +210,9 @@ class PredictedEvent(BaseModel):
     stations: list[str]
     max_probability: float
     alert_level: str
+    # Type of the most confident typed detection, and how the others voted.
+    dominant_type: str | None = None
+    type_counts: dict[str, int] = {}
     matched_official: bool = False     # overlaps an official burst-list event
     detections: list[PredictedDetection] = []
 
@@ -172,6 +236,11 @@ class BurstPredictionResult(BaseModel):
     official_events: list[OfficialBurstCompare] = []
     official_count: int = 0
     matched_count: int = 0             # predicted events matching the official list
+    model_id: str = ""                 # binary classifier that scored these rows
+    model_name: str = ""
+    classify_types: bool = False
+    type_model_id: str | None = None
+    type_counts: dict[str, int] = {}   # burst files per type, e.g. {"Type III": 4}
 
 
 class BurstPredictionJob(BaseModel):
@@ -181,5 +250,114 @@ class BurstPredictionJob(BaseModel):
     total: int = 0
     date: str
     stations: list[str] = []
+    model_id: str = ""
+    classify_types: bool = False
     error: str | None = None
     result: BurstPredictionResult | None = None
+
+
+# ── Scorecard (stored detections vs official list, trailing window) ──────────
+
+
+class ScorecardDay(BaseModel):
+    date: str
+    has_data: bool = False             # scanner produced scored files this day
+    pending: bool = False              # official list likely not published yet
+    scored_files: int = 0
+    burst_files: int = 0               # files classified Burst above alert minimum
+    official_count: int = 0
+    predicted_count: int = 0           # corroborated predicted events
+    matched_official: int = 0          # official events the model matched
+    matched_predicted: int = 0         # predicted events matching an official burst
+
+
+class BurstScorecardResponse(BaseModel):
+    days: int
+    days_with_data: int = 0            # totals below cover only these days
+    official_total: int = 0
+    predicted_total: int = 0
+    matched_official: int = 0
+    matched_predicted: int = 0
+    recall: float | None = None        # matched_official / official_total
+    precision: float | None = None     # matched_predicted / predicted_total
+    daily: list[ScorecardDay] = []
+
+
+# ── Official burst list over a date range (timeline overlay) ─────────────────
+
+
+class OfficialBurstItem(BaseModel):
+    start_time: datetime               # UTC
+    end_time: datetime
+    burst_type: str                    # e.g. "III", "II", "CTM"
+    stations: list[str] = []
+
+
+class OfficialBurstRangeResponse(BaseModel):
+    start: str                         # YYYY-MM-DD (inclusive)
+    end: str
+    source: str = "e-callisto"
+    events: list[OfficialBurstItem] = []
+
+
+# ── Offline catch-up (backfill) ──────────────────────────────────────────────
+
+
+class BackfillDayCoverage(BaseModel):
+    """How much of one UTC day's e-CALLISTO archive has been scored."""
+    day: str                       # YYYY-MM-DD
+    # "unknown" (never inspected) | pending | running | partial | done | error
+    state: str
+    archive_files: int = 0         # segments the archive published that day
+    covered_files: int = 0         # segments with a detection row (any model)
+    events: int = 0                # radio_burst events standing for the day
+    model_id: str = ""
+    error: str | None = None
+
+
+class BackfillJob(BaseModel):
+    """Progress of a catch-up run. ``day_files_*`` track the day in flight;
+    ``files_*`` are cumulative for the run."""
+    job_id: str
+    status: Literal["running", "done", "error", "cancelled"]
+    trigger: Literal["auto", "manual"]
+    start_day: str
+    end_day: str
+    force: bool
+    model_id: str
+    model_name: str
+    days_total: int
+    days_done: int
+    current_day: str | None = None
+    day_files_total: int = 0
+    day_files_done: int = 0
+    files_scored: int = 0
+    files_failed: int = 0
+    events_written: int = 0
+    started_at: str
+    finished_at: str | None = None
+    error: str | None = None
+    message: str = ""
+
+
+class BackfillStatusResponse(BaseModel):
+    enabled: bool
+    running: bool
+    # How far back the automatic catch-up reaches, and the recent window it
+    # deliberately leaves to the live scanner (so "today" reads as partial).
+    auto_window_days: int
+    live_window_hours: int
+    job: BackfillJob | None = None
+    coverage: list[BackfillDayCoverage] = []
+
+
+class BackfillRequest(BaseModel):
+    """Manual catch-up over a date range; both bounds inclusive, UTC.
+
+    Omitting the dates runs the automatic window. ``force`` re-scores days that
+    are already covered (used after switching models), which is otherwise skipped:
+    a day scored by any model counts as covered.
+    """
+    start: str | None = None
+    end: str | None = None
+    force: bool = False

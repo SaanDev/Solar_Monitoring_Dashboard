@@ -2,7 +2,6 @@ import type {
   StatusResponse,
   SourcesStatusResponse,
   SummaryLatest,
-  BriefingResponse,
   GoesXrsResponse,
   GoesXrsLatest,
   GoesProtonResponse,
@@ -43,6 +42,8 @@ import type {
   BurstPredictionJob,
   BurstPredictionResult,
   ModelsResponse,
+  BackfillJob,
+  BackfillStatusResponse,
   Alert,
   ActivityHistogramResponse,
   SpaceWeatherEvent,
@@ -87,7 +88,14 @@ export interface SearchParams {
   max_records?: number;
 }
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+/** Backend origin prefixed to every API path. The desktop build
+ * (`npm run build:desktop`) is served by the backend itself, so it uses
+ * same-origin relative URLs; the website points at NEXT_PUBLIC_API_URL. */
+export const API_BASE =
+  process.env.NEXT_PUBLIC_DESKTOP === "1"
+    ? ""
+    : (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000");
+const BASE = API_BASE;
 
 /** Absolute URL for a backend path (for <img src> / <a href> to backend assets). */
 export function apiUrl(path: string): string {
@@ -250,8 +258,6 @@ export const api = {
   status: () => get<StatusResponse>("/api/status"),
   sourcesStatus: () => get<SourcesStatusResponse>("/api/sources/status"),
   summaryLatest: () => get<SummaryLatest>("/api/summary/latest"),
-  // Claude-generated "State of the Sun" operator briefing (change-gated + cached).
-  summaryBriefing: () => get<BriefingResponse>("/api/summary/briefing"),
 
   goesXrs: (start: string, end: string) =>
     get<GoesXrsResponse>(`/api/goes/xrs?start=${start}&end=${end}`),
@@ -356,6 +362,27 @@ export const api = {
 
   // The burst classifiers this backend can run, plus the server's defaults.
   radioModels: () => get<ModelsResponse>("/api/radio/models"),
+
+  /** Choose the classifier the *automatic* burst scan runs (Settings page).
+   * Persisted server-side and applied to the running scanner; returns the
+   * refreshed model list so the caller can seed its cache with it. */
+  setBurstDetectionModel: (modelId: string) =>
+    putJson<ModelsResponse>("/api/radio/models/default", { model_id: modelId }),
+
+  // Offline catch-up — score the archive days the dashboard was down for, so the
+  // timeline and histograms stay continuous. Returns per-day coverage + the job.
+  burstBackfillStatus: (days = 30) =>
+    get<BackfillStatusResponse>(`/api/radio/backfill?days=${days}`),
+  /** Start a catch-up. Omit the dates for the automatic window; `force`
+   * re-scores days that are already covered (e.g. after changing model). */
+  startBurstBackfill: (start?: string, end?: string, force = false) =>
+    postJson<BackfillJob>("/api/radio/backfill", {
+      start: start ?? null,
+      end: end ?? null,
+      force,
+    }),
+  // Stops after the chunk in flight; everything already scored is kept.
+  cancelBurstBackfill: () => postNoBody<BackfillJob>("/api/radio/backfill/cancel"),
 
   // Burst Predictor — run the model over a day and compare with the official list.
   // `raw` selects the event mode: true = raw model output (no corroboration

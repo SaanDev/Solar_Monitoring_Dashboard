@@ -5,7 +5,7 @@ import useSWR from "swr";
 import { clsx } from "clsx";
 import { Play, Loader2, Check, X, Radar, ChevronRight } from "lucide-react";
 
-import { api } from "@/lib/api";
+import { API_BASE, api } from "@/lib/api";
 import {
   alertsToReportEvents,
   predictedToReportEvents,
@@ -20,7 +20,7 @@ import type {
   TypedRegion,
 } from "@/lib/types";
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const apiBase = API_BASE;
 
 function utcDateOffset(days: number): string {
   return new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);

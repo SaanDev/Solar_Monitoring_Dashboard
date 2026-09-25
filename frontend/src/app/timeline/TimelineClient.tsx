@@ -94,10 +94,13 @@ function HelpPanel() {
             <li>
               <span className="text-accent-green">Radio · Model</span> — this
               dashboard&apos;s ML detections, only when corroborated by multiple
-              stations (the same events that raise alerts). The binary classifier
-              doesn&apos;t assign burst types, so this lane keeps a single color.
-              Compare the two radio rows vertically to see where the model and the
-              official list agree.
+              stations (the same events that raise alerts). Blocks use the{" "}
+              <em>same burst-type colors as the official lane</em>, so a burst both
+              agree on is the same color in both rows — compare them vertically to
+              see where the model and the catalog line up. Bursts the type
+              classifier could not label keep the lane&apos;s plain{" "}
+              <span className="text-accent-green">green</span>: detected, type
+              undetermined. Types here are estimates, not catalogued fact.
             </li>
             <li>
               <span className="text-accent-red">Protons</span> — solar radiation storms
@@ -207,10 +210,23 @@ export function TimelineClient() {
 
   // Official entries become timeline pseudo-events; their observing stations
   // ride on the event so the inspector restricts spectrograms to them.
-  const officialEvents = useMemo<SpaceWeatherEvent[]>(
-    () =>
-      (official?.events ?? []).map((b) => ({
-        id: `official_radio_burst:${b.start_time}`,
+  //
+  // Ids have to be unique — they are React keys, the block-ref map key, and what
+  // selection/chain highlighting compare on, so a collision makes one block
+  // highlight another. Start time alone is not enough: the catalog lists several
+  // bursts per minute, and it even contains exact duplicates (same time, type,
+  // end and stations), so *no* combination of fields is unique either. Hence a
+  // per-group occurrence counter. It is scoped to the (time, type) group rather
+  // than being a plain array index so that a burst published later elsewhere in
+  // the window doesn't renumber everything after it and move the selection.
+  const officialEvents = useMemo<SpaceWeatherEvent[]>(() => {
+    const seen = new Map<string, number>();
+    return (official?.events ?? []).map((b) => {
+      const base = `official_radio_burst:${b.start_time}:${b.burst_type || "?"}`;
+      const n = seen.get(base) ?? 0;
+      seen.set(base, n + 1);
+      return {
+        id: n === 0 ? base : `${base}#${n}`,
         type: "official_radio_burst",
         severity: b.burst_type ? `Type ${b.burst_type}` : null,
         start_time: b.start_time,
@@ -223,9 +239,9 @@ export function TimelineClient() {
         stations: b.stations,
         related_event_ids: [],
         source_url: "https://www.e-callisto.org/",
-      })),
-    [official]
-  );
+      };
+    });
+  }, [official]);
 
   const all = useMemo(() => [...(events ?? []), ...officialEvents], [events, officialEvents]);
 
@@ -355,7 +371,9 @@ export function TimelineClient() {
               <LegendSwatch key={c.key} dot={c.dot} label={c.label} />
             ))}
             <LegendSwatch dot={BURST_OTHER.dot} label="other" />
-            <span className="text-slate-600">(official lane)</span>
+            <span className="text-slate-600">
+              (both radio lanes · an untyped model burst stays lane-green)
+            </span>
           </div>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="w-24 shrink-0 text-right uppercase tracking-wider text-slate-600">

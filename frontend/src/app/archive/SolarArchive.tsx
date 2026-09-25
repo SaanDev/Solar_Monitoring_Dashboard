@@ -5,12 +5,12 @@ import useSWR from "swr";
 import { clsx } from "clsx";
 import { Download } from "lucide-react";
 
-import { api } from "@/lib/api";
+import { API_BASE, api } from "@/lib/api";
 import { formatUtcShort } from "@/lib/formatting";
 import type { SolarArchiveImage } from "@/lib/types";
 import { Modal } from "@/components/ui/Modal";
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const apiBase = API_BASE;
 
 function DownloadRow({ img, compact = false }: { img: SolarArchiveImage; compact?: boolean }) {
   const cls =

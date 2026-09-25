@@ -8,10 +8,10 @@ mixed (see ``AGENT_RULES.md``).
 """
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, Integer, String
+from sqlalchemy import Float, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.database import Base
+from app.database import Base, UTCDateTime
 
 
 def _utcnow() -> datetime:
@@ -22,14 +22,14 @@ class _IngestMixin:
     # Provenance + when this row was written, stored with every product.
     source: Mapped[str] = mapped_column(String(64), primary_key=True)
     ingested_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_utcnow, nullable=False
+        UTCDateTime(), default=_utcnow, nullable=False
     )
 
 
 class GoesXrs(_IngestMixin, Base):
     __tablename__ = "goes_xrs"
 
-    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    time: Mapped[datetime] = mapped_column(UTCDateTime(), primary_key=True)
     satellite: Mapped[int | None] = mapped_column(Integer, nullable=True)
     short_channel: Mapped[float | None] = mapped_column(Float, nullable=True)
     long_channel: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -38,7 +38,7 @@ class GoesXrs(_IngestMixin, Base):
 class GoesProton(_IngestMixin, Base):
     __tablename__ = "goes_proton"
 
-    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    time: Mapped[datetime] = mapped_column(UTCDateTime(), primary_key=True)
     satellite: Mapped[int | None] = mapped_column(Integer, nullable=True)
     flux_gt10: Mapped[float | None] = mapped_column(Float, nullable=True)
     flux_gt50: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -48,7 +48,7 @@ class GoesProton(_IngestMixin, Base):
 class GoesElectron(_IngestMixin, Base):
     __tablename__ = "goes_electron"
 
-    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    time: Mapped[datetime] = mapped_column(UTCDateTime(), primary_key=True)
     satellite: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Integral electron flux >=2 MeV (electrons / cm^2 s sr). NOAA's primary feed
     # exposes only this energy band.
@@ -58,7 +58,7 @@ class GoesElectron(_IngestMixin, Base):
 class GoesMagnetometer(_IngestMixin, Base):
     __tablename__ = "goes_magnetometer"
 
-    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    time: Mapped[datetime] = mapped_column(UTCDateTime(), primary_key=True)
     satellite: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Geomagnetic field components at the satellite (nT): Hp (northward),
     # He (earthward), Hn (eastward), and the total field magnitude.
@@ -71,14 +71,14 @@ class GoesMagnetometer(_IngestMixin, Base):
 class KpIndex(_IngestMixin, Base):
     __tablename__ = "kp_index"
 
-    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    time: Mapped[datetime] = mapped_column(UTCDateTime(), primary_key=True)
     kp: Mapped[float] = mapped_column(Float, nullable=False)
 
 
 class DstIndex(_IngestMixin, Base):
     __tablename__ = "dst_index"
 
-    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    time: Mapped[datetime] = mapped_column(UTCDateTime(), primary_key=True)
     dst: Mapped[float] = mapped_column(Float, nullable=False)
 
 

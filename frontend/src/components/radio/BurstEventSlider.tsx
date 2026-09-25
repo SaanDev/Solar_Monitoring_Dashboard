@@ -4,10 +4,10 @@ import { useState, useEffect } from "react";
 import useSWR from "swr";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { clsx } from "clsx";
-import { api } from "@/lib/api";
+import { API_BASE, api } from "@/lib/api";
 import { formatUtcShort } from "@/lib/formatting";
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const apiBase = API_BASE;
 
 export function BurstEventSlider({
   heightClass = "min-h-[600px] flex-1",

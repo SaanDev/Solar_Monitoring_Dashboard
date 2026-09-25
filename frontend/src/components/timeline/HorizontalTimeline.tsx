@@ -7,8 +7,10 @@ import type { SpaceWeatherEvent } from "@/lib/types";
 
 // ── Color taxonomy ───────────────────────────────────────────────────────────
 // Blocks are colored by *what* the event is, not just its lane: flares by GOES
-// class, official radio bursts by their catalogued type. All classes are full
-// literal strings (Tailwind's content scan needs them).
+// class, radio bursts by their type. Both radio lanes share one type palette, so
+// a burst the model and the catalog agree on is the same color in both rows and
+// the comparison can be made at a glance. All classes are full literal strings
+// (Tailwind's content scan needs them).
 
 interface BlockColor {
   key: string;
@@ -47,11 +49,30 @@ export const BURST_OTHER: BlockColor = {
 const _FLARE_BY_KEY = new Map(FLARE_CLASS_LEGEND.map((c) => [c.key, c]));
 const _BURST_BY_KEY = new Map(BURST_TYPE_LEGEND.map((c) => [c.key, c]));
 
-/** Base burst type from an official severity like "Type III/2" or "CTM/1". */
-function burstBaseType(severity: string | null): string | null {
-  if (!severity) return null;
-  const m = severity.replace(/^Type\s+/i, "").match(/^[A-Z]+/i);
-  return m ? m[0].toUpperCase() : null;
+/** Base burst type from a label like "Type III/2", "IIIGG/3", "CTM/1" or "Other".
+ *
+ * Handles both sources: the official list's catalog codes and the model's class
+ * names, which is why both radio lanes can share one palette.
+ *
+ * e-CALLISTO codes put the Roman numeral first and append qualifiers — `IIIG`
+ * and `IIIGG` are grouped Type III bursts, not separate types. So the Roman
+ * numeral is matched on its own first; taking every leading letter instead would
+ * bucket those (65 of ~360 Type III entries in a typical month) as "other" and
+ * break the vertical comparison against the model lane. Non-numeral codes like
+ * CTM and RBR still fall through to the whole-token match. */
+function burstBaseType(label: string | null | undefined): string | null {
+  if (!label) return null;
+  const rest = label.replace(/^Type\s+/i, "");
+  const roman = rest.match(/^[IVX]+/i);
+  if (roman) return roman[0].toUpperCase();
+  const alpha = rest.match(/^[A-Z]+/i);
+  return alpha ? alpha[0].toUpperCase() : null;
+}
+
+/** Palette entry for a burst type; unrecognised named types fall to "other". */
+function burstColor(label: string | null | undefined): BlockColor {
+  const base = burstBaseType(label);
+  return (base && _BURST_BY_KEY.get(base)) || BURST_OTHER;
 }
 
 // ── Lanes ────────────────────────────────────────────────────────────────────
@@ -122,10 +143,13 @@ function colorsFor(lane: TimelineLane, e: SpaceWeatherEvent): { block: string; s
     const c = _FLARE_BY_KEY.get(e.severity[0].toUpperCase());
     if (c) return c;
   }
-  if (e.type === "official_radio_burst") {
-    const base = burstBaseType(e.severity);
-    return (base && _BURST_BY_KEY.get(base)) || BURST_OTHER;
-  }
+  // Official bursts carry their catalog code in `severity`.
+  if (e.type === "official_radio_burst") return burstColor(e.severity);
+  // Model bursts carry a structured `burst_type` — `severity` is the alert level
+  // here, not a type. An untyped burst keeps the lane's neutral color: the model
+  // detected it but found nothing it could classify, and inventing a color for
+  // that would read as a confident type it never assigned.
+  if (e.type === "radio_burst" && e.burst_type) return burstColor(e.burst_type);
   return lane;
 }
 

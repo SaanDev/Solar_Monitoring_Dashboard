@@ -4,11 +4,11 @@ import { useState } from "react";
 import useSWR from "swr";
 import { Download } from "lucide-react";
 
-import { api } from "@/lib/api";
+import { API_BASE, api } from "@/lib/api";
 import { GoesXrsChart } from "@/components/charts/GoesXrsChart";
 import { ProtonFluxChart } from "@/components/charts/ProtonFluxChart";
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const apiBase = API_BASE;
 
 function iso(date: string, time: string): string {
   return `${date}T${time}:00Z`;

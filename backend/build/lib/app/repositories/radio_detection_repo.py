@@ -1,8 +1,10 @@
 """Read/upsert helpers for the ``radio_burst_detections`` table.
 
 Upserts are idempotent on the primary key ``filename`` so a re-scan of the same
-archive file updates its row in place rather than duplicating it. The same table
-backs both dedup (``processed_filenames_since``) and event aggregation
+archive file updates its row in place rather than duplicating it — including when
+the re-scan used a different model, which is how switching the scan's model
+(Settings page) refreshes the recent window. The same table backs
+both dedup (``processed_filenames_since``) and event aggregation
 (``burst_positive_in_range``).
 """
 from __future__ import annotations
@@ -28,6 +30,10 @@ _FIELDS = (
     "probability",
     "predicted_label",
     "alert_level",
+    "model_id",
+    "burst_type",
+    "type_confidence",
+    "type_model_id",
 )
 
 
@@ -45,12 +51,26 @@ def _to_dict(obj: RadioBurstDetection) -> dict:
 
 
 async def upsert_detections(db: AsyncSession, rows: list[dict]) -> int:
-    """Insert/update scored-file rows; returns the number written."""
+    """Insert/update scored-file rows; returns the number written.
+
+    ``model_id`` is NOT NULL, and passing an explicit None would override the
+    column's server default, so a row that arrives without one is attributed to
+    the configured model. In practice inference always sets it — this only covers
+    callers that predate model selection.
+    """
     if not rows:
         return 0
+    from app.ml.registry import resolve_binary
+
     now = _utcnow()
+    default_model = resolve_binary().id
     values = [
-        {**{f: r.get(f) for f in _FIELDS}, "processed_at": now} for r in rows
+        {
+            **{f: r.get(f) for f in _FIELDS},
+            "model_id": r.get("model_id") or default_model,
+            "processed_at": now,
+        }
+        for r in rows
     ]
     stmt = _insert(db).values(values)
     update_cols = {
@@ -64,11 +84,41 @@ async def upsert_detections(db: AsyncSession, rows: list[dict]) -> int:
     return len(values)
 
 
-async def processed_filenames_since(db: AsyncSession, since: datetime) -> set[str]:
+async def processed_filenames_since(
+    db: AsyncSession, since: datetime, model_id: str | None = None
+) -> set[str]:
     """Filenames already scored whose segment starts on/after ``since`` — the
-    dedup set the scanner checks before downloading anything."""
+    dedup set the scanner checks before downloading anything.
+
+    Scoped to ``model_id`` when given, so switching the configured scan model
+    re-scores the recent window with the new model instead of skipping every file
+    as "already processed" and leaving the old model's verdicts in place.
+    """
     stmt = select(RadioBurstDetection.filename).where(
         RadioBurstDetection.start_time >= since
+    )
+    if model_id:
+        stmt = stmt.where(RadioBurstDetection.model_id == model_id)
+    res = await db.execute(stmt)
+    return {row[0] for row in res.all()}
+
+
+async def filenames_in_range(
+    db: AsyncSession, start: datetime, end: datetime
+) -> set[str]:
+    """Every scored filename with segment start in ``[start, end)`` — regardless
+    of which model scored it.
+
+    This is the *coverage* set the offline catch-up works from: a file already
+    scored by an older classifier is still covered, so switching models does not
+    re-open weeks of archive. (The live scanner's dedup is deliberately narrower —
+    see ``processed_filenames_since``, which is per model.)
+    """
+    stmt = select(RadioBurstDetection.filename).where(
+        and_(
+            RadioBurstDetection.start_time >= start,
+            RadioBurstDetection.start_time < end,
+        )
     )
     res = await db.execute(stmt)
     return {row[0] for row in res.all()}
