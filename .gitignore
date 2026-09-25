@@ -21,6 +21,7 @@ out/
 desktop/build/
 # setuptools output from non-editable installs of the backend
 backend/build/
+Claude output/
 
 # Env
 .env
