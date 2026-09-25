@@ -1,8 +1,9 @@
-# Desktop app (Windows)
+# Desktop app (Windows and Linux)
 
-The dashboard ships as an installable Windows app alongside the website. It is
-the same backend and the same UI, packaged so that a single installer is all a
-machine needs: no Docker, Postgres, Redis, Python or Node.
+The dashboard ships as an installable desktop app alongside the website: a
+Windows installer and a Linux `.deb` package. It is the same backend and the
+same UI, packaged so that a single installer is all a machine needs: no Docker,
+Postgres, Redis, Python or Node.
 
 ## How it works
 
@@ -16,6 +17,10 @@ Solar Monitoring Dashboard.exe   Electron: window, tray, toasts, auto-update  (d
        ├─ cache    in-process TTL dict instead of Redis
        └─ files    %LOCALAPPDATA%\SolarDashboard\data
 ```
+
+Linux is laid out the same way: the app lives in `/opt/Solar Monitoring Dashboard`,
+the interpreter is `resources/python/bin/python3`, and the data folder is
+`~/.local/share/SolarDashboard`.
 
 - **Backend** — [`backend/app/desktop.py`](../backend/app/desktop.py) points the
   normal settings at SQLite, the in-process cache and the static UI, then runs
@@ -34,31 +39,63 @@ Solar Monitoring Dashboard.exe   Electron: window, tray, toasts, auto-update  (d
 - **Python** — a relocatable CPython 3.13 build from
   [python-build-standalone](https://github.com/astral-sh/python-build-standalone),
   with the dependencies pip-installed from
-  [`desktop/requirements.lock.txt`](../desktop/requirements.lock.txt). It
-  includes CPU-only PyTorch, so every feature works, including burst detection.
-  There's no PyInstaller freezing, so the bundle behaves like a normal install.
+  [`desktop/requirements.lock.txt`](../desktop/requirements.lock.txt) (Windows) or
+  [`desktop/requirements-linux.lock.txt`](../desktop/requirements-linux.lock.txt)
+  (Linux). The Linux lock pins every package the two share to the Windows
+  version, so both builds ship the same stack. It includes CPU-only PyTorch, so
+  every feature works, including burst detection. There's no PyInstaller
+  freezing, so the bundle behaves like a normal install.
 
 Closing the window hides it to the **system tray**. Ingestion, the radio-burst
 scan, the offline catch-up and alert delivery keep running, and new
-warning/critical alerts appear as Windows notifications. Quit from the tray menu.
+warning/critical alerts appear as desktop notifications. Quit from the tray menu.
+
+On Linux the tray icon needs a desktop that shows tray (AppIndicator /
+StatusNotifier) icons. Ubuntu, KDE Plasma, Cinnamon and Xfce do; stock GNOME
+needs the *AppIndicator and KStatusNotifierItem Support* extension. Without one,
+the app still runs in the background: open it again from the app launcher, and
+quit with <kbd>Ctrl</kbd>+<kbd>Q</kbd> in its window.
 
 ## Where things live
 
-| What | Where |
-|---|---|
-| App (per-user install, no admin) | `%LOCALAPPDATA%\Programs\Solar Monitoring Dashboard` |
-| Database | `%LOCALAPPDATA%\SolarDashboard\dashboard.db` |
-| Downloaded data, analysis sessions | `%LOCALAPPDATA%\SolarDashboard\data` |
-| Logs (`backend.log`, `main.log`, `backend-console.log`) | `%LOCALAPPDATA%\SolarDashboard\logs` |
-| User settings (`.env`) | `%LOCALAPPDATA%\SolarDashboard\.env` (tray → *Edit settings*) |
-| Window state, browser storage | `%LOCALAPPDATA%\SolarDashboard\electron` |
+| What | Windows | Linux |
+|---|---|---|
+| App | `%LOCALAPPDATA%\Programs\Solar Monitoring Dashboard` (per-user, no admin) | `/opt/Solar Monitoring Dashboard`, command `solar-monitoring-dashboard` |
+| Data folder | `%LOCALAPPDATA%\SolarDashboard` | `~/.local/share/SolarDashboard` |
+| Database | `dashboard.db` in the data folder | same |
+| Downloaded data, analysis sessions | `data` in the data folder | same |
+| Logs (`backend.log`, `main.log`, `backend-console.log`) | `logs` in the data folder | same |
+| User settings (`.env`) | `.env` in the data folder (tray → *Edit settings*) | same; opens in your default text editor |
+| Window state, browser storage | `electron` in the data folder | same |
+| Start at login | Windows login item (tray → *Start with Windows*) | `~/.config/autostart/solar-monitoring-dashboard.desktop` (tray → *Start at login*) |
+
+On Linux, `~/.local/share` and `~/.config` follow `$XDG_DATA_HOME` and
+`$XDG_CONFIG_HOME` when those are set.
 
 The `.env` accepts any setting from [`.env.example`](../.env.example), for example
 `JSOC_EMAIL` or `TELEGRAM_BOT_TOKEN`. After editing it, use tray → *Restart
 backend*. The database, data folder, port and CORS are managed by the app.
 
-**Reset:** quit the app and delete `%LOCALAPPDATA%\SolarDashboard`. Uninstalling
-asks whether to delete it too; updates never touch it.
+**Reset:** quit the app and delete the data folder. Uninstalling on Windows asks
+whether to delete it too. Removing the Linux package never touches it, since a
+system package doesn't delete users' files. Updates never touch it on either
+platform.
+
+## Installing on Linux
+
+Download `SolarMonitoringDashboard-<version>-amd64.deb` from the
+[Releases page](https://github.com/SaanDev/Solar_Monitoring_Dashboard/releases)
+and install it with apt, which also pulls in the few system libraries Electron
+needs:
+
+```bash
+sudo apt install ./SolarMonitoringDashboard-1.0.0-beta-amd64.deb
+```
+
+It appears in the app launcher as *Solar Monitoring Dashboard*; from a terminal,
+run `solar-monitoring-dashboard`. It needs 64-bit Ubuntu 22.04 or Debian 12 or
+newer, or a derivative such as Linux Mint or Pop!_OS. Remove it with
+`sudo apt remove solar-monitoring-dashboard`.
 
 ## Building an installer locally
 
@@ -79,6 +116,33 @@ Don't run it while `next dev` is serving from `frontend/`: like `next build`, it
 rewrites `frontend/.next`. The Docker frontend is unaffected, because it keeps
 `.next` in its own volume.
 
+### Building the Linux package
+
+Prerequisites: Linux x86_64 (WSL 2 with Ubuntu works), Node 20+, `curl`, and Git
+LFS with the checkpoints pulled. No Python is needed; the build downloads its own.
+
+```bash
+./desktop/scripts/build.sh
+```
+
+It runs the same steps as the Windows build. `build-runtime.sh` stages and
+smoke-tests the runtime (cached in `desktop/build/cache`), the static UI is
+built, and electron-builder writes
+`desktop/dist/SolarMonitoringDashboard-<version>-amd64.deb` and
+`latest-linux.yml`. `--skip-runtime` reuses the staged runtime. The same caution
+about `next dev` applies.
+
+To check a package the way CI does (install it with apt, start it headless,
+quit, remove it), run the test script. It needs sudo and uses a throwaway home
+folder:
+
+```bash
+./desktop/scripts/test-deb.sh desktop/dist/SolarMonitoringDashboard-*-amd64.deb
+```
+
+Build on the oldest Linux you want to support, because pip picks wheels for the
+build machine's glibc. CI builds on Ubuntu 22.04.
+
 ### Running the shell from source
 
 ```powershell
@@ -88,8 +152,8 @@ npm install
 npm start                                 # uses backend/.venv and frontend/out
 ```
 
-In dev, the shell uses `backend/.venv/Scripts/python.exe`. That venv needs the
-`desktop` extra (`pip install -e ".[desktop]"`, for `aiosqlite`). Override the
+In dev, the shell uses `backend/.venv/Scripts/python.exe` (`backend/.venv/bin/python`
+on Linux). That venv needs the `desktop` extra (`pip install -e ".[desktop]"`, for `aiosqlite`). Override the
 locations with `SWD_PYTHON`, `SWD_BACKEND_DIR` and `SWD_FRONTEND_DIR`.
 
 The backend alone runs without Electron too:
@@ -104,35 +168,62 @@ backend\.venv\Scripts\python.exe -m app.desktop     # http://127.0.0.1:47800
 1. Bump `version` in [`desktop/package.json`](../desktop/package.json) and commit.
 2. Tag and push:
    ```bash
-   git tag desktop-v0.2.0
-   git push origin desktop-v0.2.0
+   git tag v1.0.0-beta
+   git push origin v1.0.0-beta
    ```
 3. [`.github/workflows/desktop-release.yml`](../.github/workflows/desktop-release.yml)
-   builds the runtime and runs the backend test suite on it. It then builds the
-   installer and uploads it, with `latest.yml`, to a **draft** release
-   `desktop-v0.2.0`. The job fails if the tag and `package.json` disagree.
-4. Review the draft on GitHub and **publish** it. Installed apps check for updates
-   at startup and every 6 hours, download the update in the background, and offer
-   to restart.
+   first creates the **draft** release `v1.0.0-beta`, and fails if the tag and
+   `package.json` disagree. Two jobs then run in parallel, each building its
+   runtime and running the backend test suite on it:
+   - **Windows** builds the installer and uploads it, with `latest.yml`, to the draft.
+   - **Linux** builds the `.deb` and uploads it, with `latest-linux.yml`, to the
+     same draft. It then installs the package, launches it headless and removes
+     it again (`test-deb.sh`).
 
-The updater follows the release GitHub marks as **Latest**, so only desktop
-releases should carry that mark. Builds are currently unsigned, so Windows
+   Betas use `latest.yml` / `latest-linux.yml` too: a beta install first asks for
+   `beta.yml` (`beta-linux.yml`), then falls back to it.
+4. Review the draft on GitHub and **publish** it once both jobs are green.
+   Installed apps check for updates at startup and every 6 hours, download the
+   update in the background, and offer to restart. On Linux, installing it asks
+   for the user's password, since the package is installed system-wide.
+   Declining or cancelling keeps the current version running; it's offered again
+   on the next check.
+
+How installed apps find updates:
+
+- **A prerelease install** (such as `1.0.0-beta`) scans every published release,
+  newest first, and takes the first one with a semver tag. This covers later
+  betas and the final `1.0.0`.
+- **A stable install** only follows the release GitHub marks as **Latest**. Mark
+  betas as *pre-release* on GitHub so stable users stay on stable releases.
+
+Keep the plain `v<version>` tags: the prerelease scan skips any tag that isn't
+valid semver, such as a `desktop-v…` prefix, so beta installs would never update.
+Every `v*` release should carry both packages. Builds are currently unsigned, so Windows
 SmartScreen shows "Windows protected your PC" on first install (*More info →
 Run anyway*). Code signing (e.g. Azure Trusted Signing via electron-builder's
 `win.azureSignOptions`) removes that.
 
 ### Updating the Python dependencies
 
-The runtime installs exactly what `desktop/requirements.lock.txt` pins. After
-changing dependencies in `backend/pyproject.toml`:
+The runtimes install exactly what the locks pin: `desktop/requirements.lock.txt`
+(Windows) and `desktop/requirements-linux.lock.txt` (Linux). After changing
+dependencies in `backend/pyproject.toml`, refresh the Windows lock first, then
+the Linux one, which pins every shared package to the Windows version:
 
 ```powershell
-.\desktop\scripts\build-runtime.ps1 -RefreshLock
+.\desktop\scripts\build-runtime.ps1 -RefreshLock     # on Windows
 ```
 
-Commit the regenerated lock. To move to a newer Python, update `$PyVersion`,
-`$PbsRelease` and `$PbsSha256` in `build-runtime.ps1` (the checksum comes from the
-release's `SHA256SUMS`), then refresh the lock.
+```bash
+./desktop/scripts/build-runtime.sh --refresh-lock     # on Linux or WSL
+```
+
+Commit both locks. To move to a newer Python, update `$PyVersion`, `$PbsRelease`
+and `$PbsSha256` in `build-runtime.ps1`, and `PY_VERSION`, `PBS_RELEASE` and
+`PBS_SHA256` in `build-runtime.sh`. The checksums come from the release's
+`SHA256SUMS`; Linux uses the `x86_64-unknown-linux-gnu-install_only_stripped`
+archive. Then refresh both locks.
 
 ## Keeping the website and the desktop app compatible
 
@@ -154,6 +245,8 @@ Both are built from the same code, so a few rules keep the desktop build working
 ## Known limits
 
 - The desktop app and a hosted website keep separate data; they don't sync.
+- Linux: only a `.deb` for x64 (Debian, Ubuntu and derivatives). There's no
+  AppImage, RPM or ARM build yet.
 - Inference is CPU-only, since the bundled PyTorch is the CPU build.
 - `data/` grows as it does on the server (FITS, images, analysis sessions). Clear
   it from the data folder if disk space matters.

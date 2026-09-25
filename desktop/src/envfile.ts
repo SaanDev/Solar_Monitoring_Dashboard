@@ -1,3 +1,4 @@
+import { dialog, shell } from "electron";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 
@@ -25,9 +26,23 @@ const TEMPLATE = `# Solar Monitoring Dashboard - desktop settings
 # RADIO_BURST_BACKFILL_MAX_DAYS=30
 `;
 
-/** Open the user's .env in Notepad, creating it from the template first. */
+/** Open the user's .env in a text editor (Notepad on Windows, the default
+ * editor on Linux), creating it from the template first. */
 export function openEnvFile(): void {
   ensureDir(HOME);
-  if (!fs.existsSync(ENV_FILE)) fs.writeFileSync(ENV_FILE, TEMPLATE.replace(/\n/g, "\r\n"));
-  spawn("notepad.exe", [ENV_FILE], { detached: true, stdio: "ignore" }).unref();
+  const windows = process.platform === "win32";
+  if (!fs.existsSync(ENV_FILE)) fs.writeFileSync(ENV_FILE, windows ? TEMPLATE.replace(/\n/g, "\r\n") : TEMPLATE);
+  if (windows) {
+    spawn("notepad.exe", [ENV_FILE], { detached: true, stdio: "ignore" }).unref();
+    return;
+  }
+  void shell.openPath(ENV_FILE).then((error) => {
+    if (!error) return;
+    // No default application for plain text files: say where the file is.
+    void dialog.showMessageBox({
+      type: "info",
+      message: "Open the settings file in a text editor",
+      detail: `${ENV_FILE}\n\n(${error})`,
+    });
+  });
 }

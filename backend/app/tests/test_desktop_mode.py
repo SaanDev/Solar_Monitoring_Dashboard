@@ -1,6 +1,9 @@
 """Desktop-app runtime pieces: in-process cache, UTC-aware datetimes on SQLite,
-the static frontend mount and the cross-origin write guard (app/main.py)."""
+the static frontend mount, the cross-origin write guard (app/main.py) and the
+per-user data folder (app/desktop.py)."""
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -8,6 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 import app.cache as cache_module
+import app.desktop as desktop
 from app.cache import MemoryCache, get_client as real_get_client
 from app.config import settings
 from app.main import _DesktopOriginGuard, _FrontendFiles
@@ -152,3 +156,32 @@ def test_origin_guard_allows_app_origin_and_local_clients(guarded_app):
 
 def test_origin_guard_ignores_reads(guarded_app):
     assert guarded_app.get("/api/thing", headers={"Origin": "https://evil.example"}).status_code == 200
+
+
+# ── per-user data folder (must match HOME in desktop/src/paths.ts) ────────────
+
+def _platform(monkeypatch, name):
+    monkeypatch.setattr(desktop, "sys", SimpleNamespace(platform=name))
+
+
+def test_default_home_on_windows_is_localappdata(monkeypatch, tmp_path):
+    _platform(monkeypatch, "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert desktop._default_home() == tmp_path / "SolarDashboard"
+
+
+def test_default_home_on_linux_follows_xdg_data_home(monkeypatch, tmp_path):
+    _platform(monkeypatch, "linux")
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    assert desktop._default_home() == tmp_path / "SolarDashboard"
+
+
+@pytest.mark.parametrize("xdg", [None, "", "relative/share"])
+def test_default_home_on_linux_falls_back_to_local_share(monkeypatch, tmp_path, xdg):
+    _platform(monkeypatch, "linux")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    if xdg is None:
+        monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    else:
+        monkeypatch.setenv("XDG_DATA_HOME", xdg)
+    assert desktop._default_home() == tmp_path / ".local" / "share" / "SolarDashboard"

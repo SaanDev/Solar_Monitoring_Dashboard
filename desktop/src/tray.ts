@@ -1,7 +1,8 @@
 import { app, Menu, nativeImage, shell, Tray } from "electron";
 
+import { setStartAtLogin, startsAtLogin } from "./autostart";
 import { openEnvFile } from "./envfile";
-import { assetPath, HOME, LOG_DIR } from "./paths";
+import { APP_ICON, HOME, LOG_DIR } from "./paths";
 import { saveState, state } from "./state";
 
 export interface TrayActions {
@@ -11,15 +12,11 @@ export interface TrayActions {
   quit: () => void;
 }
 
-// Launched at login with this flag: start the backend, stay in the tray.
-export const HIDDEN_FLAG = "--hidden";
-
-function startsWithWindows(): boolean {
-  return app.getLoginItemSettings({ args: [HIDDEN_FLAG] }).openAtLogin;
-}
-
 export function createTray(actions: TrayActions): Tray {
-  const tray = new Tray(nativeImage.createFromPath(assetPath("icon.ico")));
+  let icon = nativeImage.createFromPath(APP_ICON);
+  // The Linux icon is the 512 px PNG; tray hosts expect something panel-sized.
+  if (process.platform === "linux") icon = icon.resize({ width: 32, height: 32, quality: "best" });
+  const tray = new Tray(icon);
   tray.setToolTip("Solar Monitoring Dashboard");
 
   const rebuild = (): void => {
@@ -37,13 +34,13 @@ export function createTray(actions: TrayActions): Tray {
           },
         },
         {
-          label: "Start with Windows",
+          label: process.platform === "win32" ? "Start with Windows" : "Start at login",
           type: "checkbox",
           // A dev build would register electron.exe itself at login.
           enabled: app.isPackaged,
-          checked: app.isPackaged && startsWithWindows(),
+          checked: app.isPackaged && startsAtLogin(),
           click: (item) => {
-            app.setLoginItemSettings({ openAtLogin: item.checked, args: [HIDDEN_FLAG] });
+            setStartAtLogin(item.checked);
             rebuild();
           },
         },

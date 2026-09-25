@@ -1,13 +1,14 @@
-import { app, BrowserWindow, dialog, Menu, shell, Tray } from "electron";
+import { app, BrowserWindow, dialog, Menu, Notification, shell, Tray } from "electron";
 import log from "electron-log/main";
 import * as path from "node:path";
 
 import { startAlertPolling } from "./alerts";
+import { HIDDEN_FLAG } from "./autostart";
 import { Backend, choosePort } from "./backend";
 import { openEnvFile } from "./envfile";
-import { assetPath, ensureDir, HOME, LOG_DIR } from "./paths";
+import { APP_ICON, assetPath, ensureDir, HOME, LOG_DIR } from "./paths";
 import { saveState, state } from "./state";
-import { createTray, HIDDEN_FLAG } from "./tray";
+import { createTray } from "./tray";
 import { checkForUpdatesInteractive, initUpdater } from "./updater";
 
 const APP_ID = "org.saandev.solardashboard"; // = appId in electron-builder.yml
@@ -53,7 +54,7 @@ function createSplash(): BrowserWindow {
     resizable: false,
     show: false,
     backgroundColor: BACKGROUND,
-    icon: assetPath("icon.ico"),
+    icon: APP_ICON,
     webPreferences: { sandbox: true, contextIsolation: true },
   });
   s.once("ready-to-show", () => s.show());
@@ -75,7 +76,7 @@ function createMainWindow(origin: string, pathname = "/"): BrowserWindow {
     show: false,
     title: "Solar Monitoring Dashboard",
     backgroundColor: BACKGROUND,
-    icon: assetPath("icon.ico"),
+    icon: APP_ICON,
     autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
@@ -101,11 +102,7 @@ function createMainWindow(origin: string, pathname = "/"): BrowserWindow {
     e.preventDefault();
     w.hide();
     if (!state.trayHintShown && tray) {
-      tray.displayBalloon({
-        iconType: "info",
-        title: "Still running in the tray",
-        content: "Data collection and alerts continue. Right-click the tray icon to quit.",
-      });
+      showTrayHint(tray);
       state.trayHintShown = true;
       saveState();
     }
@@ -120,6 +117,28 @@ function createMainWindow(origin: string, pathname = "/"): BrowserWindow {
   });
   void w.loadURL(`${origin}${pathname}`);
   return w;
+}
+
+/** Shown the first time the window is closed: the app is still running. */
+function showTrayHint(t: Tray): void {
+  if (process.platform === "win32") {
+    t.displayBalloon({
+      iconType: "info",
+      title: "Still running in the tray",
+      content: "Data collection and alerts continue. Right-click the tray icon to quit.",
+    });
+    return;
+  }
+  // Balloons are Windows-only. Not every Linux desktop shows tray icons (stock
+  // GNOME needs an extension), so also point at the launcher and Ctrl+Q.
+  if (!Notification.isSupported()) return;
+  new Notification({
+    title: "Still running in the background",
+    body:
+      "Data collection and alerts continue. Reopen it from the tray icon or app launcher. " +
+      "To stop it, use Quit in the tray menu or press Ctrl+Q in the window.",
+    icon: assetPath("icon.png"),
+  }).show();
 }
 
 function showWindow(pathname?: string): void {

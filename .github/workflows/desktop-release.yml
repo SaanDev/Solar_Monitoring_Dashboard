@@ -1,21 +1,62 @@
-# Builds the Windows desktop installer and uploads it to a DRAFT GitHub release.
+# Builds the desktop app for Windows (installer) and Linux (.deb) and uploads
+# both to one DRAFT GitHub release.
 #
 # Release: bump "version" in desktop/package.json, commit, then
-#   git tag desktop-v<version> && git push origin desktop-v<version>
-# When the job finishes, review the draft release on GitHub and publish it —
+#   git tag v<version> && git push origin v<version>      (e.g. v1.0.0-beta)
+# When the jobs finish, review the draft release on GitHub and publish it —
 # installed apps pick the update up from the published release (see docs/desktop.md).
 name: Desktop release
 
 on:
   push:
-    tags: ["desktop-v*"]
-  workflow_dispatch: # manual dry run: builds and uploads the installer as an artifact only
+    tags: ["v*"]
+  workflow_dispatch: # manual dry run: builds and uploads the packages as artifacts only
 
 permissions:
   contents: write # create/update the draft release
 
 jobs:
+  # Both build jobs upload to the same draft. Creating it here, before they
+  # start, stops them from racing to create one each.
+  draft-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: desktop/package.json
+          sparse-checkout-cone-mode: false
+
+      - name: Tag matches desktop/package.json version
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./desktop/package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag v$tag does not match desktop/package.json version $pkg"
+            exit 1
+          fi
+
+      # Looked up the way electron-builder finds it later: by tag_name in the
+      # release list (drafts included).
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          count="$(gh api "repos/$GITHUB_REPOSITORY/releases" \
+            --jq "[.[] | select(.tag_name == \"$GITHUB_REF_NAME\")] | length")"
+          if [ "$count" = "0" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/releases" -f tag_name="$GITHUB_REF_NAME" \
+              -f name="${GITHUB_REF_NAME#v}" -F draft=true > /dev/null
+            echo "created draft release $GITHUB_REF_NAME"
+          else
+            echo "release $GITHUB_REF_NAME already exists"
+          fi
+
   windows-installer:
+    needs: draft-release
+    # A manual dry run skips draft-release; build anyway.
+    if: ${{ !cancelled() && needs.draft-release.result != 'failure' }}
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
@@ -35,17 +76,6 @@ jobs:
           key: lfs-${{ hashFiles('.lfs-assets-id') }}
       - name: Pull LFS objects
         run: git lfs pull
-
-      - name: Tag matches desktop/package.json version
-        if: startsWith(github.ref, 'refs/tags/desktop-v')
-        shell: bash
-        run: |
-          tag="${GITHUB_REF_NAME#desktop-v}"
-          pkg="$(node -p "require('./desktop/package.json').version")"
-          if [ "$tag" != "$pkg" ]; then
-            echo "::error::tag desktop-v$tag does not match desktop/package.json version $pkg"
-            exit 1
-          fi
 
       - uses: actions/setup-node@v4
         with:
@@ -90,25 +120,114 @@ jobs:
         run: npm ci
 
       - name: Build installer and upload to draft release
-        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        if: startsWith(github.ref, 'refs/tags/v')
         working-directory: desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run release
 
       - name: Build installer (dry run)
-        if: ${{ !startsWith(github.ref, 'refs/tags/desktop-v') }}
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         working-directory: desktop
         run: npm run dist
 
       # Tag builds already attach the installer to the release; only a manual
       # dry run needs it as an artifact (~1 GB, so kept briefly).
       - name: Upload installer artifact
-        if: ${{ !startsWith(github.ref, 'refs/tags/desktop-v') }}
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/upload-artifact@v4
         with:
           name: desktop-installer
           path: |
             desktop/dist/*.exe
-            desktop/dist/latest.yml
+            desktop/dist/*.yml
+          retention-days: 3
+
+  linux-deb:
+    needs: draft-release
+    # A manual dry run skips draft-release; build anyway.
+    if: ${{ !cancelled() && needs.draft-release.result != 'failure' }}
+    # Pinned to the oldest supported runner, not ubuntu-latest: pip picks wheels
+    # for the build machine's glibc, so building on an older one keeps the .deb
+    # installable on older distributions (Ubuntu 22.04 / Debian 12 and newer).
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: List LFS objects
+        run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
+      - name: Cache LFS objects
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: lfs-${{ hashFiles('.lfs-assets-id') }}
+      - name: Pull LFS objects
+        run: git lfs pull
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            desktop/package-lock.json
+
+      - name: Cache runtime downloads
+        uses: actions/cache@v4
+        with:
+          path: desktop/build/cache
+          key: runtime-linux-${{ hashFiles('desktop/requirements-linux.lock.txt', 'desktop/scripts/build-runtime.sh') }}
+          restore-keys: runtime-linux-
+
+      - name: Bundled Python runtime
+        run: ./desktop/scripts/build-runtime.sh
+
+      # As on Windows: the shipped interpreter and packages, with pytest in a
+      # throwaway venv on top.
+      - name: Backend tests on the bundled runtime
+        working-directory: backend
+        run: |
+          ../desktop/build/runtime/python/bin/python3 -m venv --system-site-packages ../desktop/build/test-venv
+          ../desktop/build/test-venv/bin/python -m pip install --no-warn-script-location pytest pytest-asyncio
+          ../desktop/build/test-venv/bin/python -m pytest -q
+
+      - name: Frontend static export
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build:desktop
+
+      - name: Electron dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build .deb and upload to draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run release:linux
+
+      - name: Build .deb (dry run)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        working-directory: desktop
+        run: npm run dist:linux
+
+      # Installs the package the way users do and starts it headless: catches
+      # missing dependencies, a broken postinst and a backend that can't start
+      # from /opt.
+      - name: Install and launch the .deb
+        run: ./desktop/scripts/test-deb.sh desktop/dist/*.deb
+
+      - name: Upload .deb artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-deb
+          path: |
+            desktop/dist/*.deb
+            desktop/dist/latest-linux.yml
           retention-days: 3

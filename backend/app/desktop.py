@@ -1,4 +1,4 @@
-"""Entry point for the Windows desktop app: ``python -m app.desktop``.
+"""Entry point for the desktop app (Windows and Linux): ``python -m app.desktop``.
 
 The Electron shell (``desktop/``) spawns this with a bundled Python. It runs the
 same FastAPI app the website uses, reconfigured to need nothing else on the
@@ -12,7 +12,9 @@ machine:
 Environment (all optional, set by the Electron launcher):
 
 ``SWD_HOME``          per-user data root (DB, data files, logs, user ``.env``).
-                      Default: ``%LOCALAPPDATA%\\SolarDashboard``.
+                      Default: ``%LOCALAPPDATA%\\SolarDashboard`` on Windows,
+                      ``$XDG_DATA_HOME/SolarDashboard`` (``~/.local/share/...``)
+                      on Linux.
 ``SWD_PORT``          port on 127.0.0.1. Default 47800 — fixed so the page origin,
                       and with it the browser's localStorage, is stable.
 ``SWD_FRONTEND_DIR``  directory of the static export (``frontend/out``).
@@ -38,8 +40,14 @@ DEFAULT_PORT = 47800
 
 
 def _default_home() -> Path:
-    base = os.environ.get("LOCALAPPDATA")
-    return Path(base) / "SolarDashboard" if base else Path.home() / ".solar-dashboard"
+    """Same folder as HOME in desktop/src/paths.ts."""
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA")
+        return Path(base) / "SolarDashboard" if base else Path.home() / ".solar-dashboard"
+    # The XDG data dir; the spec says to ignore an empty or relative value.
+    xdg = os.environ.get("XDG_DATA_HOME", "")
+    base = Path(xdg) if os.path.isabs(xdg) else Path.home() / ".local" / "share"
+    return base / "SolarDashboard"
 
 
 def _configure_environment(home: Path, port: int) -> None:

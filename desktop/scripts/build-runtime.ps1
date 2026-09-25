@@ -110,8 +110,14 @@ if ($RefreshLock -or -not (Test-Path $Lock)) {
   Step "Resolving dependencies from backend/pyproject.toml -> requirements.lock.txt"
   # torch first, from the CPU index, so the [ml] extra is already satisfied by it.
   Invoke-Native $Py ($PipInstall + @("torch", "torchvision", "--index-url", $TorchIndex))
-  Invoke-Native $Py ($PipInstall + @("$BackendSrc[ml,desktop]"))
-  # The backend itself ships as source (step 3), not as an installed package.
+  # Resolve from a lone copy of pyproject.toml: building the real backend/ tree
+  # would make setuptools leave build/ and *.egg-info litter in the repo. Only
+  # the dependency list matters here — the backend ships as source (step 3).
+  $LockProject = Join-Path $BuildDir "lock-project"
+  if (Test-Path $LockProject) { Remove-Item -Recurse -Force $LockProject }
+  New-Item -ItemType Directory -Force $LockProject | Out-Null
+  Copy-Item (Join-Path $BackendSrc "pyproject.toml") $LockProject
+  Invoke-Native $Py ($PipInstall + @("$LockProject[ml,desktop]"))
   Invoke-Native $Py @("-m", "pip", "uninstall", "-y", "space-weather-backend")
   $frozen = Invoke-Native $Py @("-m", "pip", "freeze") -Capture
   $header = @(

@@ -138,18 +138,20 @@ docker compose up
 
 All services start: PostgreSQL on 5432, Redis on 6379, backend on 8000, frontend on 3000.
 
-## Desktop app (Windows)
+## Desktop app (Windows and Linux)
 
-The same dashboard also ships as an installable Windows app: one installer, no
-Docker, Postgres, Redis, Python or Node needed on the target machine. It runs the
+The same dashboard also ships as an installable desktop app for Windows (an
+installer) and Linux (a `.deb` for Ubuntu, Debian and derivatives): no Docker,
+Postgres, Redis, Python or Node needed on the target machine. It runs the
 backend on a local SQLite database, serves the UI itself, and keeps collecting
-data and raising alerts from the system tray. Installers are published on the
+data and raising alerts from the system tray. Packages are published on the
 [Releases page](https://github.com/SaanDev/Solar_Monitoring_Dashboard/releases)
-and the installed app updates itself.
+and the installed app updates itself. On Linux, install with
+`sudo apt install ./SolarMonitoringDashboard-<version>-amd64.deb`.
 
-Build one locally with `.\desktop\scripts\build.ps1`. See
-[docs/desktop.md](docs/desktop.md) for how it works, where it keeps its data, and
-how to cut a release.
+Build one locally with `.\desktop\scripts\build.ps1` (Windows) or
+`./desktop/scripts/build.sh` (Linux). See [docs/desktop.md](docs/desktop.md) for
+how it works, where it keeps its data, and how to cut a release.
 
 ## API
 
@@ -178,4 +180,4 @@ Large files (FITS, spectrograms, solar images, LASCO frames) are stored under `D
 - [API design](docs/api-design.md)
 - [Data sources](docs/data-sources.md)
 - [Deployment](docs/deployment.md)
-- [Desktop app (Windows)](docs/desktop.md)
+- [Desktop app (Windows and Linux)](docs/desktop.md)
