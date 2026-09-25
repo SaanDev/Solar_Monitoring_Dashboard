@@ -1,11 +1,9 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import type { GoesXrsPoint } from "@/lib/types";
 import { toPlotlyUtc } from "@/lib/formatting";
 import { usePlotlyTheme, type PlotlyTheme } from "./plotlyTheme";
-
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
+import { ResponsivePlot } from "./ResponsivePlot";
 
 function _layout(theme: PlotlyTheme): Partial<Plotly.Layout> {
   return {
@@ -105,7 +103,7 @@ export function GoesXrsChart({ data, loading }: Props) {
   const times = data.map((d) => toPlotlyUtc(d.time));
 
   return (
-    <Plot
+    <ResponsivePlot
       data={[
         {
           x: times,
@@ -126,8 +124,6 @@ export function GoesXrsChart({ data, loading }: Props) {
       ]}
       layout={_layout(theme) as Plotly.Layout}
       config={{ displayModeBar: false, responsive: true }}
-      style={{ width: "100%", height: "100%" }}
-      useResizeHandler
     />
   );
 }

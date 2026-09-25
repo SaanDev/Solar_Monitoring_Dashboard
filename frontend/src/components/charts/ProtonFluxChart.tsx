@@ -1,11 +1,9 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import type { GoesProtonPoint } from "@/lib/types";
 import { toPlotlyUtc } from "@/lib/formatting";
 import { usePlotlyTheme } from "./plotlyTheme";
-
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
+import { ResponsivePlot } from "./ResponsivePlot";
 
 interface Props {
   data: GoesProtonPoint[];
@@ -29,7 +27,7 @@ export function ProtonFluxChart({ data, loading }: Props) {
   const times = data.map((d) => toPlotlyUtc(d.time));
 
   return (
-    <Plot
+    <ResponsivePlot
       data={[
         { x: times, y: data.map((d) => d.flux_gt10), type: "scatter", mode: "lines", name: ">10 MeV", line: { color: "#f97316", width: 1.5 } },
         { x: times, y: data.map((d) => d.flux_gt50), type: "scatter", mode: "lines", name: ">50 MeV", line: { color: "#a855f7", width: 1.5 } },
@@ -44,8 +42,6 @@ export function ProtonFluxChart({ data, loading }: Props) {
         shapes: [{ type: "line", xref: "paper", yref: "y", x0: 0, x1: 1, y0: 10, y1: 10, line: { color: "#ef4444", dash: "dot", width: 1 } }],
       } as Plotly.Layout}
       config={{ displayModeBar: false, responsive: true }}
-      style={{ width: "100%", height: "100%" }}
-      useResizeHandler
     />
   );
 }

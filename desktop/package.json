@@ -1,7 +1,7 @@
 {
   "name": "solar-monitoring-dashboard-desktop",
   "productName": "Solar Monitoring Dashboard",
-  "version": "0.1.0",
+  "version": "1.0.0-beta",
   "description": "Windows desktop app for the Solar Monitoring Dashboard",
   "author": "SaanDev",
   "private": true,

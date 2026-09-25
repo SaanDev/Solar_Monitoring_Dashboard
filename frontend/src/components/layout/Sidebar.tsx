@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import NextImage from "next/image";
 import { usePathname } from "next/navigation";
 import useSWR from "swr";
 import {
@@ -107,12 +108,18 @@ export function Sidebar() {
       >
         <div
           className={clsx(
-            "flex h-14 shrink-0 items-center",
-            sidebarOpen ? "px-4" : "md:justify-center md:px-0"
+            "flex h-14 shrink-0 items-center gap-2.5",
+            sidebarOpen ? "px-4" : "px-4 md:justify-center md:px-0"
           )}
         >
-          <span className="text-sm font-bold uppercase tracking-widest text-accent-cyan">
-            {sidebarOpen ? "SWDash" : <span className="md:inline">SW</span>}
+          <NextImage src="/logo.png" alt="" width={28} height={28} priority className="shrink-0" />
+          <span
+            className={clsx(
+              "text-sm font-bold uppercase tracking-widest text-accent-cyan",
+              !sidebarOpen && "md:hidden"
+            )}
+          >
+            SWDash
           </span>
         </div>
 
@@ -162,7 +169,7 @@ export function Sidebar() {
 
           <div className="border-t border-surface-border px-4 py-2">
             <p className="text-xs text-slate-600">Space Weather Dashboard</p>
-            <p className="text-xs text-slate-700">v1.0.0</p>
+            <p className="text-xs text-slate-700">v1.0.0-beta</p>
           </div>
         </div>
       </aside>
