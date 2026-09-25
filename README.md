@@ -89,10 +89,27 @@ cd backend
 pip install -e ".[ml]"
 ```
 
-Which model the *automatic* scan uses is configuration
-(`RADIO_BURST_BINARY_MODEL`, `RADIO_BURST_CLASSIFY_TYPES`); the Burst Detector
-page lets you pick per run. `GET /api/radio/models` lists what is available.
+Which model the *automatic* scan uses is chosen from the dashboard's **Settings**
+page (Automatic Burst Detection) — stored in the database, applied to the running
+scanner, and preserved across restarts. `RADIO_BURST_BINARY_MODEL` /
+`RADIO_BURST_CLASSIFY_TYPES` remain the defaults until something is chosen there.
+The Burst Detector page still lets you pick per run. `GET /api/radio/models` lists
+what is available and `PUT /api/radio/models/default` sets the scan's model;
 `app/ml/registry.py` is the single source of truth for model ids and paths.
+
+Switching models is safe: detections are deduped *per model*, so the next scan
+re-scores the recent window with the new classifier and rebuilds the burst events
+from it, each model gating alerts on its own tuned threshold.
+
+The scan only looks at the last `RADIO_BURST_MAX_AGE_HOURS`, so downtime would
+otherwise leave permanent holes in the burst timeline and the correlation
+histograms. An **offline catch-up** closes them: it compares the archive listing
+against what has been scored and fills in the missing days, automatically (the
+last `RADIO_BURST_BACKFILL_MAX_DAYS`, re-checked hourly) or on demand from
+Settings → Detection Coverage, which also shows per-day coverage and lets a run
+be aimed at an older range. Runs are resumable and cancellable, a day covered by
+*any* model counts as covered, and filled-in events never send notifications —
+see [`app/services/radio_backfill_service.py`](backend/app/services/radio_backfill_service.py).
 
 CCMT is a *classifier*, not a detector: it was trained on hand-drawn crops around
 individual bursts, so the cascade finds bright connected regions inside a
@@ -121,6 +138,19 @@ docker compose up
 
 All services start: PostgreSQL on 5432, Redis on 6379, backend on 8000, frontend on 3000.
 
+## Desktop app (Windows)
+
+The same dashboard also ships as an installable Windows app: one installer, no
+Docker, Postgres, Redis, Python or Node needed on the target machine. It runs the
+backend on a local SQLite database, serves the UI itself, and keeps collecting
+data and raising alerts from the system tray. Installers are published on the
+[Releases page](https://github.com/SaanDev/Solar_Monitoring_Dashboard/releases)
+and the installed app updates itself.
+
+Build one locally with `.\desktop\scripts\build.ps1`. See
+[docs/desktop.md](docs/desktop.md) for how it works, where it keeps its data, and
+how to cut a release.
+
 ## API
 
 - `GET /api/status` — backend health
@@ -133,6 +163,8 @@ All services start: PostgreSQL on 5432, Redis on 6379, backend on 8000, frontend
 - `GET /api/soho/lasco/latest?camera=C2` — latest LASCO images
 - `GET /api/radio/stations` — e-CALLISTO station list
 - `POST /api/radio/ecallisto/process` — process a FITS file
+- `GET /api/radio/backfill` — burst-detection coverage per day + catch-up progress
+- `POST /api/radio/backfill` — fill in days missed while offline
 - `GET /api/alerts/latest` — latest alerts
 - `GET /api/events?start=&end=` — event timeline
 
@@ -146,3 +178,4 @@ Large files (FITS, spectrograms, solar images, LASCO frames) are stored under `D
 - [API design](docs/api-design.md)
 - [Data sources](docs/data-sources.md)
 - [Deployment](docs/deployment.md)
+- [Desktop app (Windows)](docs/desktop.md)

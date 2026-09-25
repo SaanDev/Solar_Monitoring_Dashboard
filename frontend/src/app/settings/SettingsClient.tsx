@@ -4,6 +4,8 @@ import { Monitor, Moon, Sun } from "lucide-react";
 import { clsx } from "clsx";
 import { useApp, type Theme } from "@/components/providers";
 import { NotificationSettingsCard } from "@/components/settings/NotificationSettingsCard";
+import { BurstDetectionModelCard } from "@/components/settings/BurstDetectionModelCard";
+import { BurstBackfillCard } from "@/components/settings/BurstBackfillCard";
 
 const OPTIONS: { key: Theme; label: string; icon: typeof Sun }[] = [
   { key: "light", label: "Light", icon: Sun },
@@ -39,6 +41,10 @@ export function SettingsClient() {
           ))}
         </div>
       </section>
+
+      <BurstDetectionModelCard />
+
+      <BurstBackfillCard />
 
       <NotificationSettingsCard />
     </div>

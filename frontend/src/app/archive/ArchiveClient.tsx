@@ -5,7 +5,7 @@ import useSWR from "swr";
 import { clsx } from "clsx";
 import { ChevronLeft, ChevronRight, Download } from "lucide-react";
 
-import { api } from "@/lib/api";
+import { API_BASE, api } from "@/lib/api";
 import { DynamicSpectrumPanel } from "@/components/radio/DynamicSpectrumPanel";
 import { SolarArchive } from "./SolarArchive";
 import { XrayProtonArchive } from "./XrayProtonArchive";
@@ -13,7 +13,7 @@ import { GeomagneticArchive } from "./GeomagneticArchive";
 import { formatUtcShort } from "@/lib/formatting";
 import type { BurstEventSummary } from "@/lib/types";
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const apiBase = API_BASE;
 
 function fitsUrl(date: string, station: string, filename: string | null): string | null {
   if (!filename) return null;

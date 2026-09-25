@@ -34,15 +34,6 @@ export interface SummaryLatest {
   active_alerts: number;
 }
 
-/** Claude-generated "State of the Sun" operator briefing. `available` is false
- * when no API key is configured server-side (the card hides). */
-export interface BriefingResponse {
-  text: string | null;
-  generated_at: string | null;
-  model: string | null;
-  available: boolean;
-}
-
 // ─── GOES XRS ────────────────────────────────────────────────────────────────
 
 export interface GoesXrsPoint {
@@ -493,8 +484,61 @@ export interface ModelInfo {
 export interface ModelsResponse {
   models: ModelInfo[];
   default_binary: string;
+  /** "selected" = chosen on the Settings page and stored server-side;
+   * "config" = still following the backend's RADIO_BURST_BINARY_MODEL. */
+  default_binary_source: "selected" | "config";
   type_model: string | null;
   classify_types: boolean;
+}
+
+// ─── Offline catch-up (backfill of missed archive days) ──────────────────────
+
+/** How much of one UTC day's e-CALLISTO archive has been scored. */
+export interface BackfillDayCoverage {
+  day: string; // YYYY-MM-DD
+  /** "unknown" = never inspected; "partial" = segments still missing;
+   * "done" = fully scored; today is always partial (its last hours belong to
+   * the live scanner). */
+  state: "unknown" | "pending" | "running" | "partial" | "done" | "error";
+  archive_files: number;
+  covered_files: number;
+  events: number;
+  model_id: string;
+  error: string | null;
+}
+
+/** Progress of a catch-up run. `day_files_*` track the day in flight;
+ * `files_*` are cumulative over the run. */
+export interface BackfillJob {
+  job_id: string;
+  status: "running" | "done" | "error" | "cancelled";
+  trigger: "auto" | "manual";
+  start_day: string;
+  end_day: string;
+  force: boolean;
+  model_id: string;
+  model_name: string;
+  days_total: number;
+  days_done: number;
+  current_day: string | null;
+  day_files_total: number;
+  day_files_done: number;
+  files_scored: number;
+  files_failed: number;
+  events_written: number;
+  started_at: string;
+  finished_at: string | null;
+  error: string | null;
+  message: string;
+}
+
+export interface BackfillStatusResponse {
+  enabled: boolean;
+  running: boolean;
+  auto_window_days: number;
+  live_window_hours: number;
+  job: BackfillJob | null;
+  coverage: BackfillDayCoverage[];
 }
 
 // ─── Burst Predictor (ML daily prediction vs official burst list) ─────────────
@@ -698,6 +742,9 @@ export interface SpaceWeatherEvent {
   description: string;
   /** Observing stations for station-based events (radio bursts); empty otherwise. */
   stations: string[];
+  /** Radio bursts only: "Type II" | "Type III" | "Other" from the burst-type
+   * classifier. Null when typing was off or nothing was classifiable. */
+  burst_type?: string | null;
   related_event_ids: string[];
   source_url: string | null;
   /** Id of the causal storyline this event belongs to (null if it stands alone). */

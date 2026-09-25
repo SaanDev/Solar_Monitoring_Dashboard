@@ -7,14 +7,17 @@ re-downloaded or re-scored. ``radio_burst`` events shown in the alert feed are
 *aggregated* from the burst-positive rows here, grouped by 15-minute window.
 
 ``filename`` is globally unique in the e-CALLISTO archive
-(``STATION_YYYYMMDD_HHMMSS_NN.fit.gz``), so it serves as the primary key.
+(``STATION_YYYYMMDD_HHMMSS_NN.fit.gz``), so it serves as the primary key. The
+automatic scan runs one binary model at a time (the one selected on the Settings
+page), so there is at most one row per file; ``model_id`` records which model
+produced it and re-scoring with a different model replaces the row.
 """
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, String
+from sqlalchemy import Float, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.database import Base
+from app.database import Base, UTCDateTime
 
 
 def _utcnow() -> datetime:
@@ -28,11 +31,13 @@ class RadioBurstDetection(Base):
     filename: Mapped[str] = mapped_column(String(128), primary_key=True)
     station: Mapped[str] = mapped_column(String(64), nullable=False)
     # Segment start (from the filename / FITS header); ~15 min long.
+    # Indexed: coverage counting, dedup and event aggregation all range-scan it,
+    # and the table grows by ~5k rows per archive day once gaps are being filled.
     start_time: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        UTCDateTime(), nullable=False, index=True
     )
     end_time: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
     focus: Mapped[str] = mapped_column(String(8), nullable=False, default="")
     # Sigmoid output in [0, 1] and the model's verdict at its tuned threshold.
@@ -40,6 +45,16 @@ class RadioBurstDetection(Base):
     predicted_label: Mapped[str] = mapped_column(String(16), nullable=False)
     # Human-facing band: "High-confidence burst" | "Likely burst" | ...
     alert_level: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    # Which binary classifier produced this verdict, e.g. "ccm-1.1.0". Rows that
+    # predate model selection are all CCM v1.0.0 (the migration's default).
+    model_id: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="ccm-1.0.0", index=True
+    )
+    # Burst type from the second stage: "Type II" | "Type III" | "Other". Null
+    # when typing was off, the file is not a burst, or no region was typable.
+    burst_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    type_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    type_model_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     processed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
+        UTCDateTime(), default=_utcnow, onupdate=_utcnow, nullable=False
     )

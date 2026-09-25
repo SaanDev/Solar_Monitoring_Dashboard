@@ -11,11 +11,22 @@ _DEFAULT_DATA_DIR = str(_BACKEND_ROOT / "data")
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    version: str = "0.1.0"
+    version: str = "1.0.0"
     log_level: str = "info"
 
     database_url: str = "postgresql+asyncpg://swdash:swdash@localhost:5432/swdash"
+    # Empty or "memory://" swaps Redis for an in-process TTL cache (app/cache.py)
+    # — what the desktop app uses, since it ships without a Redis server.
     redis_url: str = "redis://localhost:6379/0"
+
+    # ── Windows desktop app (see app/desktop.py, docs/desktop.md) ─────────────
+    # Set by the desktop launcher, never by the website/Docker deployments.
+    # desktop_mode turns on the cross-origin write guard in app/main.py.
+    desktop_mode: bool = False
+    # Directory holding the Next.js static export (`npm run build:desktop`).
+    # When set, the backend serves the dashboard UI itself at "/", on the same
+    # origin as /api. Empty (the default) leaves the frontend to Next.js.
+    frontend_dist_dir: str = ""
 
     # Run the background ingestion scheduler on startup. Disable in tests/CI.
     enable_scheduler: bool = True
@@ -36,7 +47,10 @@ class Settings(BaseSettings):
     # the first-run backlog and keeps alerting focused on recent activity).
     radio_burst_max_age_hours: int = 3
     # Minimum burst probability for a detection to contribute to an alert/event.
-    radio_burst_alert_min_probability: float = 0.595
+    # 0 (default) = use the active model's own tuned decision threshold, which is
+    # per-model (CCM v1.0.0 = 0.595, CCM v1.1.0 = 0.51) and read from its
+    # checkpoint. Set a positive value only to deliberately gate *above* that.
+    radio_burst_alert_min_probability: float = 0.0
     # Corroboration filter for raising a burst ALERT: a 15-min window only becomes
     # a radio_burst event when at least this many distinct stations detected the
     # burst, with at least this many of them above the high-confidence probability.
@@ -49,15 +63,66 @@ class Settings(BaseSettings):
     # 0 (default) = no limit: process every available segment for the day across
     # all selected stations. Set a positive value only to bound a very large run.
     radio_burst_predict_max_files: int = 0
+    # ── Offline catch-up ──────────────────────────────────────────────────
+    # Downtime leaves holes in the burst timeline: the live scan above only ever
+    # looks at the last `radio_burst_max_age_hours`, so anything older is never
+    # scored. The catch-up pass fills those days in the background
+    # (app/services/radio_backfill_service.py).
+    radio_burst_backfill_enabled: bool = True
+    # How far back the AUTOMATIC catch-up reaches, in days. A day of archive is
+    # ~5k segments (~30-40 min of scoring), so a cold start on a long gap is a
+    # long job — it is resumable and cancellable, and runs newest day first.
+    # Wider gaps can still be filled by hand from the Settings page.
+    radio_burst_backfill_max_days: int = 30
+    # How often to re-check for gaps (seconds). Cheap when there are none: days
+    # already recorded as covered are skipped without touching the network.
+    radio_burst_backfill_interval: int = 3600
+    # Concurrent archive downloads while catching up. Deliberately gentler than
+    # the live scan's: real-time alerting has priority over history.
+    radio_burst_backfill_concurrency: int = 3
+
+    # Default binary model for the automatic scan (and the Burst Detector page's
+    # initial choice). Ids come from app/ml/registry.py: "ccm-1.0.0" | "ccm-1.1.0".
+    # Only a default: a model chosen on the Settings page is stored in the
+    # database and takes precedence (app/services/model_settings_service.py).
+    radio_burst_binary_model: str = "ccm-1.1.0"
+    # Second stage: classify the burst TYPE of every burst-positive file with
+    # CCMT. Runs on region crops (see app/ml/regions.py), never whole files.
+    radio_burst_classify_types: bool = True
+    radio_burst_type_model: str = "ccmt-1.0.0"
+    # Region proposals fed to the type model. Brightness in normalised [0,1]
+    # units where 0 = -1 dB and 1 = +8 dB above background; the effective
+    # threshold is capped adaptively per spectrum (see regions.resolve_threshold).
+    radio_burst_region_threshold: float = 0.35
+    radio_burst_region_min_area: int = 60
+    radio_burst_region_max: int = 8
+    # Smallest region worth typing, in pixels (frequency rows x time samples).
+    # Matches the smallest box CCMT was trained on, and drops e-CALLISTO's
+    # periodic narrow-band calibration marker, which otherwise fills every
+    # candidate slot. See app/ml/regions.py.
+    radio_burst_region_min_rows: int = 12
+    radio_burst_region_min_cols: int = 9
 
     # Subdirectories are derived from data_dir (see properties below) so a single
     # DATA_DIR controls all file storage.
     data_dir: str = _DEFAULT_DATA_DIR
 
     noaa_base_url: str = "https://services.swpc.noaa.gov"
+    # NASA DONKI (CME catalog + WSA-ENLIL arrival predictions). The CCMC web
+    # service needs no API key, unlike the api.nasa.gov mirror.
+    donki_base_url: str = "https://kauai.ccmc.gsfc.nasa.gov/DONKI"
+    # How often to re-fetch the DONKI window (analyses are revised for days),
+    # and how far back that window reaches.
+    cme_poll_seconds: int = 7200
+    cme_lookback_days: int = 30
     helioviewer_base_url: str = "https://api.helioviewer.org"
     # JSOC synoptic FITS archives (SDO/AIA + SDO/HMI) for raw downloads.
     jsoc_base_url: str = "http://jsoc.stanford.edu"
+    # JSOC export requires a notify e-mail registered at
+    # http://jsoc.stanford.edu/ajax/register_email.html — used by the drms
+    # "fast path" (server-side cutout/binning) in the Data Analysis feature.
+    # Empty disables the fast path; acquisition then falls back to VSO/Fido.
+    jsoc_email: str = ""
     # GFZ — historical Kp index (full record since 1932).
     gfz_base_url: str = "https://kp.gfz.de"
     # SILSO (SIDC, Royal Observatory of Belgium) — daily estimated sunspot number.
@@ -65,17 +130,33 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
-    # ── Native ML inference (burst classifier) ────────────────────────────────
-    # Path to the ResNet-18 checkpoint. Relative paths are resolved from the
-    # backend package root. The checkpoint ships in the repo via Git LFS at
-    # backend/ml_model/best.pt, so a normal `git clone` + `git lfs pull` brings
-    # it down automatically — no manual download needed.
-    ml_model_path: str = "ml_model/best.pt"
-    # Optional direct download URL — only a fallback for environments without
+    # ── Alert delivery (Telegram / webhook push) ───────────────────────────────
+    # Bot token from @BotFather — the one channel secret, kept out of the DB.
+    telegram_bot_token: str = ""
+    telegram_api_base: str = "https://api.telegram.org"
+    # Dispatch pass cadence + per-pass send cap (flood control) + how far back
+    # an event can start and still be delivered.
+    notify_dispatch_seconds: int = 120
+    notify_max_per_pass: int = 8
+    notify_lookback_hours: int = 48
+
+    # ── Native ML inference (burst classifiers) ───────────────────────────────
+    # Paths to the ResNet-18 checkpoints. Relative paths are resolved from the
+    # backend package root. They ship in the repo via Git LFS under
+    # backend/ml_model/, so a normal `git clone` + `git lfs pull` brings them
+    # down automatically — no manual download needed. See app/ml/registry.py for
+    # which id maps to which path.
+    ml_model_path: str = "ml_model/best.pt"            # CCM v1.0.0 (binary)
+    ml_ccm_v110_path: str = "ml_model/ccm_v1_1_0.pt"   # CCM v1.1.0 (binary)
+    ml_ccmt_v100_path: str = "ml_model/ccmt_v1_0_0.pt"  # CCMT v1.0.0 (burst type)
+    # Optional direct download URLs — only a fallback for environments without
     # Git LFS (e.g. a GitHub "Download ZIP" that ships LFS pointer files).
-    # Set via ML_MODEL_URL in .env; leave empty to rely on the LFS copy.
+    # Set via ML_MODEL_URL / ML_CCM_V110_URL / ML_CCMT_V100_URL in .env; leave
+    # empty to rely on the LFS copies.
     ml_model_url: str = ""
-    # When True and the checkpoint is missing AND a URL is set, download on startup.
+    ml_ccm_v110_url: str = ""
+    ml_ccmt_v100_url: str = ""
+    # When True and a checkpoint is missing AND its URL is set, download on startup.
     ml_model_auto_download: bool = True
     # Device for torch inference: "auto" (CUDA > MPS > CPU), "cpu", "cuda", "mps".
     ml_inference_device: str = "auto"

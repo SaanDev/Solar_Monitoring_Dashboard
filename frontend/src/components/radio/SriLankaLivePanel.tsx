@@ -1,11 +1,11 @@
 "use client";
 
 import useSWR from "swr";
-import { api } from "@/lib/api";
+import { API_BASE, api } from "@/lib/api";
 import { formatUtcShort } from "@/lib/formatting";
 import { EmptyState } from "@/components/ui/EmptyState";
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const apiBase = API_BASE;
 
 export function SriLankaLivePanel({
   heightClass = "min-h-[600px] flex-1",

@@ -2,6 +2,7 @@
 
 import type { RadioSpectrum } from "@/lib/types";
 import { formatUtcShort } from "@/lib/formatting";
+import { API_BASE } from "@/lib/api";
 
 interface Props {
   spectrum: RadioSpectrum | null;
@@ -26,7 +27,7 @@ export function DynamicSpectrumPanel({ spectrum, loading, error }: Props) {
     );
   }
 
-  const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  const apiBase = API_BASE;
 
   return (
     <div className="flex h-full flex-col gap-2">

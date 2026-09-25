@@ -1,0 +1,60 @@
+# Windows installer for the desktop app. Build with scripts/build.ps1, which
+# first stages the Python runtime (build/runtime) and the static UI
+# (../frontend/out) that extraResources below pick up.
+appId: org.saandev.solardashboard
+productName: Solar Monitoring Dashboard
+copyright: Copyright © SaanDev
+
+directories:
+  output: dist
+  buildResources: assets
+
+# The Electron shell only. Production node_modules are added automatically.
+files:
+  - out/**/*
+  - assets/**/*
+  - "!assets/installer.nsh"
+  - package.json
+
+# Shipped unpacked next to the app (process.resourcesPath) — python.exe has to
+# run from real files, and the backend reads alembic/ and ml_model/ from disk.
+extraResources:
+  - from: build/runtime/python
+    to: python
+  - from: build/runtime/backend
+    to: backend
+  - from: ../frontend/out
+    to: frontend
+
+win:
+  target:
+    - target: nsis
+      arch: x64
+  icon: assets/icon.ico
+
+nsis:
+  oneClick: false
+  # Per-user install under %LOCALAPPDATA%\Programs: no admin prompt, and
+  # auto-updates never need elevation.
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Solar Monitoring Dashboard
+  # User data lives in %LOCALAPPDATA%\SolarDashboard; installer.nsh asks
+  # before removing it on a real uninstall (never on an update).
+  deleteAppDataOnUninstall: false
+  include: assets/installer.nsh
+  artifactName: SolarMonitoringDashboard-Setup-${version}.${ext}
+
+publish:
+  provider: github
+  owner: SaanDev
+  repo: Solar_Monitoring_Dashboard
+  # Releases are tagged desktop-v<version> (the tag that triggers CI), keeping
+  # them apart from anything else released from this repo. The installed app
+  # updates from whichever release GitHub marks "Latest", so only desktop
+  # releases should carry that mark.
+  tagNamePrefix: desktop-v
+  # CI uploads to a draft; publishing it on GitHub is what ships the update.
+  releaseType: draft

@@ -4,11 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import { clsx } from "clsx";
 import { Pin, X } from "lucide-react";
-import { api } from "@/lib/api";
+import { API_BASE, api } from "@/lib/api";
 import { formatUtcShort } from "@/lib/formatting";
 import { EmptyState } from "@/components/ui/EmptyState";
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const apiBase = API_BASE;
 
 const DEFAULT_STATION = "SRI-Lanka";
 const LS_STATION = "live-radio-station";

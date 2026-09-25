@@ -771,18 +771,20 @@ const SETTINGS: GuideEntry[] = [
     title: "Settings",
     category: "settings",
     short:
-      "Personalize the dashboard: choose a theme and configure how you receive alert notifications.",
-    tags: ["settings", "theme", "notifications"],
+      "Personalize the dashboard: choose a theme, pick the automatic burst-detection model, check burst-detection coverage and fill in days missed while offline, and configure how you receive alert notifications.",
+    tags: ["settings", "theme", "notifications", "model", "burst detection", "coverage", "backfill", "catch-up", "offline"],
     body: [
       {
         kind: "para",
         text:
-          "The Settings page holds your personal preferences.",
+          "The Settings page holds your preferences — some personal to this browser, some shared by everyone using this dashboard.",
       },
       {
         kind: "list",
         items: [
           "Appearance: switch the theme between Light, Dark and System; your choice is remembered in this browser.",
+          "Automatic Burst Detection: choose which classifier — CCM v1.1.0 or CCM v1.0.0 — the background scan runs over new e-CALLISTO data to raise radio-burst alerts. This is a server-side setting, so it applies to every viewer and survives a restart. The change takes effect on the next scan, which re-scores the last few hours with the new model and rebuilds the burst alerts from it, and each model alerts on its own tuned probability threshold. The Burst Detector page's per-run model picker is unaffected — it simply starts from this choice.",
+          "Detection Coverage: burst detection only runs on live data, so any time the dashboard is offline leaves gaps in the burst timeline and the activity histograms. The backend re-scores missed days automatically in the background — the strip shows one cell per day (green = fully scored, amber = still incomplete) and the run's progress. Today is always amber: its most recent hours belong to the live scan. You can start a run yourself, stop one, or aim it at an older date range than the automatic window covers. Filled-in bursts appear everywhere the live ones do but never send notifications, so closing an old gap does not replay stale alerts.",
           "Notifications: manage alert-notification preferences and send a test notification to confirm delivery works.",
         ],
       },

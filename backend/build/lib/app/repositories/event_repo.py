@@ -27,6 +27,8 @@ _EVENT_FIELDS = (
     "peak_value",
     "severity",
     "description",
+    "stations",
+    "burst_type",
     "source_url",
 )
 
@@ -110,6 +112,32 @@ async def delete_events_of_type_since(
     conds = [
         SpaceWeatherEvent.type == event_type,
         SpaceWeatherEvent.start_time >= since,
+    ]
+    if keep_starts:
+        conds.append(SpaceWeatherEvent.start_time.not_in(list(keep_starts)))
+    res = await db.execute(delete(SpaceWeatherEvent).where(*conds))
+    await db.commit()
+    return res.rowcount or 0
+
+
+async def delete_events_of_type_in_range(
+    db: AsyncSession,
+    event_type: str,
+    start: datetime,
+    end: datetime,
+    keep_starts: set[datetime],
+) -> int:
+    """Delete events of ``event_type`` starting in ``[start, end)`` whose start is
+    not in ``keep_starts``.
+
+    The bounded sibling of ``delete_events_of_type_since``: the offline catch-up
+    re-derives one historical day at a time, so its cleanup has to stop at that
+    day's edge instead of sweeping everything newer than it.
+    """
+    conds = [
+        SpaceWeatherEvent.type == event_type,
+        SpaceWeatherEvent.start_time >= start,
+        SpaceWeatherEvent.start_time < end,
     ]
     if keep_starts:
         conds.append(SpaceWeatherEvent.start_time.not_in(list(keep_starts)))
