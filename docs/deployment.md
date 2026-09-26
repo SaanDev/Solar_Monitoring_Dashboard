@@ -7,7 +7,11 @@ deployment.
 For running it on your own machine, see the
 [README quick start](../README.md#quick-start-local-development) — this document
 is about putting it on the internet. For a single-user install without a server,
+<<<<<<< HEAD
 there is also the [Windows desktop app](desktop.md): same backend and UI, but on
+=======
+there is also the [desktop app](desktop.md) for Windows and Linux: same backend and UI, but on
+>>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
 SQLite with an in-process cache. The hosted deployment below keeps
 Postgres/TimescaleDB and Redis.
 

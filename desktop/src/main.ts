@@ -1,13 +1,26 @@
+<<<<<<< HEAD
 import { app, BrowserWindow, dialog, Menu, shell, Tray } from "electron";
+=======
+import { app, BrowserWindow, dialog, Menu, Notification, shell, Tray } from "electron";
+>>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
 import log from "electron-log/main";
 import * as path from "node:path";
 
 import { startAlertPolling } from "./alerts";
+<<<<<<< HEAD
 import { Backend, choosePort } from "./backend";
 import { openEnvFile } from "./envfile";
 import { assetPath, ensureDir, HOME, LOG_DIR } from "./paths";
 import { saveState, state } from "./state";
 import { createTray, HIDDEN_FLAG } from "./tray";
+=======
+import { HIDDEN_FLAG } from "./autostart";
+import { Backend, choosePort } from "./backend";
+import { openEnvFile } from "./envfile";
+import { APP_ICON, assetPath, ensureDir, HOME, LOG_DIR } from "./paths";
+import { saveState, state } from "./state";
+import { createTray } from "./tray";
+>>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
 import { checkForUpdatesInteractive, initUpdater } from "./updater";
 
 const APP_ID = "org.saandev.solardashboard"; // = appId in electron-builder.yml
@@ -20,6 +33,7 @@ ensureDir(HOME);
 app.setPath("userData", path.join(HOME, "electron"));
 log.transports.file.resolvePathFn = () => path.join(LOG_DIR, "main.log");
 log.errorHandler.startCatching();
+<<<<<<< HEAD
 // The AppUserModelID is the app's identity on Windows: toasts are attributed to
 // it, and the taskbar takes its icon from the Start Menu shortcut carrying it.
 // Electron writes such a shortcut (named after the running exe) for toast
@@ -27,6 +41,9 @@ log.errorHandler.startCatching();
 // id — it would leave an "Electron" shortcut claiming it, and the installed app's
 // taskbar button would then show the Electron logo.
 app.setAppUserModelId(app.isPackaged ? APP_ID : `${APP_ID}.dev`);
+=======
+app.setAppUserModelId(APP_ID); // toasts are attributed to this id on Windows
+>>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
 
 let backend: Backend | null = null;
 let win: BrowserWindow | null = null;
@@ -59,7 +76,11 @@ function createSplash(): BrowserWindow {
     resizable: false,
     show: false,
     backgroundColor: BACKGROUND,
+<<<<<<< HEAD
     icon: assetPath("icon.ico"),
+=======
+    icon: APP_ICON,
+>>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
     webPreferences: { sandbox: true, contextIsolation: true },
   });
   s.once("ready-to-show", () => s.show());
@@ -81,7 +102,11 @@ function createMainWindow(origin: string, pathname = "/"): BrowserWindow {
     show: false,
     title: "Solar Monitoring Dashboard",
     backgroundColor: BACKGROUND,
+<<<<<<< HEAD
     icon: assetPath("icon.ico"),
+=======
+    icon: APP_ICON,
+>>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
     autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
@@ -107,11 +132,15 @@ function createMainWindow(origin: string, pathname = "/"): BrowserWindow {
     e.preventDefault();
     w.hide();
     if (!state.trayHintShown && tray) {
+<<<<<<< HEAD
       tray.displayBalloon({
         iconType: "info",
         title: "Still running in the tray",
         content: "Data collection and alerts continue. Right-click the tray icon to quit.",
       });
+=======
+      showTrayHint(tray);
+>>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
       state.trayHintShown = true;
       saveState();
     }
@@ -128,6 +157,31 @@ function createMainWindow(origin: string, pathname = "/"): BrowserWindow {
   return w;
 }
 
+<<<<<<< HEAD
+=======
+/** Shown the first time the window is closed: the app is still running. */
+function showTrayHint(t: Tray): void {
+  if (process.platform === "win32") {
+    t.displayBalloon({
+      iconType: "info",
+      title: "Still running in the tray",
+      content: "Data collection and alerts continue. Right-click the tray icon to quit.",
+    });
+    return;
+  }
+  // Balloons are Windows-only. Not every Linux desktop shows tray icons (stock
+  // GNOME needs an extension), so also point at the launcher and Ctrl+Q.
+  if (!Notification.isSupported()) return;
+  new Notification({
+    title: "Still running in the background",
+    body:
+      "Data collection and alerts continue. Reopen it from the tray icon or app launcher. " +
+      "To stop it, use Quit in the tray menu or press Ctrl+Q in the window.",
+    icon: assetPath("icon.png"),
+  }).show();
+}
+
+>>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
 function showWindow(pathname?: string): void {
   if (!backend) return;
   if (!win) {

@@ -1,6 +1,13 @@
+<<<<<<< HEAD
 # Windows installer for the desktop app. Build with scripts/build.ps1, which
 # first stages the Python runtime (build/runtime) and the static UI
 # (../frontend/out) that extraResources below pick up.
+=======
+# Windows installer (NSIS) and Linux package (.deb) for the desktop app. Build
+# with scripts/build.ps1 on Windows or scripts/build.sh on Linux; both first
+# stage the Python runtime (build/runtime) and the static UI (../frontend/out)
+# that extraResources below pick up.
+>>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
 appId: org.saandev.solardashboard
 productName: Solar Monitoring Dashboard
 copyright: Copyright © SaanDev
@@ -18,8 +25,13 @@ files:
   - "!assets/Logo.png"
   - package.json
 
+<<<<<<< HEAD
 # Shipped unpacked next to the app (process.resourcesPath) — python.exe has to
 # run from real files, and the backend reads alembic/ and ml_model/ from disk.
+=======
+# Shipped unpacked next to the app (process.resourcesPath) — the interpreter has
+# to run from real files, and the backend reads alembic/ and ml_model/ from disk.
+>>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
 extraResources:
   - from: build/runtime/python
     to: python
@@ -49,6 +61,38 @@ nsis:
   include: assets/installer.nsh
   artifactName: SolarMonitoringDashboard-Setup-${version}.${ext}
 
+<<<<<<< HEAD
+=======
+linux:
+  target:
+    - target: deb
+      arch: x64
+  # 512 px, installed as the hicolor app icon; desktops scale it down.
+  icon: assets/icon.png
+  executableName: solar-monitoring-dashboard
+  # With desktopName in package.json, the .desktop file name, StartupWMClass and
+  # Electron's app_id/WM_CLASS all agree, so docks group the window with its launcher.
+  syncDesktopName: true
+  category: Education;Science;Astronomy
+  synopsis: Space-weather monitoring dashboard
+  # The package description and the launcher's tooltip (Comment=). Set here, not
+  # in package.json, whose description is also the Windows installer's.
+  description: >-
+    Monitors solar radio bursts (e-CALLISTO), GOES X-ray and proton flux, solar
+    and coronagraph images, geomagnetic indices and the solar wind, with alerts.
+  maintainer: SaanDev <SaanDev@users.noreply.github.com>
+  desktop:
+    entry:
+      Keywords: space weather;solar;sun;radio burst;e-CALLISTO;GOES;
+
+# Installs to /opt/Solar Monitoring Dashboard and links /usr/bin/solar-monitoring-dashboard.
+# User data lives in ~/.local/share/SolarDashboard; removing the package leaves it.
+deb:
+  packageName: solar-monitoring-dashboard
+  packageCategory: science
+  artifactName: SolarMonitoringDashboard-${version}-${arch}.${ext}
+
+>>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
 publish:
   provider: github
   owner: SaanDev

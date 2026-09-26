@@ -17,10 +17,18 @@ node_modules/
 out/
 *.tsbuildinfo
 
+<<<<<<< HEAD
 # Desktop app: staged Python runtime + download caches (desktop/scripts/build-runtime.ps1)
 desktop/build/
 # setuptools output from non-editable installs of the backend
 backend/build/
+=======
+# Desktop app: staged Python runtime + download caches (desktop/scripts/build-runtime.ps1 / .sh)
+desktop/build/
+# setuptools output from non-editable installs of the backend
+backend/build/
+Claude output/
+>>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
 
 # Env
 .env

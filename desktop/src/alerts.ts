@@ -26,7 +26,12 @@ function title(alert: Alert): string {
 }
 
 /**
+<<<<<<< HEAD
  * Windows toasts for new warning/critical alerts from /api/alerts/latest.
+=======
+ * Desktop notifications (Windows toasts, Linux notifications) for new
+ * warning/critical alerts from /api/alerts/latest.
+>>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
  *
  * The very first poll on a fresh install only records what's already there, so
  * installing the app doesn't replay a backlog. After that, every alert id not

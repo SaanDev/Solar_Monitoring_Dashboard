@@ -3,14 +3,28 @@
   "productName": "Solar Monitoring Dashboard",
   "version": "1.0.0-beta",
   "description": "Windows desktop app for the Solar Monitoring Dashboard",
+<<<<<<< HEAD
   "author": "SaanDev",
   "private": true,
   "main": "out/main.js",
+=======
+  "repository": "github:SaanDev/Solar_Monitoring_Dashboard",
+  "author": "SaanDev",
+  "private": true,
+  "main": "out/main.js",
+  "desktopName": "solar-monitoring-dashboard.desktop",
+>>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
   "scripts": {
     "build": "tsc -p .",
     "start": "npm run build && electron .",
     "dist": "npm run build && electron-builder --win --publish never",
+<<<<<<< HEAD
     "release": "npm run build && electron-builder --win --publish always"
+=======
+    "release": "npm run build && electron-builder --win --publish always",
+    "dist:linux": "npm run build && electron-builder --linux --publish never",
+    "release:linux": "npm run build && electron-builder --linux --publish always"
+>>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
   },
   "dependencies": {
     "electron-log": "^5.4.4",

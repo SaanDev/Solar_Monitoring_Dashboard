@@ -1,1 +1,6 @@
 backend/ml_model/*.pt filter=lfs diff=lfs merge=lfs -text
+<<<<<<< HEAD
+=======
+# Linux build scripts: bash chokes on CRLF, e.g. a Windows checkout used from WSL.
+*.sh text eol=lf
+>>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
