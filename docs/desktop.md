@@ -92,6 +92,13 @@ In dev, the shell uses `backend/.venv/Scripts/python.exe`. That venv needs the
 `desktop` extra (`pip install -e ".[desktop]"`, for `aiosqlite`). Override the
 locations with `SWD_PYTHON`, `SWD_BACKEND_DIR` and `SWD_FRONTEND_DIR`.
 
+A dev run uses its own Windows app identity (`org.saandev.solardashboard.dev`,
+not the installed app's `org.saandev.solardashboard`). For toast notifications,
+Electron writes a Start Menu shortcut named after the running exe that claims
+this identity. The taskbar takes the app's icon from that shortcut, so a dev run
+(`electron.exe`) sharing the real ID would put the Electron logo on the installed
+app's taskbar button.
+
 The backend alone runs without Electron too:
 
 ```powershell
@@ -161,6 +168,21 @@ Both are built from the same code, so a few rules keep the desktop build working
 - **Migrations must run on SQLite.** Use `op.batch_alter_table` for anything
   beyond `add_column`/`create_table`. `app/tests/test_alembic_sqlite.py` runs the
   whole chain on SQLite and checks every model column exists afterwards.
+
+## Troubleshooting
+
+**The taskbar shows the Electron logo instead of the app icon.** Windows found a
+Start Menu shortcut claiming the app's identity that points at the wrong exe.
+Usually this is an `Electron.lnk` left by a dev run from a build older than
+1.0.0-beta. In `%APPDATA%\Microsoft\Windows\Start Menu\Programs`, remove any
+`Electron.lnk` pointing into `desktop\node_modules\electron`. Then check that
+`Solar Monitoring Dashboard.lnk` points at the installed exe; reinstalling
+recreates it. If the old icon persists, refresh the icon cache with
+`ie4uinit.exe -show`, or sign out and back in.
+
+Running `desktop\dist\win-unpacked\…exe` (a local test build) re-points that
+Start Menu shortcut at the test build, because Electron rewrites it on every
+launch. Launching the installed app again points it back.
 
 ## Known limits
 

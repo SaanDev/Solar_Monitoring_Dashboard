@@ -20,7 +20,13 @@ ensureDir(HOME);
 app.setPath("userData", path.join(HOME, "electron"));
 log.transports.file.resolvePathFn = () => path.join(LOG_DIR, "main.log");
 log.errorHandler.startCatching();
-app.setAppUserModelId(APP_ID); // toasts are attributed to this id on Windows
+// The AppUserModelID is the app's identity on Windows: toasts are attributed to
+// it, and the taskbar takes its icon from the Start Menu shortcut carrying it.
+// Electron writes such a shortcut (named after the running exe) for toast
+// activation, so a dev run (`npm start`, i.e. electron.exe) must not use the real
+// id — it would leave an "Electron" shortcut claiming it, and the installed app's
+// taskbar button would then show the Electron logo.
+app.setAppUserModelId(app.isPackaged ? APP_ID : `${APP_ID}.dev`);
 
 let backend: Backend | null = null;
 let win: BrowserWindow | null = null;
