@@ -15,19 +15,19 @@ Usage
 From the repo root, with a Python that has torch installed (the CALLISTO Trainer
 venv does; the dashboard's local venv may not):
 
-    python scripts/repack_model.py --model ccm-1.1.0
-    python scripts/repack_model.py --model ccmt-1.0.0
+    python scripts/repack_model.py --model ccm-2.0.0
     python scripts/repack_model.py --all
 
-Or point it at an arbitrary checkpoint:
+Or point it at an arbitrary checkpoint (an exported bundle's checkpoint.pt works
+too -- it is the trainer's best.pt):
 
     python scripts/repack_model.py \\
-        --source "C:/path/to/outputs/binary_.../checkpoints/best.pt" \\
-        --dest backend/ml_model/ccm_v1_1_0.pt
+        --source "C:/path/to/outputs/unified_.../checkpoints/best.pt" \\
+        --dest backend/ml_model/ccm_v2_0.pt
 
-The printed summary (architecture, threshold, class map, station-vocab size) is
-the check that the right run was repacked: verify it against the training report
-before committing the file.
+The printed summary (architecture, views, feature set, calibrated threshold,
+class map) is the check that the right run was repacked: verify it against the
+training report before committing the file.
 
 Environment variables
 ---------------------
@@ -56,8 +56,7 @@ def _trainer_root() -> Path:
 
 # model id -> (trainer run directory, destination filename)
 _KNOWN: dict[str, tuple[str, str]] = {
-    "ccm-1.1.0": ("binary_20260730_140730", "ccm_v1_1_0.pt"),
-    "ccmt-1.0.0": ("type_20260730_141805", "ccmt_v1_0_0.pt"),
+    "ccm-2.0.0": ("unified_20260929_114213", "ccm_v2_0.pt"),
 }
 
 
@@ -73,21 +72,23 @@ def _resolve(model_id: str) -> tuple[Path, Path]:
 def _describe(config: dict[str, Any], state: dict[str, Any]) -> None:
     model_cfg = config.get("model", {}) or {}
     data_cfg = config.get("data", {}) or {}
-    training_cfg = config.get("training", {}) or {}
     prep_cfg = config.get("preprocessing", {}) or {}
+    inference_cfg = config.get("inference", {}) or {}
 
     print("  architecture      :", model_cfg.get("name"))
     print("  in_channels       :", model_cfg.get("in_channels"))
     print("  num_classes       :", model_cfg.get("num_classes", 1))
-    print("  use_metadata      :", bool(model_cfg.get("use_metadata", False)))
     print("  use_physics       :", bool(model_cfg.get("use_physics", False)))
-    vocab = model_cfg.get("station_vocab") or {}
-    print(f"  station_vocab     : {len(vocab)} stations")
+    print("  views             :", model_cfg.get("views"))
+    print("  feature_set       :", model_cfg.get("feature_set"))
     print("  target_shape      :", data_cfg.get("target_shape"))
     print("  background_method :", prep_cfg.get("background_method"))
     print("  normalization     :", prep_cfg.get("normalization"),
           f"[{prep_cfg.get('db_vmin')}, {prep_cfg.get('db_vmax')}]")
-    print("  threshold         :", training_cfg.get("threshold"))
+    print("  burst_threshold   :", inference_cfg.get("burst_threshold"))
+    print("  region_finder     :", inference_cfg.get("region_finder"))
+    priors = inference_cfg.get("type_priors") or {}
+    print("  type prior str.   :", priors.get("strength"))
     classes = data_cfg.get("classes") or {}
     if classes:
         ordered = sorted(classes.items(), key=lambda kv: int(kv[1]))

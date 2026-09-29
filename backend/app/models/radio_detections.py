@@ -8,9 +8,9 @@ re-downloaded or re-scored. ``radio_burst`` events shown in the alert feed are
 
 ``filename`` is globally unique in the e-CALLISTO archive
 (``STATION_YYYYMMDD_HHMMSS_NN.fit.gz``), so it serves as the primary key. The
-automatic scan runs one binary model at a time (the one selected on the Settings
-page), so there is at most one row per file; ``model_id`` records which model
-produced it and re-scoring with a different model replaces the row.
+automatic scan runs one model at a time (the one selected on the Settings page),
+so there is at most one row per file; ``model_id`` records which model produced
+it and re-scoring with a different model replaces the row.
 """
 from datetime import datetime, timezone
 
@@ -40,18 +40,22 @@ class RadioBurstDetection(Base):
         UTCDateTime(), nullable=True
     )
     focus: Mapped[str] = mapped_column(String(8), nullable=False, default="")
-    # Sigmoid output in [0, 1] and the model's verdict at its tuned threshold.
+    # Burst probability in [0, 1] — for CCM v2.0 the strongest region's burst
+    # evidence — and the model's verdict at its calibrated threshold.
     probability: Mapped[float] = mapped_column(Float, nullable=False)
     predicted_label: Mapped[str] = mapped_column(String(16), nullable=False)
     # Human-facing band: "High-confidence burst" | "Likely burst" | ...
     alert_level: Mapped[str] = mapped_column(String(32), nullable=False, default="")
-    # Which binary classifier produced this verdict, e.g. "ccm-1.1.0". Rows that
-    # predate model selection are all CCM v1.0.0 (the migration's default).
+    # Which model produced this verdict, e.g. "ccm-2.0.0". Rows that predate
+    # model selection are all CCM v1.0.0 (the migration's default); rows from
+    # retired models are re-scored by the backfill (app/ml/registry.py).
     model_id: Mapped[str] = mapped_column(
         String(32), nullable=False, default="ccm-1.0.0", index=True
     )
-    # Burst type from the second stage: "Type II" | "Type III" | "Other". Null
-    # when typing was off, the file is not a burst, or no region was typable.
+    # Burst type of the file's largest burst region: "Type II" | "Type III" |
+    # "Other" (CCM v2.0's Type IIIG is reported as Type III). Null when the file
+    # is not a burst. ``type_model_id`` is the model that assigned it — the same
+    # model as ``model_id`` since CCM v2.0 detects and types in one pass.
     burst_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
     type_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     type_model_id: Mapped[str | None] = mapped_column(String(32), nullable=True)

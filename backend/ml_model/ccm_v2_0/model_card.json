@@ -1,0 +1,372 @@
+{
+  "bundle_format_version": 1,
+  "exported_at": "2026-09-29T19:10:16",
+  "exported_by": "CALLISTO Trainer 0.1.0",
+  "task": "unified",
+  "source_checkpoint": "outputs\\unified_20260929_114213\\checkpoints\\best.pt",
+  "trained_epoch": 13,
+  "architecture": {
+    "name": "resnet18",
+    "in_channels": 1,
+    "num_classes": 6,
+    "uses_metadata": false,
+    "station_vocab_size": 0,
+    "uses_physics": true,
+    "views": [
+      "crop",
+      "context",
+      "quiet_context"
+    ]
+  },
+  "classes": [
+    "No_Burst",
+    "RFI",
+    "Type II",
+    "Type III",
+    "Type IIIG",
+    "Other"
+  ],
+  "input": {
+    "shape": [
+      3,
+      224,
+      224
+    ],
+    "views": [
+      "crop",
+      "context",
+      "quiet_context"
+    ],
+    "dtype": "float32",
+    "value_range": [
+      0.0,
+      1.0
+    ],
+    "unit": "normalized dB above per-frequency background"
+  },
+  "preprocessing": {
+    "orientation": "[frequency, time]; row 0 is the FIRST FITS row (normally the highest frequency)",
+    "steps": [
+      "replace NaN/Inf with the finite median",
+      "subtract per-frequency median over time, scale to dB (plotutil_median_db)",
+      "map [-1.0, 8.0] dB to [0, 1] and clip",
+      "bilinear resize to the input shape"
+    ],
+    "background_method": "plotutil_median_db",
+    "normalization": "db_window",
+    "db_vmin": -1.0,
+    "db_vmax": 8.0,
+    "critical_note": "Background subtraction MUST be computed over the whole file's time axis before any cropping. Cropping first makes a burst its own background and erases it."
+  },
+  "metrics": {
+    "train": {
+      "accuracy": 0.9948217830327091,
+      "macro_f1": 0.9768265069129367,
+      "weighted_f1": 0.9948173069768376,
+      "macro_precision": 0.9778373254498888,
+      "macro_recall": 0.9758374724727978,
+      "per_class": {
+        "No_Burst": {
+          "precision": 0.9986358866736621,
+          "recall": 0.999265014699706,
+          "f1": 0.9989503516322032,
+          "support": 9524
+        },
+        "Type II": {
+          "precision": 0.9816849816849816,
+          "recall": 0.9816849816849816,
+          "f1": 0.9816849816849816,
+          "support": 273
+        },
+        "Type III": {
+          "precision": 0.9839119390347163,
+          "recall": 0.9781144781144782,
+          "f1": 0.9810046433094133,
+          "support": 1188
+        },
+        "Type IIIG": {
+          "precision": 0.9610983981693364,
+          "recall": 0.967741935483871,
+          "f1": 0.9644087256027555,
+          "support": 434
+        },
+        "Other": {
+          "precision": 0.963855421686747,
+          "recall": 0.9523809523809523,
+          "f1": 0.9580838323353293,
+          "support": 168
+        }
+      },
+      "class_names": [
+        "No_Burst",
+        "Type II",
+        "Type III",
+        "Type IIIG",
+        "Other"
+      ],
+      "confusion_matrix": [
+        [
+          9517,
+          0,
+          3,
+          2,
+          2
+        ],
+        [
+          3,
+          268,
+          1,
+          0,
+          1
+        ],
+        [
+          6,
+          4,
+          1162,
+          13,
+          3
+        ],
+        [
+          1,
+          1,
+          12,
+          420,
+          0
+        ],
+        [
+          3,
+          0,
+          3,
+          2,
+          160
+        ]
+      ],
+      "num_samples": 11587,
+      "detection_ap": 0.9999018534358484,
+      "detection_auc": 0.9999785728958227,
+      "type_macro_f1": 0.9778708949945438,
+      "family_type_macro_f1": 0.9853551836537867,
+      "rfi_rejected": 1.0,
+      "unified_score": 0.9888863742151961,
+      "loss": 0.28296941413329596
+    },
+    "val": {
+      "accuracy": 0.9678992279561154,
+      "macro_f1": 0.8390182239426934,
+      "weighted_f1": 0.9669718630120655,
+      "macro_precision": 0.8537383723334063,
+      "macro_recall": 0.8286657989031774,
+      "per_class": {
+        "No_Burst": {
+          "precision": 0.9942140790742526,
+          "recall": 0.9995152690256908,
+          "f1": 0.9968576262992507,
+          "support": 2063
+        },
+        "Type II": {
+          "precision": 0.8653846153846154,
+          "recall": 0.9375,
+          "f1": 0.9,
+          "support": 48
+        },
+        "Type III": {
+          "precision": 0.8388625592417062,
+          "recall": 0.8676470588235294,
+          "f1": 0.8530120481927711,
+          "support": 204
+        },
+        "Type IIIG": {
+          "precision": 0.7924528301886793,
+          "recall": 0.672,
+          "f1": 0.7272727272727273,
+          "support": 125
+        },
+        "Other": {
+          "precision": 0.7777777777777778,
+          "recall": 0.6666666666666666,
+          "f1": 0.717948717948718,
+          "support": 21
+        }
+      },
+      "class_names": [
+        "No_Burst",
+        "Type II",
+        "Type III",
+        "Type IIIG",
+        "Other"
+      ],
+      "confusion_matrix": [
+        [
+          2062,
+          0,
+          0,
+          1,
+          0
+        ],
+        [
+          1,
+          45,
+          0,
+          0,
+          2
+        ],
+        [
+          6,
+          0,
+          177,
+          19,
+          2
+        ],
+        [
+          4,
+          4,
+          33,
+          84,
+          0
+        ],
+        [
+          1,
+          3,
+          1,
+          2,
+          14
+        ]
+      ],
+      "num_samples": 2461,
+      "detection_ap": 0.9987264231849757,
+      "detection_auc": 0.9996504578150082,
+      "type_macro_f1": 0.8187426957969478,
+      "family_type_macro_f1": 0.8823835436978813,
+      "rfi_rejected": 1.0,
+      "unified_score": 0.9087345594909617,
+      "loss": 0.34730211712877135
+    }
+  },
+  "scope": {
+    "operates_on": "a CROP around a single burst, not a whole file",
+    "context_margin": 0.0,
+    "min_rows": 1,
+    "min_cols": 1,
+    "warning": "This model was trained on cropped burst regions. Running it on a whole-file spectrum is out of distribution and its output should not be trusted. Locate a region first, then crop it the same way.",
+    "context_min_pad_cols": 240,
+    "views": {
+      "crop": "the region exactly as given",
+      "context": "the full frequency band over the region's columns extended by max(region width, 240) samples each side, block-max-pooled then bilinear-resized",
+      "quiet_context": "the context view taken from the whole file normalized with each channel's 10th percentile as its background instead of its median (same dB scale and window), so a continuum lasting most of the file stays visible; see normalize_quiet() in predict.py"
+    },
+    "quiet_percentile": 10.0
+  },
+  "output": {
+    "head": "softmax",
+    "interpretation": "argmax over `classes` gives the burst type. For the unified model class 0 is No_Burst, and No_Burst and RFI both mean 'not a burst': `1 - P(No_Burst) - P(RFI)` is the burst evidence for a region, and the region is a burst when that reaches `burst_threshold`.",
+    "non_burst_classes": [
+      "No_Burst",
+      "RFI"
+    ],
+    "burst_threshold": 0.7975836745463312,
+    "calibration": {
+      "split": "val",
+      "max_false_alarm_rate": 0.05,
+      "threshold": 0.7975836745463312,
+      "false_alarm_rate": 0.04700854700854701,
+      "burst_recall": 0.6564885496183206,
+      "quiet_files": 234,
+      "burst_files": 131,
+      "met_budget": true,
+      "note": "",
+      "stray_per_burst_file": 0.1984732824427481,
+      "region_finder": {
+        "threshold": 0.35,
+        "adaptive": true,
+        "min_area": 60,
+        "max_regions": 24,
+        "hysteresis": 0.65
+      }
+    },
+    "type_priors": {
+      "adjustment": {
+        "Type II": -1.519986195422071,
+        "Type III": 1.0476289784201314,
+        "Type IIIG": 0.22353320103811164,
+        "Other": 0.24882401596382808
+      },
+      "strength": 0.5,
+      "class_shares": {
+        "Type II": 0.025000000000000005,
+        "Type III": 0.6797794117647059,
+        "Type IIIG": 0.18022058823529416,
+        "Other": 0.115
+      },
+      "training_shares": {
+        "Type II": 0.1948795260111338,
+        "Type III": 0.4065304787608165,
+        "Type IIIG": 0.24571391739259055,
+        "Other": 0.15287607783545912
+      },
+      "how_to_apply": "multiply each burst-type probability by exp(strength * adjustment[type]), then rescale the burst types so they sum to what they summed to before; leave No_Burst and RFI unchanged. This corrects the type for how often each type really occurs and never changes the burst evidence."
+    }
+  },
+  "region_finder": {
+    "threshold": 0.35,
+    "adaptive": true,
+    "min_area": 60,
+    "max_regions": 24,
+    "hysteresis": 0.65
+  },
+  "physics_input": {
+    "required": true,
+    "feature_set": "region_v2",
+    "shape": [
+      28
+    ],
+    "feature_order": [
+      "log_freq_start",
+      "log_freq_end",
+      "log_bandwidth",
+      "log_duration",
+      "signed_log_drift",
+      "signed_log_relative_drift",
+      "fit_quality",
+      "measured",
+      "outside_persistence",
+      "band_fraction",
+      "simultaneity",
+      "log_onset_spread",
+      "log_thickness_time",
+      "log_thickness_freq",
+      "fill_fraction",
+      "log_snr",
+      "peakiness",
+      "periodicity",
+      "log_period",
+      "duration_fraction",
+      "rfi_flag_fraction",
+      "burst_count",
+      "log_rows",
+      "log_cols",
+      "file_bright_fraction",
+      "file_noise",
+      "log_freq_mid",
+      "faint"
+    ],
+    "note": "This model takes a SECOND input: the region's physics and interference features, computed from the whole-file normalized spectrum by callisto_trainer.core.region_features. They are always measured in training, so all zeros is out of distribution: use this project (CascadePredictor) to run the model on real files."
+  },
+  "training_data": {
+    "snapshot": "unified",
+    "samples": 16560,
+    "class_counts": {
+      "Type III": 1603,
+      "RFI": 6981,
+      "No_Burst": 6700,
+      "Type IIIG": 689,
+      "Type II": 362,
+      "Other": 225
+    },
+    "split_counts": {
+      "train": 11587,
+      "val": 2461,
+      "test": 2512
+    },
+    "event_leakage": 0
+  }
+}

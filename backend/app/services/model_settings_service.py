@@ -1,21 +1,22 @@
-"""Which burst classifier the automatic detection uses — read it, change it.
+"""Which burst model the automatic detection uses — read it, change it.
 
-The automatic radio-burst scan runs **one** binary classifier at a time (see
+The automatic radio-burst scan runs **one** model at a time (see
 ``app/services/radio_burst_service.py``); this module owns that choice end to
 end. It describes the selectable models for the UI, validates and persists a
 new choice into ``app_settings``, applies it to the in-process registry so the
 running scheduler picks it up on its next pass, and re-applies the stored choice
 on startup.
 
-Why not leave it to ``RADIO_BURST_BINARY_MODEL``: the model is an operational
+Why not leave it to ``RADIO_BURST_MODEL``: the model is an operational
 choice made by whoever is watching the Sun, from the Settings page, and it has
 to take effect on a running backend — not require a .env edit and a restart.
 The env var stays the default for a fresh deployment; a saved selection wins.
 
 Switching models is safe by construction: detections are deduped per model
 (``processed_filenames_since(..., model_id=...)``), so the next scan re-scores
-the recent window with the new classifier instead of skipping it, and events are
-re-derived from those detections with the new model's own alert threshold.
+the recent window with the new model instead of skipping it, the backfill
+re-scores older days (its coverage is per model too), and events are re-derived
+from those detections with each model's own alert threshold.
 """
 from __future__ import annotations
 
@@ -46,8 +47,7 @@ def describe_models() -> ModelsResponse:
     an unpulled Git LFS pointer), so the UI can disable a model up front rather
     than surfacing a mid-scan failure.
     """
-    default_binary = registry.resolve_binary()
-    type_spec = registry.resolve_type()
+    active = registry.resolve_model()
     models = [
         ModelInfo(
             id=spec.id,
@@ -57,19 +57,17 @@ def describe_models() -> ModelsResponse:
             version=spec.version,
             description=spec.description,
             available=registry.is_available(spec),
-            threshold=spec.metrics.get("threshold") if spec.kind == "binary" else None,
+            threshold=spec.metrics.get("threshold"),
             classes=list(spec.classes),
             metrics=dict(spec.metrics),
-            is_default=spec.id in (default_binary.id, type_spec.id),
+            is_default=spec.id == active.id,
         )
         for spec in registry.list_specs()
     ]
     return ModelsResponse(
         models=models,
-        default_binary=default_binary.id,
-        default_binary_source="selected" if registry.binary_selection() else "config",
-        type_model=type_spec.id,
-        classify_types=registry.classify_types_default(),
+        default_model=active.id,
+        default_model_source="selected" if registry.model_selection() else "config",
     )
 
 
@@ -96,17 +94,15 @@ def _warm_up(spec: ModelSpec) -> None:
         pass
 
 
-async def select_binary_model(db: AsyncSession, model_id: str) -> ModelsResponse:
-    """Make ``model_id`` the classifier the automatic scan runs, and persist it.
+async def select_model(db: AsyncSession, model_id: str) -> ModelsResponse:
+    """Make ``model_id`` the model the automatic scan runs, and persist it.
 
-    Raises ``registry.UnknownModelError`` for an id that is not a known binary
-    model, and ``ModelUnavailableError`` when its checkpoint is missing — picking
-    a model that cannot load would quietly stop burst detection, which is exactly
-    the failure this selector exists to avoid.
+    Raises ``registry.UnknownModelError`` for an unknown id, and
+    ``ModelUnavailableError`` when its checkpoint is missing — picking a model
+    that cannot load would quietly stop burst detection, which is exactly the
+    failure this selector exists to avoid.
     """
     spec = registry.get_spec((model_id or "").strip())
-    if spec.kind != "binary":
-        raise registry.UnknownModelError(f"'{spec.id}' is not a binary model")
     if not registry.is_available(spec):
         raise ModelUnavailableError(
             f"{spec.name}'s checkpoint is missing or is an unpulled Git LFS "
@@ -115,27 +111,31 @@ async def select_binary_model(db: AsyncSession, model_id: str) -> ModelsResponse
         )
 
     await save_settings(db, {"radio_burst_binary_model": spec.id})
-    registry.set_binary_selection(spec.id)
+    registry.set_model_selection(spec.id)
     logger.info("automatic burst detection now uses %s", spec.name)
     _warm_up(spec)
     return describe_models()
 
 
-async def load_saved_binary_model(db: AsyncSession) -> ModelSpec | None:
+async def load_saved_model(db: AsyncSession) -> ModelSpec | None:
     """Re-apply the saved selection on startup. Returns the spec, or None.
 
     A stored id the registry no longer knows (a model retired between releases)
-    is logged and ignored, leaving the configured default in charge rather than
-    failing startup.
+    is cleared, leaving the configured default in charge rather than failing
+    startup — and rather than warning about the same stale id on every start.
     """
     row = await get_or_create_settings(db)
     saved = (row.radio_burst_binary_model or "").strip()
     if not saved:
         return None
     try:
-        spec = registry.set_binary_selection(saved)
-    except registry.UnknownModelError as exc:
-        logger.warning("saved burst model '%s' is no longer valid: %s", saved, exc)
+        spec = registry.set_model_selection(saved)
+    except registry.UnknownModelError:
+        logger.info(
+            "saved burst model '%s' has been retired — using %s",
+            saved, registry.resolve_model().name,
+        )
+        await save_settings(db, {"radio_burst_binary_model": ""})
         return None
     if spec is not None:
         logger.info("automatic burst detection uses the saved model %s", spec.name)

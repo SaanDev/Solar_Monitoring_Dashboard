@@ -55,15 +55,15 @@ async def upsert_detections(db: AsyncSession, rows: list[dict]) -> int:
 
     ``model_id`` is NOT NULL, and passing an explicit None would override the
     column's server default, so a row that arrives without one is attributed to
-    the configured model. In practice inference always sets it — this only covers
+    the active model. In practice inference always sets it — this only covers
     callers that predate model selection.
     """
     if not rows:
         return 0
-    from app.ml.registry import resolve_binary
+    from app.ml.registry import resolve_model
 
     now = _utcnow()
-    default_model = resolve_binary().id
+    default_model = resolve_model().id
     values = [
         {
             **{f: r.get(f) for f in _FIELDS},
@@ -104,15 +104,14 @@ async def processed_filenames_since(
 
 
 async def filenames_in_range(
-    db: AsyncSession, start: datetime, end: datetime
+    db: AsyncSession, start: datetime, end: datetime, model_id: str | None = None
 ) -> set[str]:
-    """Every scored filename with segment start in ``[start, end)`` — regardless
-    of which model scored it.
+    """Scored filenames with segment start in ``[start, end)`` — by ``model_id``
+    when given, by any model otherwise.
 
-    This is the *coverage* set the offline catch-up works from: a file already
-    scored by an older classifier is still covered, so switching models does not
-    re-open weeks of archive. (The live scanner's dedup is deliberately narrower —
-    see ``processed_filenames_since``, which is per model.)
+    This is the *coverage* set the offline catch-up works from. It passes the
+    active model, so a file scored only by a model since replaced counts as not
+    covered and the catch-up re-scores it: history then comes from one model.
     """
     stmt = select(RadioBurstDetection.filename).where(
         and_(
@@ -120,6 +119,8 @@ async def filenames_in_range(
             RadioBurstDetection.start_time < end,
         )
     )
+    if model_id:
+        stmt = stmt.where(RadioBurstDetection.model_id == model_id)
     res = await db.execute(stmt)
     return {row[0] for row in res.all()}
 

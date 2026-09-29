@@ -41,7 +41,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       DATA_DIR: /data
       # Burst inference runs natively inside this backend (PyTorch via the
-      # ".[ml]" extras baked into the image; checkpoint at ml_model/best.pt).
+      # ".[ml]" extras baked into the image; checkpoint at ml_model/ccm_v2_0.pt).
       # Containers have no GPU/MPS, so force CPU.
       ML_INFERENCE_DEVICE: cpu
     ports:

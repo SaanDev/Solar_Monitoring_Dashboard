@@ -33,8 +33,8 @@ def _corroborated_rows(hh: int = 10) -> list[dict]:
     return [
         _row("ALASKA", hh, 0, 0.95),
         _row("BLEIEN", hh, 0, 0.93),
-        _row("OOTY", hh, 5, 0.75),
-        _row("ROSWELL", hh, 5, 0.80),
+        _row("OOTY", hh, 5, 0.85),
+        _row("ROSWELL", hh, 5, 0.82),
     ]
 
 

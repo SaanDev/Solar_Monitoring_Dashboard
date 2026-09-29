@@ -97,8 +97,8 @@ function HelpPanel() {
               stations (the same events that raise alerts). Blocks use the{" "}
               <em>same burst-type colors as the official lane</em>, so a burst both
               agree on is the same color in both rows — compare them vertically to
-              see where the model and the catalog line up. Bursts the type
-              classifier could not label keep the lane&apos;s plain{" "}
+              see where the model and the catalog line up. Bursts stored without a
+              type (by the earlier models) keep the lane&apos;s plain{" "}
               <span className="text-accent-green">green</span>: detected, type
               undetermined. Types here are estimates, not catalogued fact.
             </li>

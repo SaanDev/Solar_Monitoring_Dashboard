@@ -360,10 +360,10 @@ export const api = {
   radioBurstSpectrumByDate: (date: string, index: number) =>
     get<BurstSpectrum>(`/api/radio/bursts/spectrum?date=${date}&index=${index}`),
 
-  // The burst classifiers this backend can run, plus the server's defaults.
+  // The burst models this backend can run, plus the server's default.
   radioModels: () => get<ModelsResponse>("/api/radio/models"),
 
-  /** Choose the classifier the *automatic* burst scan runs (Settings page).
+  /** Choose the model the *automatic* burst scan runs (Settings page).
    * Persisted server-side and applied to the running scanner; returns the
    * refreshed model list so the caller can seed its cache with it. */
   setBurstDetectionModel: (modelId: string) =>
@@ -386,21 +386,14 @@ export const api = {
 
   // Burst Predictor — run the model over a day and compare with the official list.
   // `raw` selects the event mode: true = raw model output (no corroboration
-  // filter), false = event-selection criteria. `model` / `classifyTypes` change
-  // the scores, so unlike `raw` they need a fresh run (omit for server defaults).
-  startBurstPrediction: (
-    date: string,
-    stations: string[],
-    raw = false,
-    model?: string,
-    classifyTypes?: boolean
-  ) =>
+  // filter), false = event-selection criteria. `model` changes the scores, so
+  // unlike `raw` it needs a fresh run (omit for the server default).
+  startBurstPrediction: (date: string, stations: string[], raw = false, model?: string) =>
     postJson<BurstPredictionJob>("/api/radio/predict", {
       date,
       stations,
       raw,
       model: model ?? null,
-      classify_types: classifyTypes ?? null,
     }),
   // `raw` re-assembles a finished job from its cached scores in the chosen mode
   // (no re-scoring), so toggling the mode is instant.

@@ -1,8 +1,9 @@
-"""In-process burst classifier client — replaces the HTTP microservice.
+"""In-process burst model client — replaces the HTTP microservice.
 
 The model runs natively inside the dashboard backend (no separate port 9000
-service). Inference is blocking (PyTorch forward pass); it runs in a thread
-pool via asyncio.to_thread so the event loop is never blocked.
+service). Inference is blocking (region search, feature measurement and PyTorch
+forward passes); it runs in a thread pool via asyncio.to_thread so the event
+loop is never blocked.
 
 The rest of the backend (radio_burst_service, burst_predictor_service) calls
 predict_url(), optionally naming which model to score with — see
@@ -29,14 +30,12 @@ async def predict_url(
     filename: str | None = None,
     *,
     model_id: str | None = None,
-    classify_types: bool | None = None,
 ) -> dict[str, Any] | None:
     """Download the .fit.gz at ``url`` and return the in-process prediction.
 
-    ``model_id`` selects the binary classifier (None = the configured default)
-    and ``classify_types`` toggles the burst-type stage (None = the configured
-    default). Returns the prediction record dict or None if download or
-    inference failed.
+    ``model_id`` selects the model (None = the active one). The record carries
+    the burst type too, since the model detects and types in one pass. Returns
+    the prediction record dict or None if download or inference failed.
     """
     name = filename or Path(url).name or "remote.fit.gz"
     try:
@@ -54,13 +53,7 @@ async def predict_url(
     try:
         # Run the blocking torch forward pass off the event loop.
         record = await asyncio.to_thread(
-            partial(
-                predict_bytes,
-                content,
-                name,
-                model_id=model_id,
-                classify_types=classify_types,
-            )
+            partial(predict_bytes, content, name, model_id=model_id)
         )
     except Exception as exc:
         logger.warning("burst inference: scoring failed for %s: %s", name, exc)
@@ -72,7 +65,7 @@ async def predict_url(
 async def health() -> dict[str, Any]:
     """Return a health-like dict matching the old microservice /healthz shape."""
     from app.ml.inference import model_state
-    from app.ml.registry import resolve_binary
+    from app.ml.registry import resolve_model
 
     try:
         import torch  # noqa: F401
@@ -81,7 +74,7 @@ async def health() -> dict[str, Any]:
         torch_ok = False
 
     loaded = model_state()
-    active = resolve_binary().id
+    active = resolve_model().id
     active_state = loaded.get(active)
     return {
         "status": "ok" if active_state else ("unavailable" if not torch_ok else "loading"),

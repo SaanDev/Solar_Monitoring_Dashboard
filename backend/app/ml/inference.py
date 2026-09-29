@@ -1,24 +1,38 @@
-"""In-process burst classifiers — load each model once and score FITS bytes.
+"""In-process CCM v2.0 burst model — load it once and score FITS bytes.
 
-This replaces the separate microservice (serve.py on :9000). Models are loaded
-lazily on first use (or eagerly at startup via ``warm_up()``) and then kept in
-memory, one entry per model id, for the lifetime of the backend process.
-:mod:`app.ml.registry` owns which ids exist and where their checkpoints live.
+Models are loaded lazily on first use (or eagerly at startup via ``warm_up()``)
+and then kept in memory, one entry per model id, for the lifetime of the backend
+process. :mod:`app.ml.registry` owns which ids exist and where their checkpoints
+live.
 
-Two stages:
+## How a file is scored
 
-1. **Binary** (CCM v1.0.0 / v1.1.0) — whole-file burst / no-burst, from a
-   metadata-conditioned ResNet-18. This is the gate: it decides *whether* the
-   segment contains a burst.
-2. **Burst type** (CCMT v1.0.0), optional — only for files stage 1 called
-   ``Burst``. Bright regions are proposed from the normalized spectrum and each
-   is classified into Type II / Type III / Other. CCMT was trained on crops
-   around single bursts and has no background class, so it never sees a whole
-   file and never runs without the binary gate.
+CCM v2.0 was trained on regions, not whole files, so scoring mirrors the
+CALLISTO Trainer's ``CascadePredictor`` step for step:
 
-Fallback config below is for the original v2_resnet18 checkpoint — checkpoints
-normally store the full training config inside themselves
-(``checkpoint["config"]``), so it is only used when that field is absent.
+1. the whole spectrum is normalized, plus a twin with a quiet-part background;
+2. candidate regions are located (:mod:`app.ml.regions`) with the finder
+   settings the checkpoint was calibrated with;
+3. each region becomes three 224x224 views and 28 measured features;
+4. the model gives each region a probability for No_Burst, RFI and every burst
+   type;
+5. the burst-type probabilities are corrected toward how often each type really
+   occurs (the checkpoint's calibrated type priors). This only moves probability
+   *between* burst types, so the burst decision below is unaffected;
+6. a region is a burst when its **burst evidence** — ``1 - P(No_Burst) - P(RFI)``
+   — reaches the checkpoint's calibrated threshold, and a file is a burst when
+   any region is. The file's burst probability is its strongest region's
+   evidence.
+
+What is *reported* folds classes together: RFI is a kind of background, and a
+Type IIIG (a group of Type III bursts) is a Type III. The folding adds the
+probabilities before the type is chosen, so a region split between Type III and
+Type IIIG is called Type III even when neither alone is the largest class.
+
+The finder fires on interference and calibration artifacts as readily as on
+bursts, and in quiet files as often as in burst files; that is fine here,
+because unlike the old type-only model this one has background and RFI classes
+and rejects them itself.
 """
 from __future__ import annotations
 
@@ -30,36 +44,48 @@ from typing import Any
 
 import numpy as np
 
-from app.ml.metadata_features import NUM_NUMERIC, row_to_meta_vector
+from app.ml.physics import measure_burst
 from app.ml.preprocessing import (
-    crop_from_normalized,
-    read_and_normalize_bytes,
-    target_shape_of,
-    whole_file_box,
+    CropConfig,
+    SpectrumAxes,
+    normalize_full_spectrum,
+    quiet_normalized_spectrum,
+    read_spectrum_bytes,
+    region_views,
+)
+from app.ml.region_features import (
+    FEATURE_COUNT,
+    FEATURE_SET_REGION_V2,
+    feature_vector,
+    file_context,
+    measure_region,
+)
+from app.ml.regions import (
+    DEFAULT_HYSTERESIS,
+    DEFAULT_MAX_REGIONS,
+    DEFAULT_MIN_AREA,
+    DEFAULT_REGION_THRESHOLD,
+    Region,
+    find_candidate_regions,
+    region_to_axes,
+    resolve_threshold,
 )
 from app.ml.registry import ModelSpec
 
 logger = logging.getLogger(__name__)
 
-# Fallback config — normally overridden by whatever is stored in the checkpoint.
-_FALLBACK_CONFIG: dict[str, Any] = {
-    "data": {"target_shape": [224, 224]},
-    "preprocessing": {
-        "background_method": "plotutil_median_db",
-        "normalization": "db_window",
-        "db_vmin": -1.0,
-        "db_vmax": 8.0,
-    },
-    "model": {
-        "name": "resnet18",
-        "in_channels": 1,
-        "dropout": 0.25,
-        "use_metadata": True,
-        "station_vocab": {},
-        "station_emb_dim": 8,
-    },
-    "training": {"threshold": 0.595},
-}
+NO_BURST = "No_Burst"
+RFI = "RFI"
+TYPE_III = "Type III"
+TYPE_IIIG = "Type IIIG"
+# Classes meaning "this region is not a burst".
+NON_BURST_CLASSES = (NO_BURST, RFI)
+# Model classes reported as another class: RFI is a kind of background, and a
+# Type IIIG is a group of Type III bursts.
+REPORTED_AS = {RFI: NO_BURST, TYPE_IIIG: TYPE_III}
+
+# Regions are classified in batches of this many (the finder caps a file at 24).
+BATCH_SIZE = 32
 
 
 @dataclass
@@ -70,14 +96,33 @@ class LoadedModel:
     model: Any
     config: dict[str, Any]
     device: Any
+    # Calibrated burst-evidence threshold.
     threshold: float
+    # The model's own classes, in output order.
     class_names: tuple[str, ...]
-    uses_metadata: bool
-    station_vocab: dict[str, int] = field(default_factory=dict)
-    target_shape: tuple[int, int] = (224, 224)
-    crop_margin: float = 0.0
-    crop_min_rows: int = 1
-    crop_min_cols: int = 1
+    views: tuple[str, ...]
+    crop: CropConfig
+    preprocessing: dict[str, Any]
+    # Region-finder settings the threshold was calibrated with.
+    finder: dict[str, Any]
+    # Type-frequency correction: log(observed / training share) per burst class,
+    # applied with ``type_strength`` (0 = types as trained).
+    type_adjustment: dict[str, float] = field(default_factory=dict)
+    type_strength: float = 0.0
+
+
+@dataclass
+class ScoredRegion:
+    """One candidate region and the verdict on it."""
+
+    region: Region
+    # Reported classes (RFI folded into No_Burst, Type IIIG into Type III).
+    probabilities: dict[str, float]
+    burst_evidence: float
+    is_burst: bool
+    burst_type: str | None = None
+    # Confidence in the type *given* that the region is a burst.
+    type_confidence: float | None = None
 
 
 # model id -> LoadedModel. Shared across all requests.
@@ -137,95 +182,88 @@ def is_lfs_pointer(path: Path) -> bool:
 # ─── Load ─────────────────────────────────────────────────────────────────────
 
 
-def _class_names(config: dict[str, Any], spec: ModelSpec) -> tuple[str, ...]:
-    """Class names ordered by label id, from the checkpoint when it has them."""
+def _class_names(config: dict[str, Any]) -> tuple[str, ...]:
+    """Class names ordered by label id, from the checkpoint's ``data.classes``."""
     classes = (config.get("data", {}) or {}).get("classes") or {}
-    if classes:
-        return tuple(name for name, _ in sorted(classes.items(), key=lambda kv: int(kv[1])))
-    return spec.classes
+    return tuple(name for name, _ in sorted(classes.items(), key=lambda kv: int(kv[1])))
 
 
-def _crop_settings(config: dict[str, Any]) -> tuple[float, int, int]:
-    crops = config.get("crops", {}) or {}
-    return (
-        float(crops.get("context_margin", 0.0)),
-        int(crops.get("min_rows", 1)),
-        int(crops.get("min_cols", 1)),
-    )
-
-
-def _build(spec: ModelSpec, config: dict[str, Any]) -> tuple[Any, bool, dict[str, int]]:
-    """Instantiate the architecture described by a checkpoint's config."""
-    cfg = config["model"]
-    num_classes = int(cfg.get("num_classes", 1) or 1)
-
-    if spec.kind == "type" or num_classes > 1:
-        from app.ml.model import create_type_model
-
-        model = create_type_model(
-            cfg["name"],
-            in_channels=int(cfg.get("in_channels", 1)),
-            dropout=float(cfg.get("dropout", 0.25)),
-            num_classes=num_classes,
-        )
-        return model, False, {}
-
-    from app.ml.model import create_model
-
-    vocab = cfg.get("station_vocab", {}) or {}
-    uses_metadata = bool(cfg.get("use_metadata", True))
-    model = create_model(
-        cfg["name"],
-        in_channels=int(cfg.get("in_channels", 1)),
-        dropout=float(cfg.get("dropout", 0.25)),
-        use_metadata=uses_metadata,
-        num_stations=len(vocab) + 1,
-        num_numeric=NUM_NUMERIC,
-        station_emb_dim=int(cfg.get("station_emb_dim", 8)),
-    )
-    return model, uses_metadata, vocab
+def _finder_settings(inference_cfg: dict[str, Any]) -> dict[str, Any]:
+    recorded = inference_cfg.get("region_finder") or {}
+    return {
+        "threshold": float(recorded.get("threshold", DEFAULT_REGION_THRESHOLD)),
+        "adaptive": bool(recorded.get("adaptive", True)),
+        "min_area": int(recorded.get("min_area", DEFAULT_MIN_AREA)),
+        "max_regions": int(recorded.get("max_regions", DEFAULT_MAX_REGIONS)),
+        # A recorded None means plain thresholding; absent means the default.
+        "hysteresis": recorded.get("hysteresis", DEFAULT_HYSTERESIS),
+    }
 
 
 def _load(spec: ModelSpec, checkpoint_path: Path) -> LoadedModel:
     """Load a checkpoint into a :class:`LoadedModel` (no caching)."""
+    from app.ml.model import build_model
+
     device = _resolve_device()
     checkpoint = _torch_load(checkpoint_path, device)
-    config = checkpoint.get("config", _FALLBACK_CONFIG)
+    config = checkpoint["config"]
+    model_cfg = config["model"]
 
-    model, uses_metadata, vocab = _build(spec, config)
-    model.to(device)
+    class_names = _class_names(config)
+    if NO_BURST not in class_names:
+        raise ValueError(f"not a unified model: its classes are {list(class_names)}")
+    if not model_cfg.get("use_physics") or model_cfg.get("feature_set") != FEATURE_SET_REGION_V2:
+        raise ValueError(
+            f"expected the {FEATURE_SET_REGION_V2!r} feature set, got "
+            f"{model_cfg.get('feature_set')!r}"
+        )
+
+    model = build_model(model_cfg, num_classes=len(class_names), num_features=FEATURE_COUNT)
     model.load_state_dict(checkpoint["model_state"])
+    model.to(device)
     model.eval()
 
-    default_threshold = float(spec.metrics.get("threshold", 0.5))
-    threshold = float((config.get("training", {}) or {}).get("threshold", default_threshold))
-    if spec.kind == "binary" and abs(threshold - default_threshold) > 1e-6:
-        # The registry publishes a threshold for the UI and for gating before the
-        # model is loaded; a mismatch means one of the two is stale.
+    inference_cfg = config.get("inference", {}) or {}
+    published = float(spec.metrics.get("threshold", 0.5))
+    calibrated = inference_cfg.get("burst_threshold")
+    if calibrated is None:
         logger.warning(
-            "%s: checkpoint threshold %.4f differs from the registry's %.4f — "
-            "using the checkpoint's",
-            spec.name, threshold, default_threshold,
+            "%s: checkpoint has no calibrated burst threshold — using the registry's %.4f",
+            spec.name, published,
         )
-    margin, min_rows, min_cols = _crop_settings(config)
+        threshold = published
+    else:
+        threshold = float(calibrated)
+        if abs(threshold - published) > 1e-6:
+            # The registry publishes the threshold for the UI and for gating
+            # before the model is loaded; a mismatch means one of them is stale.
+            logger.warning(
+                "%s: checkpoint threshold %.4f differs from the registry's %.4f — "
+                "using the checkpoint's",
+                spec.name, threshold, published,
+            )
+
+    priors = inference_cfg.get("type_priors") or {}
+    adjustment = {str(k): float(v) for k, v in (priors.get("adjustment") or {}).items()}
+    strength = priors.get("strength")
     loaded = LoadedModel(
         spec=spec,
         model=model,
         config=config,
         device=device,
         threshold=threshold,
-        class_names=_class_names(config, spec),
-        uses_metadata=uses_metadata,
-        station_vocab=vocab,
-        target_shape=target_shape_of(config),
-        crop_margin=margin,
-        crop_min_rows=min_rows,
-        crop_min_cols=min_cols,
+        class_names=class_names,
+        views=tuple(model_cfg.get("views") or ("crop",)),
+        crop=CropConfig.from_config(config),
+        preprocessing=config["preprocessing"],
+        finder=_finder_settings(inference_cfg),
+        type_adjustment=adjustment,
+        type_strength=float(strength) if adjustment and isinstance(strength, (int, float)) else 0.0,
     )
     logger.info(
-        "%s loaded: %s on %s (threshold=%.4f, classes=%s)",
-        spec.name, config["model"]["name"], device, threshold,
-        ", ".join(loaded.class_names) or "n/a",
+        "%s loaded on %s (threshold=%.4f, classes=%s, views=%s, type-prior strength=%.2f)",
+        spec.name, device, threshold, ", ".join(class_names), ", ".join(loaded.views),
+        loaded.type_strength,
     )
     return loaded
 
@@ -324,10 +362,10 @@ def get_loaded(spec: ModelSpec) -> LoadedModel | None:
 
 
 def ensure_model_loaded(model_id: str | None = None) -> bool:
-    """Load a binary model (the configured default unless given). True on success."""
-    from app.ml.registry import resolve_binary
+    """Load a model (the active one unless given). True on success."""
+    from app.ml.registry import resolve_model
 
-    return get_loaded(resolve_binary(model_id)) is not None
+    return get_loaded(resolve_model(model_id)) is not None
 
 
 def model_threshold(spec: ModelSpec) -> float:
@@ -357,12 +395,10 @@ def model_state() -> dict[str, Any]:
 
 
 def warm_up() -> None:
-    """Eagerly load the models the scanner will use (non-fatal — logs on failure)."""
-    from app.ml.registry import classify_types_default, resolve_binary, resolve_type
+    """Eagerly load the model the scanner will use (non-fatal — logs on failure)."""
+    from app.ml.registry import resolve_model
 
-    get_loaded(resolve_binary())
-    if classify_types_default():
-        get_loaded(resolve_type())
+    get_loaded(resolve_model())
 
 
 def probability_to_alert_level(probability: float) -> str:
@@ -375,165 +411,220 @@ def probability_to_alert_level(probability: float) -> str:
     return "High-confidence burst"
 
 
+def relative_alert_level(probability: float, threshold: float | None) -> str:
+    """Alert wording relative to the decision threshold, not to a fixed 0.5.
+
+    With a calibrated threshold near 0.8, evidence of 0.7 would read "Possible
+    burst" on the fixed bands while the verdict beside it says No_Burst. So the
+    evidence is rescaled for the bands, mapping the threshold to 0.5.
+    """
+    if threshold is None or not 0.0 < threshold < 1.0:
+        return probability_to_alert_level(probability)
+    if probability >= threshold:
+        scaled = 0.5 + 0.5 * (probability - threshold) / (1.0 - threshold)
+    else:
+        scaled = 0.5 * probability / threshold
+    return probability_to_alert_level(float(scaled))
+
+
 # ─── Scoring ──────────────────────────────────────────────────────────────────
 
 
-def _score_binary(
-    loaded: LoadedModel, normalized: np.ndarray, metadata: dict[str, Any]
-) -> float:
-    """Whole-file burst probability, matching how the binary models were trained."""
+def adjust_type_probabilities(
+    probabilities: np.ndarray,
+    class_names: tuple[str, ...],
+    adjustment: dict[str, float],
+    strength: float,
+) -> np.ndarray:
+    """Shift the burst-type probabilities toward how often each type occurs.
+
+    ``p'(type) ~ p(type) * exp(strength * adjustment[type])``, rescaled so the
+    burst types keep their total: non-burst classes, burst evidence and every
+    threshold calibrated on it are exactly what they were.
+    """
+    probabilities = np.asarray(probabilities, dtype=np.float64)
+    if not adjustment or strength <= 0 or probabilities.size == 0:
+        return probabilities
+    burst = [i for i, name in enumerate(class_names) if name in adjustment]
+    if not burst:
+        return probabilities
+    factors = np.exp(float(strength) * np.array([adjustment[class_names[i]] for i in burst]))
+    part = probabilities[:, burst]
+    mass = part.sum(axis=1, keepdims=True)
+    shifted = part * factors[None, :]
+    shifted_mass = shifted.sum(axis=1, keepdims=True)
+    scale = np.divide(mass, shifted_mass, out=np.zeros_like(mass), where=shifted_mass > 0)
+    adjusted = probabilities.copy()
+    adjusted[:, burst] = shifted * scale
+    return adjusted
+
+
+def region_probabilities(
+    loaded: LoadedModel,
+    normalized: np.ndarray,
+    quiet: np.ndarray | None,
+    axes: SpectrumAxes,
+    rfi_channels: Any,
+    regions: list[Region],
+) -> np.ndarray:
+    """``[N, K]`` class probabilities for ``regions``, type priors applied."""
     import torch
 
-    tensor = crop_from_normalized(
-        normalized, whole_file_box(normalized.shape), loaded.target_shape
+    if not regions:
+        return np.zeros((0, len(loaded.class_names)))
+    context = file_context(normalized, axes, rfi_channels)
+    images, features = [], []
+    for region in regions:
+        box = region.as_box()
+        images.append(region_views(normalized, box, loaded.crop, loaded.views, quiet=quiet))
+        # Physics is measured on the same pixels for every class, background
+        # included, so a measurement's presence never gives the label away.
+        physics = measure_burst(normalized, axes, box.row0, box.row1, box.col0, box.col1)
+        measured = measure_region(context, box.row0, box.row1, box.col0, box.col1, physics)
+        features.append(feature_vector(physics, measured))
+
+    chunks: list[np.ndarray] = []
+    for start in range(0, len(regions), BATCH_SIZE):
+        image = np.stack(images[start:start + BATCH_SIZE])
+        vector = np.stack(features[start:start + BATCH_SIZE])
+        with _PREDICT_LOCK, torch.no_grad():
+            logits = loaded.model(
+                torch.from_numpy(image).float().to(loaded.device),
+                torch.from_numpy(vector).float().to(loaded.device),
+            ).reshape(len(image), -1)
+            chunks.append(torch.softmax(logits.float(), dim=1).cpu().numpy())
+    return adjust_type_probabilities(
+        np.concatenate(chunks), loaded.class_names, loaded.type_adjustment, loaded.type_strength
     )
-    meta_vec = (
-        row_to_meta_vector(metadata, loaded.station_vocab) if loaded.uses_metadata else None
+
+
+def decide_region(
+    region: Region, row: np.ndarray, class_names: tuple[str, ...], threshold: float
+) -> ScoredRegion:
+    """Fold the reported classes together and call the region burst or not."""
+    reported: dict[str, float] = {}
+    for name, value in zip(class_names, row):
+        target = REPORTED_AS.get(name, name)
+        reported[target] = reported.get(target, 0.0) + float(value)
+    non_burst = sum(float(v) for n, v in zip(class_names, row) if n in NON_BURST_CLASSES)
+    evidence = float(np.clip(1.0 - non_burst, 0.0, 1.0))
+
+    scored = ScoredRegion(
+        region=region, probabilities=reported, burst_evidence=evidence,
+        is_burst=evidence >= threshold,
     )
-
-    with _PREDICT_LOCK:
-        inputs = [torch.from_numpy(tensor).unsqueeze(0).to(loaded.device)]
-        if meta_vec is not None:
-            inputs.append(
-                torch.from_numpy(np.asarray(meta_vec, dtype=np.float32))
-                .unsqueeze(0)
-                .to(loaded.device)
-            )
-        with torch.no_grad():
-            logits = loaded.model(*inputs).reshape(-1)
-            return float(torch.sigmoid(logits).cpu().item())
+    if scored.is_burst:
+        types = [name for name in reported if name not in NON_BURST_CLASSES]
+        best = max(types, key=lambda name: reported[name])
+        scored.burst_type = best
+        scored.type_confidence = float(reported[best] / max(evidence, 1e-9))
+    return scored
 
 
-def _classify_crop(loaded: LoadedModel, tensor: np.ndarray) -> tuple[str, float, dict[str, float]]:
-    """Type one crop: returns (class name, its probability, all probabilities)."""
-    import torch
-
-    with _PREDICT_LOCK:
-        image = torch.from_numpy(tensor).unsqueeze(0).to(loaded.device)
-        with torch.no_grad():
-            logits = loaded.model(image).reshape(1, -1)
-            values = torch.softmax(logits, dim=1)[0].cpu().numpy()
-
-    best = int(values.argmax())
-    names = loaded.class_names
-    name = names[best] if best < len(names) else str(best)
-    return name, float(values[best]), {n: float(values[i]) for i, n in enumerate(names)}
-
-
-def _typed_regions(
-    loaded: LoadedModel, normalized: np.ndarray, metadata: dict[str, Any]
-) -> list[Any]:
-    """Propose bright regions and classify each one's burst type."""
-    from app.config import settings
-    from app.ml.regions import find_candidate_regions, resolve_threshold
-
+def score_spectrum(
+    loaded: LoadedModel, spectrum: np.ndarray, metadata: dict[str, Any]
+) -> list[ScoredRegion]:
+    """Every candidate region of one raw spectrum, with its verdict."""
+    normalized = normalize_full_spectrum(spectrum, loaded.preprocessing)
+    quiet = (
+        quiet_normalized_spectrum(spectrum, loaded.preprocessing)
+        if "quiet_context" in loaded.views
+        else None
+    )
+    finder = loaded.finder
     regions = find_candidate_regions(
         normalized,
-        threshold=resolve_threshold(normalized, settings.radio_burst_region_threshold),
-        min_area=settings.radio_burst_region_min_area,
-        max_candidates=settings.radio_burst_region_max,
-        min_rows=settings.radio_burst_region_min_rows,
-        min_cols=settings.radio_burst_region_min_cols,
+        threshold=resolve_threshold(normalized, finder["threshold"], finder["adaptive"]),
+        min_area=finder["min_area"],
+        max_candidates=finder["max_regions"],
+        hysteresis=finder["hysteresis"],
     )
-    for region in regions:
-        try:
-            tensor = crop_from_normalized(
-                normalized,
-                region.as_box(),
-                loaded.target_shape,
-                context_margin=loaded.crop_margin,
-                min_rows=loaded.crop_min_rows,
-                min_cols=loaded.crop_min_cols,
-            )
-        except ValueError:
-            continue
-        region.burst_type, region.confidence, region.probabilities = _classify_crop(
-            loaded, tensor
-        )
-    return regions
+    probabilities = region_probabilities(
+        loaded, normalized, quiet, metadata["axes"], metadata.get("rfi_channels_mhz"), regions
+    )
+    return [
+        decide_region(region, row, loaded.class_names, loaded.threshold)
+        for region, row in zip(regions, probabilities)
+    ]
 
 
-# One e-CALLISTO segment is ~15 minutes; used to express region time extents.
-_SEGMENT_SECONDS = 15 * 60
-
-
-def predict_bytes(
-    content: bytes,
+def build_record(
+    loaded: LoadedModel,
+    scored: list[ScoredRegion],
+    axes: SpectrumAxes,
     filename: str,
-    *,
-    model_id: str | None = None,
-    classify_types: bool | None = None,
-) -> dict[str, Any] | None:
-    """Score raw FITS bytes and return a prediction record, or None on error.
+) -> dict[str, Any]:
+    """The prediction record the rest of the backend stores and serves.
 
-    The record keeps the shape the rest of the backend expects and only *adds*
-    fields, so callers that ignore the new ones keep working:
-    {file_name, file_path, predicted_label, burst_probability,
-     decision_threshold, confidence, alert_level, model_id, model_name}
-    plus, when the burst-type stage ran on a burst:
-    {burst_type, type_confidence, type_model_id, type_probabilities, type_regions}
+    {file_name, file_path, predicted_label, burst_probability, decision_threshold,
+     confidence, alert_level, model_id, model_name}
+    plus, for a burst file: {burst_type, type_confidence, type_model_id,
+    type_probabilities, type_regions}.
     """
-    from app.ml.registry import classify_types_default, resolve_binary, resolve_type
-
-    binary = get_loaded(resolve_binary(model_id))
-    if binary is None:
-        return None
-
-    try:
-        normalized, metadata = read_and_normalize_bytes(
-            content, filename, binary.config, freq_source=binary.spec.freq_source
-        )
-    except Exception as exc:
-        logger.warning("Preprocessing failed for %s: %s", filename, exc)
-        return None
-
-    try:
-        probability = _score_binary(binary, normalized, metadata)
-    except Exception as exc:
-        logger.warning("Inference failed for %s: %s", filename, exc)
-        return None
-
-    predicted_label = "Burst" if probability >= binary.threshold else "No_Burst"
-    confidence = probability if predicted_label == "Burst" else 1.0 - probability
+    bursts = [s for s in scored if s.is_burst]
+    probability = max((s.burst_evidence for s in scored), default=0.0)
+    predicted_label = "Burst" if bursts else "No_Burst"
     record: dict[str, Any] = {
         "file_name": Path(filename).name,
         "file_path": filename,
         "predicted_label": predicted_label,
         "burst_probability": probability,
-        "decision_threshold": binary.threshold,
-        "confidence": confidence,
-        "alert_level": probability_to_alert_level(probability),
-        "model_id": binary.spec.id,
-        "model_name": binary.spec.name,
+        "decision_threshold": loaded.threshold,
+        "confidence": probability if bursts else 1.0 - probability,
+        "alert_level": relative_alert_level(probability, loaded.threshold),
+        "model_id": loaded.spec.id,
+        "model_name": loaded.spec.name,
     }
-
-    # Stage 2: type the burst. Gated on the binary verdict — the region finder is
-    # a brightness heuristic that would happily "type" RFI in a quiet file.
-    wants_types = classify_types_default() if classify_types is None else bool(classify_types)
-    if not (wants_types and predicted_label == "Burst"):
+    if not bursts:
         return record
 
-    type_model = get_loaded(resolve_type())
-    if type_model is None:
-        return record
-
-    try:
-        from app.ml.regions import dominant_type, region_to_axes
-
-        regions = _typed_regions(type_model, normalized, metadata)
-    except Exception as exc:
-        # Typing is additive: a failure here must not lose the binary result.
-        logger.warning("Burst typing failed for %s: %s", filename, exc)
-        return record
-
-    best = dominant_type(regions)
-    record["type_model_id"] = type_model.spec.id
-    record["burst_type"] = best
+    # The file's type is its largest burst region's: a big region is more likely
+    # the actual event, a small bright speck more likely something the model had
+    # to put in some class. Regions come from the finder largest first.
+    chosen = max(bursts, key=lambda s: s.region.area)
+    record["burst_type"] = chosen.burst_type
+    record["type_confidence"] = chosen.type_confidence
+    record["type_probabilities"] = chosen.probabilities
+    record["type_model_id"] = loaded.spec.id
     record["type_regions"] = [
-        region_to_axes(r, metadata, _SEGMENT_SECONDS) for r in regions if r.burst_type
+        {
+            **region_to_axes(s.region, axes),
+            "burst_type": s.burst_type,
+            "confidence": s.type_confidence,
+        }
+        for s in bursts
     ]
-    if best is not None:
-        chosen = max((r for r in regions if r.burst_type == best), key=lambda r: r.area)
-        record["type_confidence"] = chosen.confidence
-        record["type_probabilities"] = chosen.probabilities
     return record
+
+
+def predict_spectrum(
+    spectrum: np.ndarray,
+    metadata: dict[str, Any],
+    filename: str,
+    *,
+    model_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Score one read spectrum; None when the model is unavailable or scoring fails."""
+    from app.ml.registry import resolve_model
+
+    loaded = get_loaded(resolve_model(model_id))
+    if loaded is None:
+        return None
+    try:
+        scored = score_spectrum(loaded, spectrum, metadata)
+    except Exception as exc:
+        logger.warning("Inference failed for %s: %s", filename, exc)
+        return None
+    return build_record(loaded, scored, metadata["axes"], filename)
+
+
+def predict_bytes(
+    content: bytes, filename: str, *, model_id: str | None = None
+) -> dict[str, Any] | None:
+    """Score raw FITS bytes and return a prediction record, or None on error."""
+    try:
+        spectrum, metadata = read_spectrum_bytes(content, filename)
+    except Exception as exc:
+        logger.warning("Preprocessing failed for %s: %s", filename, exc)
+        return None
+    return predict_spectrum(spectrum, metadata, filename, model_id=model_id)

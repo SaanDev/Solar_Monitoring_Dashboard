@@ -65,11 +65,11 @@ async def _restore_model_selection() -> None:
     unreachable database just leaves the configured default in charge.
     """
     from app.database import AsyncSessionLocal
-    from app.services.model_settings_service import load_saved_binary_model
+    from app.services.model_settings_service import load_saved_model
 
     try:
         async with AsyncSessionLocal() as db:
-            await load_saved_binary_model(db)
+            await load_saved_model(db)
     except Exception as exc:  # noqa: BLE001 - startup must not crash on this
         logger.warning("could not restore the saved burst-model selection: %s", exc)
 
@@ -79,9 +79,8 @@ async def lifespan(app: FastAPI):
     settings.ensure_dirs()
     if settings.auto_migrate:
         await _apply_migrations()
-    # Load the burst classifiers the scanner will use (the selected/configured
-    # binary model, plus the burst-type model when typing is on) in a thread, so
-    # startup isn't blocked on the forward-pass warm-up. A missing/undownloadable
+    # Load the burst model the scanner will use (the selected/configured one) in
+    # a thread, so startup isn't blocked on the forward-pass warm-up. A missing/undownloadable
     # checkpoint is non-fatal: the scan logs a warning and skips scoring rather
     # than crashing. The saved selection is restored first so the *right*
     # checkpoint is the one warmed.

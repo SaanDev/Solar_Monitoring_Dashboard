@@ -1,24 +1,21 @@
 """ML radio-burst scanner — detect solar radio bursts from e-CALLISTO data.
 
 A scheduled pass enumerates newly-published e-CALLISTO ``.fit.gz`` segments
-across **all** stations, scores each new one with the configured burst
-classifier, and persists the per-file result to ``radio_burst_detections``
+across **all** stations, scores each new one with the active burst model,
+and persists the per-file result to ``radio_burst_detections``
 (which doubles as the dedup registry). Burst-positive detections are then
 aggregated by 15-minute window into ``radio_burst`` rows in the shared
 ``events`` table, so they surface through the existing alert feed and Events
 page with the list of stations that observed each burst.
 
-Which model runs here is a setting, not a per-request choice: the binary
-classifier comes from the Settings page's Automatic Burst Detection picker
-(persisted, falling back to ``radio_burst_binary_model`` — see
-``app/services/model_settings_service.py``), and ``radio_burst_classify_types``
-decides whether each burst-positive file is also labelled with a burst type. One
+Which model runs here is a setting, not a per-request choice: it comes from the
+Settings page's Automatic Burst Detection picker (persisted, falling back to
+``radio_burst_model`` — see ``app/services/model_settings_service.py``). One
 model at a time keeps the alert stream (and the scorecard derived from it)
-internally comparable; the on-demand Burst Detector page is where models get
-compared side by side.
+internally comparable.
 
-The detection record granularity is whole-spectrum binary (Burst / No_Burst)
-plus an optional burst type; this module adds time-window grouping and
+The detection record granularity is per file (Burst / No_Burst) plus the burst
+type of its largest burst region; this module adds time-window grouping and
 multi-station corroboration on top.
 """
 from __future__ import annotations
@@ -32,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.collect_ecallisto import FitsFile, list_day_files
 from app.config import settings
-from app.ml.registry import alert_min_probability, resolve_binary
+from app.ml.registry import alert_min_probability_for, resolve_model
 from app.repositories.event_repo import (
     delete_events_of_type_in_range,
     delete_events_of_type_since,
@@ -112,8 +109,7 @@ def _window_burst_type(items: list[dict]) -> str | None:
     """The window's burst type: the one carried by the most confident detection.
 
     Stations see the same event with different signal quality, so the clearest
-    view is the one to believe. Detections with no type (typing off, or nothing
-    in-distribution to classify) simply do not vote.
+    view is the one to believe. Detections with no type simply do not vote.
     """
     typed = [i for i in items if i.get("burst_type")]
     if not typed:
@@ -133,7 +129,7 @@ def aggregate_events(
     events rather than every single-station detection.
 
     ``model_name`` is stamped into each event's description, so the feed says
-    which classifier produced the alert."""
+    which model produced the alert."""
     groups: dict[datetime, list[dict]] = defaultdict(list)
     for d in detections:
         groups[_floor_to_window(d["start_time"])].append(d)
@@ -178,6 +174,24 @@ def aggregate_events(
             }
         )
     return events
+
+
+def gate_by_own_model(detections: list[dict]) -> list[dict]:
+    """Keep detections at or above the alert minimum of the model that stored them.
+
+    Rows written by a retired model stay in the table until the backfill
+    re-scores them, and each must be judged by its own model's threshold: CCM
+    v2.0's 0.80 would silently drop every CCM v1.1.0 detection above its 0.51.
+    """
+    minimums: dict[str | None, float] = {}
+    kept = []
+    for d in detections:
+        model_id = d.get("model_id")
+        if model_id not in minimums:
+            minimums[model_id] = alert_min_probability_for(model_id)
+        if float(d["probability"]) >= minimums[model_id]:
+            kept.append(d)
+    return kept
 
 
 def detection_row(file: FitsFile, record: dict) -> dict:
@@ -234,15 +248,13 @@ async def rebuild_radio_burst_events(
     the filter existed — are cleaned out instead of lingering in the feed. That is
     also why the deletion is bounded by ``until`` when one is given: a day-scoped
     rebuild must not sweep away events outside the day it re-derived."""
-    spec = resolve_binary()
+    spec = resolve_model()
     now = datetime.now(timezone.utc)
     start = since if since is not None else now - _AGGREGATION_LOOKBACK
     end = until if until is not None else now
     if end <= start:
         return []
-    detections = await burst_positive_in_range(
-        db, start, end, alert_min_probability(spec)
-    )
+    detections = gate_by_own_model(await burst_positive_in_range(db, start, end, 0.0))
     events = aggregate_events(detections, model_name=spec.name)
     keep_starts = {e["start_time"] for e in events}
     if until is None:
@@ -267,7 +279,7 @@ async def scan_and_detect_radio_bursts(db: AsyncSession) -> int:
     if not settings.radio_burst_enabled:
         return 0
 
-    spec = resolve_binary()
+    spec = resolve_model()
     now = datetime.now(timezone.utc)
     since = now - timedelta(hours=settings.radio_burst_max_age_hours)
 

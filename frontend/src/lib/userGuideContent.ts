@@ -444,22 +444,21 @@ const RADIO: GuideEntry[] = [
     title: "Burst Detector",
     category: "radio",
     short:
-      "Run a burst classifier over a day of e-CALLISTO data, optionally label burst types, then review, corroborate and export what it found.",
-    tags: ["burst", "ML", "detection", "e-CALLISTO", "CCM", "CCMT", "burst type"],
+      "Run the burst model over a day of e-CALLISTO data to find and type bursts, then review, corroborate and export what it found.",
+    tags: ["burst", "ML", "detection", "e-CALLISTO", "CCM", "burst type"],
     body: [
       {
         kind: "para",
         text:
-          "The Burst Detector runs a machine-learning classifier over e-CALLISTO recordings to find solar radio bursts automatically. Scanning happens as a background job you start and then monitor.",
+          "The Burst Detector runs a machine-learning model (CCM v2.0) over e-CALLISTO recordings to find solar radio bursts and name their type automatically. Scanning happens as a background job you start and then monitor.",
       },
       {
         kind: "list",
         items: [
           "Pick a date (defaults to yesterday) and, optionally, which stations to include.",
-          "Pick a Model: CCM v1.1.0 (default, newer, decision threshold 0.51) or CCM v1.0.0 (the original, threshold 0.595). A model shown as unavailable means its checkpoint has not been fetched — run 'git lfs pull'.",
-          "Tick 'Classify burst types' to also label each burst as Type II, Type III or Other using CCMT v1.0.0. This adds a second pass, so runs take longer.",
+          "The Model field shows the model the run uses, CCM v2.0, with its calibrated threshold. Every burst it finds is labelled Type II, Type III or Other. If it is shown as unavailable, its checkpoint has not been fetched — run 'git lfs pull'.",
           "Click Predict bursts to submit the job; the page polls its progress and shows results when finished.",
-          "After a scan, toggle between two views without re-scanning: Criteria mode (default) keeps only detections that meet alert criteria (fewer, higher-confidence bursts), while Raw mode lists every segment the model flagged. Changing the model or the type toggle does require a new run, because those change the scores.",
+          "After a scan, toggle between two views without re-scanning: Criteria mode (default) keeps only detections that meet alert criteria (fewer, higher-confidence bursts), while Raw mode lists every segment the model flagged. Changing the model does require a new run, because that changes the scores.",
           "Each detected segment shows its probability (color-coded by confidence), any burst type, and a dynamic-spectrum preview; segments seen by multiple stations are highlighted.",
           "The Official e-CALLISTO Burst List panel cross-checks detections against the published daily list.",
           "Export Events downloads the day's events as a .txt report, stamped with the model that produced them.",
@@ -468,7 +467,7 @@ const RADIO: GuideEntry[] = [
       {
         kind: "para",
         text:
-          "How to read burst types: they are estimates, not measurements. The burst has to be found first by the binary model, then bright regions inside the segment are cropped and classified. If no region is large enough to classify reliably, the segment stays a burst with no type rather than being given a guess — 'mixed' on an event means its stations disagreed. Type III is the most reliable class; Other is the weakest. When the type matters, confirm it against the official burst list or in the e-CALLISTO Analyzer.",
+          "How to read burst types: they are estimates, not measurements. The model looks at bright regions inside each segment and calls each one background, RFI or a burst type; a segment takes the type of its largest burst region, and the Burst regions table in the preview lists every region it called a burst. Groups of Type III bursts (Type IIIG) are counted as Type III. 'Mixed' on an event means its stations disagreed. Type III is the most reliable class; Other is the weakest. When the type matters, confirm it against the official burst list or in the e-CALLISTO Analyzer.",
       },
       {
         kind: "para",
@@ -783,7 +782,7 @@ const SETTINGS: GuideEntry[] = [
         kind: "list",
         items: [
           "Appearance: switch the theme between Light, Dark and System; your choice is remembered in this browser.",
-          "Automatic Burst Detection: choose which classifier — CCM v1.1.0 or CCM v1.0.0 — the background scan runs over new e-CALLISTO data to raise radio-burst alerts. This is a server-side setting, so it applies to every viewer and survives a restart. The change takes effect on the next scan, which re-scores the last few hours with the new model and rebuilds the burst alerts from it, and each model alerts on its own tuned probability threshold. The Burst Detector page's per-run model picker is unaffected — it simply starts from this choice.",
+          "Automatic Burst Detection: shows the model the background scan runs over new e-CALLISTO data to detect and type radio bursts and raise alerts — CCM v2.0 — with its validation figures. It is a server-side setting shared by every viewer. Detections the earlier CCM v1.x models stored are re-scored with CCM v2.0 by the background catch-up, newest day first; until then each keeps being judged by its own model's threshold.",
           "Detection Coverage: burst detection only runs on live data, so any time the dashboard is offline leaves gaps in the burst timeline and the activity histograms. The backend re-scores missed days automatically in the background — the strip shows one cell per day (green = fully scored, amber = still incomplete) and the run's progress. Today is always amber: its most recent hours belong to the live scan. You can start a run yourself, stop one, or aim it at an older date range than the automatic window covers. Filled-in bursts appear everywhere the live ones do but never send notifications, so closing an old gap does not replay stale alerts.",
           "Notifications: manage alert-notification preferences and send a test notification to confirm delivery works.",
         ],

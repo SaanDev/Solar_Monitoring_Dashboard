@@ -60,7 +60,7 @@ function TypeChip({
       className={clsx("rounded px-1.5 py-0.5 text-[10px]", typeColor(type))}
       title={
         confidence != null
-          ? `${type} — CCMT confidence ${(confidence * 100).toFixed(0)}%`
+          ? `${type} — type confidence ${(confidence * 100).toFixed(0)}%`
           : type
       }
     >
@@ -93,7 +93,7 @@ type SelectedDet = {
   filename?: string;
   probability?: number;
   source: "predicted" | "official";
-  // Burst-type stage output for this segment, when it ran. Carried on the
+  // The segment's burst regions, when scored in this run. Carried on the
   // selection so the preview can list where in the spectrum each type was found.
   burstType?: string | null;
   regions?: TypedRegion[];
@@ -110,12 +110,11 @@ export function BurstPredictorClient() {
   // true = raw model output (every Burst-labelled segment). Toggling re-assembles
   // from the already-scored rows server-side, so it never re-scores.
   const [rawMode, setRawMode] = useState<boolean>(false);
-  // Which classifier to score with, and whether to run the burst-type stage.
-  // Both change the scores, so they only take effect on the next run — unlike
-  // rawMode, which just re-assembles an existing result. null = server default,
-  // until the model list arrives and pins an explicit choice.
+  // Which model to score with. It changes the scores, so it only takes effect
+  // on the next run — unlike rawMode, which just re-assembles an existing
+  // result. null = server default, until the model list arrives and pins an
+  // explicit choice.
   const [modelId, setModelId] = useState<string | null>(null);
-  const [classifyTypes, setClassifyTypes] = useState<boolean | null>(null);
   // When set (deep-link from an alert: ?date=…), show that day's already-stored
   // real-time detections without re-scoring, until a fresh scan is run.
   const [deepLinkDate, setDeepLinkDate] = useState<string | null>(null);
@@ -127,30 +126,19 @@ export function BurstPredictorClient() {
   );
   const stations = useMemo(() => stationsData?.stations ?? [], [stationsData]);
 
-  // Available classifiers + the server's defaults. Static for the session, so it
+  // Available models + the server's default. Static for the session, so it
   // never revalidates.
   const { data: modelsData } = useSWR("radio-models", api.radioModels, {
     revalidateOnFocus: false,
     revalidateIfStale: false,
   });
-  const binaryModels = useMemo(
-    () => (modelsData?.models ?? []).filter((m) => m.kind === "binary"),
-    [modelsData]
-  );
-  const typeModel = useMemo(
-    () => (modelsData?.models ?? []).find((m) => m.kind === "type") ?? null,
-    [modelsData]
-  );
-  // Adopt the server defaults once, without clobbering a choice already made.
+  const models = useMemo(() => modelsData?.models ?? [], [modelsData]);
+  // Adopt the server default once, without clobbering a choice already made.
   useEffect(() => {
     if (!modelsData) return;
-    setModelId((prev) => prev ?? modelsData.default_binary);
-    setClassifyTypes((prev) => prev ?? modelsData.classify_types);
+    setModelId((prev) => prev ?? modelsData.default_model);
   }, [modelsData]);
-  const activeModel = binaryModels.find((m) => m.id === modelId) ?? null;
-  // Typing needs its checkpoint present; an unavailable CCMT disables the option.
-  const typingPossible = !!typeModel?.available;
-  const typingOn = typingPossible && classifyTypes === true;
+  const activeModel = models.find((m) => m.id === modelId) ?? null;
 
   // Reset the run whenever the date changes.
   useEffect(() => {
@@ -247,8 +235,7 @@ export function BurstPredictorClient() {
       date,
       [...selected],
       rawMode,
-      modelId ?? undefined,
-      typingPossible ? classifyTypes ?? undefined : false
+      modelId ?? undefined
     );
     setJobId(res.job_id);
   };
@@ -326,12 +313,9 @@ export function BurstPredictorClient() {
           </div>
 
           <ModelPicker
-            models={binaryModels}
-            typeModel={typeModel}
+            models={models}
             modelId={modelId}
             onModelChange={setModelId}
-            classifyTypes={typingOn}
-            onClassifyTypesChange={setClassifyTypes}
             disabled={running}
           />
 
@@ -375,13 +359,9 @@ export function BurstPredictorClient() {
         </p>
         {activeModel && (
           <p className="mt-1 text-[10px] text-slate-600">
-            {activeModel.name}: {activeModel.description}
-            {activeModel.threshold != null
-              ? ` Decision threshold ${activeModel.threshold}.`
-              : ""}
-            {typingOn && typeModel
-              ? ` Burst types come from ${typeModel.name}, which classifies bright regions inside each burst — treat them as estimates, not the official list.`
-              : ""}
+            {activeModel.name}: {activeModel.description} Burst types are the
+            model&rsquo;s estimates, not the official list; its Type III groups
+            (IIIG) are counted as Type III.
           </p>
         )}
 
@@ -436,71 +416,68 @@ export function BurstPredictorClient() {
   );
 }
 
-/** Binary-model selector plus the burst-type toggle. */
+/** Model name plus its calibrated threshold, e.g. "CCM v2.0 · t=0.798". */
+function modelLabel(m: ModelInfo): string {
+  return m.threshold != null ? `${m.name} · t=${Number(m.threshold.toFixed(3))}` : m.name;
+}
+
+/** The model a run scores with: a selector once there is more than one. */
 function ModelPicker({
   models,
-  typeModel,
   modelId,
   onModelChange,
-  classifyTypes,
-  onClassifyTypesChange,
   disabled,
 }: {
   models: ModelInfo[];
-  typeModel: ModelInfo | null;
   modelId: string | null;
   onModelChange: (id: string) => void;
-  classifyTypes: boolean;
-  onClassifyTypesChange: (on: boolean) => void;
   disabled?: boolean;
 }) {
-  const typeUnavailable = !!typeModel && !typeModel.available;
-  return (
-    <div className="flex flex-col gap-1">
-      <label className="flex flex-col gap-1 text-xs text-slate-500">
+  if (models.length <= 1) {
+    const only = models[0];
+    return (
+      <div className="flex flex-col gap-1 text-xs text-slate-500">
         Model
-        <select
-          value={modelId ?? ""}
-          disabled={disabled || models.length === 0}
-          onChange={(e) => onModelChange(e.target.value)}
-          className="rounded border border-surface-border bg-surface-muted px-2 py-1 text-sm text-slate-300 outline-none focus:border-accent-blue disabled:opacity-50"
+        <span
+          className={clsx(
+            "rounded border border-surface-border bg-surface-muted/50 px-2 py-1 text-sm",
+            only && !only.available ? "text-accent-red/80" : "text-slate-300"
+          )}
+          title={
+            !only
+              ? undefined
+              : only.available
+                ? only.description
+                : "Checkpoint missing — run git lfs pull"
+          }
         >
-          {models.length === 0 && <option value="">Loading…</option>}
-          {models.map((m) => (
-            <option
-              key={m.id}
-              value={m.id}
-              disabled={!m.available}
-              title={m.available ? m.description : "Checkpoint missing — run git lfs pull"}
-            >
-              {m.name}
-              {m.threshold != null ? ` · t=${m.threshold}` : ""}
-              {m.available ? "" : " (unavailable)"}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label
-        className={clsx(
-          "flex select-none items-center gap-2 text-[11px]",
-          typeUnavailable ? "cursor-not-allowed text-slate-600" : "cursor-pointer text-slate-400"
-        )}
-        title={
-          typeUnavailable
-            ? `${typeModel?.name} checkpoint missing — run git lfs pull`
-            : "Classify the burst type (Type II / Type III / Other) of every segment flagged as a burst. Adds a second pass, so a run takes longer."
-        }
+          {only ? modelLabel(only) + (only.available ? "" : " (unavailable)") : "Loading…"}
+        </span>
+      </div>
+    );
+  }
+  return (
+    <label className="flex flex-col gap-1 text-xs text-slate-500">
+      Model
+      <select
+        value={modelId ?? ""}
+        disabled={disabled}
+        onChange={(e) => onModelChange(e.target.value)}
+        className="rounded border border-surface-border bg-surface-muted px-2 py-1 text-sm text-slate-300 outline-none focus:border-accent-blue disabled:opacity-50"
       >
-        <input
-          type="checkbox"
-          checked={classifyTypes}
-          disabled={disabled || typeUnavailable || !typeModel}
-          onChange={(e) => onClassifyTypesChange(e.target.checked)}
-          className="h-3.5 w-3.5 accent-accent-blue"
-        />
-        Classify burst types{typeModel ? ` (${typeModel.name})` : ""}
-      </label>
-    </div>
+        {models.map((m) => (
+          <option
+            key={m.id}
+            value={m.id}
+            disabled={!m.available}
+            title={m.available ? m.description : "Checkpoint missing — run git lfs pull"}
+          >
+            {modelLabel(m)}
+            {m.available ? "" : " (unavailable)"}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -559,24 +536,16 @@ function Summary({ result }: { result: BurstPredictionResult }) {
         <span className="rounded bg-accent-blue/15 px-2 py-0.5 font-medium text-accent-blue">
           {result.model_name || result.model_id}
         </span>
-        {result.classify_types ? (
-          typeEntries.length > 0 ? (
-            <span className="flex items-center gap-1">
-              Burst types:
-              {typeEntries.map(([type, count]) => (
-                <span key={type} className="flex items-center gap-0.5">
-                  <TypeChip type={type} short />
-                  <span className="text-slate-400">×{count}</span>
-                </span>
-              ))}
-            </span>
-          ) : (
-            <span>
-              Burst typing on — no burst had a region clear enough to classify.
-            </span>
-          )
-        ) : (
-          <span>Burst typing off.</span>
+        {typeEntries.length > 0 && (
+          <span className="flex items-center gap-1">
+            Burst types:
+            {typeEntries.map(([type, count]) => (
+              <span key={type} className="flex items-center gap-0.5">
+                <TypeChip type={type} short />
+                <span className="text-slate-400">×{count}</span>
+              </span>
+            ))}
+          </span>
         )}
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
@@ -885,7 +854,7 @@ function SpectrumPreview({
   );
 }
 
-/** Where inside the segment the burst-type stage found each classified region.
+/** Where inside the segment the model found each burst region, and its type.
  *
  * A table rather than boxes drawn on the image: the preview is rendered
  * server-side with axis margins, so overlaying by pixel fraction would not line
@@ -899,7 +868,7 @@ function TypedRegionTable({ det }: { det: SelectedDet }) {
           ? // Region geometry is not stored, so a detection loaded from the
             // background scan keeps its type but not where that type was found.
             "Region detail isn't kept for stored detections — re-run the scan for this day to see where the type was found."
-          : "No burst-type regions for this segment — either typing was off, or no bright region was large enough to classify reliably."}
+          : "No burst regions for this segment."}
       </p>
     );
   }
@@ -907,10 +876,10 @@ function TypedRegionTable({ det }: { det: SelectedDet }) {
     <div className="mt-3">
       <div className="mb-1 flex items-baseline justify-between">
         <h3 className="text-[10px] uppercase tracking-wider text-slate-500">
-          Typed regions ({regions.length})
+          Burst regions ({regions.length})
         </h3>
         <span className="text-[10px] text-slate-600">
-          Bright regions classified by CCMT — locations are approximate
+          Regions the model called a burst — Type IIIG groups count as Type III
         </span>
       </div>
       <div className="overflow-x-auto rounded border border-surface-border">

@@ -17,18 +17,11 @@ node_modules/
 out/
 *.tsbuildinfo
 
-<<<<<<< HEAD
-# Desktop app: staged Python runtime + download caches (desktop/scripts/build-runtime.ps1)
-desktop/build/
-# setuptools output from non-editable installs of the backend
-backend/build/
-=======
 # Desktop app: staged Python runtime + download caches (desktop/scripts/build-runtime.ps1 / .sh)
 desktop/build/
 # setuptools output from non-editable installs of the backend
 backend/build/
 Claude output/
->>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
 
 # Env
 .env
@@ -40,9 +33,12 @@ data/
 *.fits
 *.FITS
 *.fts
-# Note: the ML checkpoint backend/ml_model/best.pt is intentionally NOT ignored —
-# it is committed via Git LFS (see .gitattributes). Other *.pt files under the
-# gitignored data/ and .venv/ trees are already excluded by those rules.
+# Note: the ML checkpoint backend/ml_model/ccm_v2_0.pt is intentionally NOT
+# ignored — it is committed via Git LFS (see .gitattributes). Other *.pt files
+# under the gitignored data/ and .venv/ trees are already excluded by those rules.
+# The exported model bundle keeps its docs in git but not its full-size weights:
+# the slim ccm_v2_0.pt (scripts/repack_model.py) is what the backend loads.
+backend/ml_model/ccm_v2_0/*.pt
 
 # OS
 .DS_Store

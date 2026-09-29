@@ -11,21 +11,21 @@ import { EmptyState } from "@/components/ui/EmptyState";
 
 /** Metrics worth showing per model, in the order they read best. */
 const METRIC_LABELS: [key: string, label: string][] = [
-  ["test_f1", "test F1"],
-  ["val_f1", "val F1"],
-  ["test_accuracy", "test acc"],
+  ["val_macro_f1", "val macro-F1"],
+  ["val_burst_recall", "burst-file recall"],
+  ["val_false_alarm_rate", "false alarms"],
 ];
 
 function metricSummary(model: ModelInfo): string {
   const parts = METRIC_LABELS.filter(([k]) => model.metrics?.[k] != null).map(
     ([k, label]) => `${label} ${model.metrics[k].toFixed(3)}`
   );
-  if (model.threshold != null) parts.unshift(`threshold ${model.threshold}`);
+  if (model.threshold != null) parts.unshift(`threshold ${model.threshold.toFixed(3)}`);
   return parts.join(" · ");
 }
 
 /**
- * Which classifier the *automatic* burst detection + alert system runs.
+ * Which model the *automatic* burst detection + alert system runs.
  *
  * The choice is server-side state, not a browser preference: the background
  * scanner is what uses it, so it is stored in the backend and applies to every
@@ -50,7 +50,7 @@ export function BurstDetectionModelCard() {
         </h2>
         <EmptyState
           tone="error"
-          message="Couldn't load the burst classifiers. The detection model is unchanged."
+          message="Couldn't load the burst models. The detection model is unchanged."
         />
       </section>
     );
@@ -65,8 +65,10 @@ export function BurstDetectionModelCard() {
     );
   }
 
-  const binaryModels = data.models.filter((m) => m.kind === "binary");
-  const active = data.default_binary;
+  const models = data.models;
+  const active = data.default_model;
+  // Nothing to choose between until a second model ships: show it, no Save.
+  const choosable = models.length > 1;
   const selected = choice ?? active;
   const dirty = selected !== active;
 
@@ -77,8 +79,8 @@ export function BurstDetectionModelCard() {
       const updated = await api.setBurstDetectionModel(selected);
       await mutate(updated, { revalidate: false });
       setChoice(null);
-      const name = updated.models.find((m) => m.id === updated.default_binary)?.name;
-      setStatus(`Saved — automatic detection now uses ${name ?? updated.default_binary}.`);
+      const name = updated.models.find((m) => m.id === updated.default_model)?.name;
+      setStatus(`Saved — automatic detection now uses ${name ?? updated.default_model}.`);
       setStatusTone("ok");
     } catch (e) {
       setStatus(`Save failed: ${e instanceof Error ? e.message : e}`);
@@ -92,12 +94,13 @@ export function BurstDetectionModelCard() {
     <section className="rounded-lg border border-surface-border bg-surface-card p-5">
       <h2 className="text-sm font-semibold text-slate-200">Automatic Burst Detection</h2>
       <p className="mt-1 text-xs text-slate-500">
-        The classifier the background scan runs over new e-CALLISTO data to raise
-        radio-burst alerts. Applies to every viewer, not just this browser.
+        The model the background scan runs over new e-CALLISTO data to detect and
+        type radio bursts and raise alerts. Applies to every viewer, not just this
+        browser.
       </p>
 
       <div className="mt-4 space-y-2">
-        {binaryModels.map((m) => {
+        {models.map((m) => {
           const isSelected = selected === m.id;
           const summary = metricSummary(m);
           return (
@@ -108,20 +111,24 @@ export function BurstDetectionModelCard() {
                 "flex gap-3 rounded border p-3 transition-colors",
                 !m.available
                   ? "cursor-not-allowed border-surface-border bg-surface-muted/20 opacity-50"
-                  : isSelected
-                    ? "cursor-pointer border-accent-blue bg-accent-blue/10"
-                    : "cursor-pointer border-surface-border bg-surface-muted/30 hover:border-slate-600"
+                  : !choosable
+                    ? "border-surface-border bg-surface-muted/30"
+                    : isSelected
+                      ? "cursor-pointer border-accent-blue bg-accent-blue/10"
+                      : "cursor-pointer border-surface-border bg-surface-muted/30 hover:border-slate-600"
               )}
             >
-              <input
-                type="radio"
-                name="burst-detection-model"
-                value={m.id}
-                checked={isSelected}
-                disabled={!m.available || saving}
-                onChange={() => setChoice(m.id)}
-                className="mt-0.5 h-4 w-4 accent-[var(--accent-blue,#3b82f6)]"
-              />
+              {choosable && (
+                <input
+                  type="radio"
+                  name="burst-detection-model"
+                  value={m.id}
+                  checked={isSelected}
+                  disabled={!m.available || saving}
+                  onChange={() => setChoice(m.id)}
+                  className="mt-0.5 h-4 w-4 accent-[var(--accent-blue,#3b82f6)]"
+                />
+              )}
               <span className="min-w-0">
                 <span className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium text-slate-200">{m.name}</span>
@@ -150,23 +157,25 @@ export function BurstDetectionModelCard() {
       </div>
 
       <p className="mt-3 text-[11px] text-slate-600">
-        A change takes effect on the next scan: the last few hours are re-scored
-        with the new model and the burst alerts rebuilt from that, so recent
-        events may shift. Each model alerts on its own tuned threshold. The Burst
-        Detector page&rsquo;s per-run picker is unaffected.
-        {data.default_binary_source === "config" &&
+        {choosable
+          ? "A change takes effect on the next scan: the last few hours are re-scored with the new model and the burst alerts rebuilt from that, and the catch-up then re-scores older days in the background. Each model alerts on its own calibrated threshold. The Burst Detector page’s per-run picker is unaffected."
+          : "Detections a retired model stored are re-scored with this one by the background catch-up, newest day first; until then each is judged by its own model’s threshold."}
+        {choosable &&
+          data.default_model_source === "config" &&
           " No model has been chosen here yet — the backend default is in force."}
       </p>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <button
-          onClick={save}
-          disabled={saving || !dirty}
-          className="flex items-center gap-2 rounded bg-accent-blue px-4 py-1.5 text-sm font-medium text-white hover:bg-accent-blue/80 disabled:opacity-50"
-        >
-          {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          Save
-        </button>
+        {choosable && (
+          <button
+            onClick={save}
+            disabled={saving || !dirty}
+            className="flex items-center gap-2 rounded bg-accent-blue px-4 py-1.5 text-sm font-medium text-white hover:bg-accent-blue/80 disabled:opacity-50"
+          >
+            {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Save
+          </button>
+        )}
         {status && (
           <span
             role="status"

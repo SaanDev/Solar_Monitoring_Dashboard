@@ -13,6 +13,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
  * always partial, because its most recent hours belong to the live scanner. */
 const STATE_STYLE: Record<BackfillDayCoverage["state"], { cell: string; label: string }> = {
   done: { cell: "bg-accent-green/70", label: "fully scored" },
+  stale: { cell: "bg-accent-green/25", label: "scored by an earlier model — queued to re-score" },
   partial: { cell: "bg-accent-yellow/70", label: "partly scored" },
   running: { cell: "bg-accent-blue/70 animate-pulse", label: "scoring now" },
   pending: { cell: "bg-accent-blue/30", label: "queued" },
@@ -162,7 +163,9 @@ export function BurstBackfillCard() {
 
   const past = data.coverage.slice(0, -1); // today is partial by design
   const covered = past.filter((d) => d.state === "done").length;
-  const gaps = past.filter((d) => d.state !== "done");
+  // Covered, but by a model since replaced; the catch-up re-scores them.
+  const stale = past.filter((d) => d.state === "stale").length;
+  const gaps = past.filter((d) => d.state !== "done" && d.state !== "stale");
 
   const run = async (start?: string, end?: string, forceRun = false) => {
     setBusy(true);
@@ -238,6 +241,14 @@ export function BurstBackfillCard() {
 
       <p className="mt-2 text-xs text-slate-400">
         {covered}/{past.length} past days fully scored
+        {stale > 0 && (
+          <>
+            {" · "}
+            <span className="text-slate-300">
+              {stale} day{stale === 1 ? "" : "s"} to re-score with the current model
+            </span>
+          </>
+        )}
         {gaps.length > 0 && (
           <>
             {" · "}
@@ -287,8 +298,8 @@ export function BurstBackfillCard() {
         <div className="mt-3 rounded border border-surface-border bg-surface-muted/30 p-3">
           <p className="text-[11px] text-slate-500">
             Reach further back than the automatic window, e.g. after a long outage.
-            A day of archive is roughly 5,000 segments (~30 min of scoring), and the
-            run works newest day first so the most recent gap closes first.
+            A day of archive is roughly 5,000 segments (about an hour of scoring),
+            and the run works newest day first so the most recent gap closes first.
           </p>
           <div className="mt-3 flex flex-wrap items-end gap-3">
             <label className="text-[11px] text-slate-400">
@@ -331,8 +342,8 @@ export function BurstBackfillCard() {
           {force && (
             <p className="mt-2 text-[11px] text-accent-yellow">
               Re-scoring downloads and scores every segment in the range again with
-              the current model, replacing the stored verdicts. Days already covered
-              are otherwise skipped, whichever model scored them.
+              the current model, replacing the stored verdicts. Days the current
+              model already covered are otherwise skipped.
             </p>
           )}
         </div>

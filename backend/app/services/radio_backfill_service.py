@@ -9,10 +9,17 @@ in the Events feed, and in the correlation histograms, which are all derived fro
 
 This module closes those holes. It walks a range of UTC days, and for each one
 compares the archive's directory listing against the filenames already scored
-(**by any model** — see ``filenames_in_range``), scores whatever is missing with
-the currently selected classifier, then re-derives that day's ``radio_burst``
-events. Coverage is recorded per day in ``radio_burst_backfill_days`` so the next
-pass skips finished days without touching the network.
+**by the active model** (see ``filenames_in_range``), scores whatever is missing
+with it, then re-derives that day's ``radio_burst`` events. Coverage is recorded
+per day, with the model that produced it, in ``radio_burst_backfill_days`` so
+the next pass skips finished days without touching the network.
+
+Coverage is per model on purpose: when the active model changes, every day in
+the automatic window reopens and is re-scored with the new one, so the Timeline,
+the Events feed and the scorecard are not a patchwork of models with different
+thresholds and type taxonomies. That makes a model change an expensive pass —
+thousands of files per day — which the catch-up works through newest day first,
+in the background, resumably.
 
 Three properties matter more than speed here:
 
@@ -42,7 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.collectors.collect_ecallisto import FitsFile, list_day_files
 from app.config import settings
 from app.database import AsyncSessionLocal
-from app.ml.registry import resolve_binary
+from app.ml.registry import resolve_model
 from app.models.radio_backfill import (
     STATE_DONE,
     STATE_ERROR,
@@ -74,6 +81,10 @@ _COMPLETE_RATIO = 0.98
 _job: dict | None = None
 _task: asyncio.Task | None = None
 _cancel = False
+
+
+# Reported for a day finished by a model other than the active one (never stored).
+STATE_STALE = "stale"
 
 
 class BackfillBusyError(Exception):
@@ -113,20 +124,25 @@ async def plan_days(
     picture; a month-old day can wait for the run to get to it.
 
     Without ``force`` this trusts the coverage ledger: a day already recorded as
-    ``done`` is skipped with no network call at all, which is what makes the
-    hourly gap check nearly free. A day with no ledger row is *not* assumed
-    missing — it is inspected, and if the detections are already there it is
-    simply recorded as done. ``force`` re-scores every day in the range with the
-    currently selected model, ledger and existing rows notwithstanding.
+    ``done`` by the active model is skipped with no network call at all, which is
+    what makes the hourly gap check nearly free. A day done by another model is
+    reopened, so a model change re-scores the window. A day with no ledger row is
+    *not* assumed missing — it is inspected, and if the detections are already
+    there it is simply recorded as done. ``force`` re-scores every day in the
+    range with the active model, ledger and existing rows notwithstanding.
     """
     rows = await days_in_range(db, first, last)
+    model_id = resolve_model().id
     today = datetime.now(timezone.utc).date()
     days: list[date_cls] = []
     day = last
     while day >= first:
         row = rows.get(day)
         stale = day >= today  # today is still being published; never final
-        if force or stale or row is None or row["state"] != STATE_DONE:
+        finished = (
+            row is not None and row["state"] == STATE_DONE and row["model_id"] == model_id
+        )
+        if force or stale or not finished:
             days.append(day)
         day -= timedelta(days=1)
     return days
@@ -188,7 +204,7 @@ async def process_day(
     # Everything from here on belongs to the live scanner, which is the only thing
     # allowed to raise real-time alerts.
     end_bound = min(day_end, _live_cutoff())
-    spec = resolve_binary()
+    spec = resolve_model()
 
     files = await list_day_files(day)
     archive_files = [f for f in files if day_start <= f.start < day_end]
@@ -196,7 +212,7 @@ async def process_day(
 
     await upsert_day(db, day, state=STATE_RUNNING, model_id=spec.id, error=None)
 
-    covered = await filenames_in_range(db, day_start, day_end)
+    covered = await filenames_in_range(db, day_start, day_end, model_id=spec.id)
     todo = in_scope if force else [f for f in in_scope if f.filename not in covered]
     todo.sort(key=lambda f: f.start)
 
@@ -229,7 +245,7 @@ async def process_day(
     if job is not None:
         job["events_written"] += len(events)
 
-    covered_now = len(await filenames_in_range(db, day_start, day_end))
+    covered_now = len(await filenames_in_range(db, day_start, day_end, model_id=spec.id))
     fully_elapsed = end_bound >= day_end
     complete = fully_elapsed and _is_complete(covered_now, len(archive_files))
     row = await upsert_day(
@@ -259,7 +275,7 @@ async def process_day(
 def _new_job(
     first: date_cls, last: date_cls, force: bool, trigger: str
 ) -> dict:
-    spec = resolve_binary()
+    spec = resolve_model()
     return {
         "job_id": uuid4().hex,
         "status": "running",
@@ -405,19 +421,25 @@ async def coverage(db: AsyncSession, days: int) -> list[dict]:
 
     Days with no ledger row are reported as ``unknown`` rather than invented: the
     backfill has simply never looked at them (a fresh install, or a day older than
-    the window), and saying so is more honest than implying a gap.
+    the window), and saying so is more honest than implying a gap. A day finished
+    by a model other than the active one is ``stale``: covered, but queued to be
+    re-scored (see :func:`plan_days`).
     """
     today = datetime.now(timezone.utc).date()
     first = today - timedelta(days=max(1, days) - 1)
     rows = await days_in_range(db, first, today)
+    model_id = resolve_model().id
     out: list[dict] = []
     day = first
     while day <= today:
         row = rows.get(day)
+        state = row["state"] if row else "unknown"
+        if state == STATE_DONE and row["model_id"] != model_id:
+            state = STATE_STALE
         out.append(
             {
                 "day": day.isoformat(),
-                "state": row["state"] if row else "unknown",
+                "state": state,
                 "archive_files": row["archive_files"] if row else 0,
                 "covered_files": row["covered_files"] if row else 0,
                 "events": row["events"] if row else 0,

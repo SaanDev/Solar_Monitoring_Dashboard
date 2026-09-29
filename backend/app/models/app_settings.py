@@ -5,9 +5,9 @@ This table holds the choices made from the dashboard's Settings page, which
 have to outlive the process and apply to the background scheduler just as much
 as to API requests — an env var can do neither without a restart and a file edit.
 
-One field today: which binary burst classifier the automatic radio-burst scan
-runs. Empty means "follow ``RADIO_BURST_BINARY_MODEL``", so a database whose
-row was never written behaves exactly as it did before this table existed.
+One field today: which burst model the automatic radio-burst scan runs. Empty
+means "follow ``RADIO_BURST_MODEL``", so a database whose row was never written
+behaves exactly as it did before this table existed.
 """
 from datetime import datetime, timezone
 
@@ -26,8 +26,9 @@ class AppSettings(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)  # always 1
 
-    # Binary burst classifier for the automatic scan; "" = use the configured
-    # default. Ids come from app/ml/registry.py ("ccm-1.0.0" | "ccm-1.1.0").
+    # Burst model for the automatic scan; "" = use the configured default. Ids
+    # come from app/ml/registry.py ("ccm-2.0.0"). The column keeps the name it
+    # had when only binary classifiers existed, to avoid a migration.
     radio_burst_binary_model: Mapped[str] = mapped_column(
         String(64), nullable=False, default=""
     )

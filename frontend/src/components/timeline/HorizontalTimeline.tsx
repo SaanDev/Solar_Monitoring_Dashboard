@@ -146,9 +146,9 @@ function colorsFor(lane: TimelineLane, e: SpaceWeatherEvent): { block: string; s
   // Official bursts carry their catalog code in `severity`.
   if (e.type === "official_radio_burst") return burstColor(e.severity);
   // Model bursts carry a structured `burst_type` — `severity` is the alert level
-  // here, not a type. An untyped burst keeps the lane's neutral color: the model
-  // detected it but found nothing it could classify, and inventing a color for
-  // that would read as a confident type it never assigned.
+  // here, not a type. An untyped burst (stored by the earlier models) keeps the
+  // lane's neutral color: inventing a color for it would read as a confident
+  // type the model never assigned.
   if (e.type === "radio_burst" && e.burst_type) return burstColor(e.burst_type);
   return lane;
 }

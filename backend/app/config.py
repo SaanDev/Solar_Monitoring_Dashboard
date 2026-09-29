@@ -47,9 +47,9 @@ class Settings(BaseSettings):
     # the first-run backlog and keeps alerting focused on recent activity).
     radio_burst_max_age_hours: int = 3
     # Minimum burst probability for a detection to contribute to an alert/event.
-    # 0 (default) = use the active model's own tuned decision threshold, which is
-    # per-model (CCM v1.0.0 = 0.595, CCM v1.1.0 = 0.51) and read from its
-    # checkpoint. Set a positive value only to deliberately gate *above* that.
+    # 0 (default) = use the model's own calibrated decision threshold (CCM v2.0:
+    # 0.798), read from its checkpoint. Set a positive value only to deliberately
+    # gate *above* that.
     radio_burst_alert_min_probability: float = 0.0
     # Corroboration filter for raising a burst ALERT: a 15-min window only becomes
     # a radio_burst event when at least this many distinct stations detected the
@@ -70,9 +70,10 @@ class Settings(BaseSettings):
     # (app/services/radio_backfill_service.py).
     radio_burst_backfill_enabled: bool = True
     # How far back the AUTOMATIC catch-up reaches, in days. A day of archive is
-    # ~5k segments (~30-40 min of scoring), so a cold start on a long gap is a
-    # long job — it is resumable and cancellable, and runs newest day first.
-    # Wider gaps can still be filled by hand from the Settings page.
+    # ~5k segments (about an hour of CPU scoring with CCM v2.0), so a cold start
+    # on a long gap — or a model change, which re-scores the window — is a long
+    # job. It is resumable and cancellable, and runs newest day first. Wider gaps
+    # can still be filled by hand from the Settings page.
     radio_burst_backfill_max_days: int = 30
     # How often to re-check for gaps (seconds). Cheap when there are none: days
     # already recorded as covered are skipped without touching the network.
@@ -81,27 +82,13 @@ class Settings(BaseSettings):
     # the live scan's: real-time alerting has priority over history.
     radio_burst_backfill_concurrency: int = 3
 
-    # Default binary model for the automatic scan (and the Burst Detector page's
-    # initial choice). Ids come from app/ml/registry.py: "ccm-1.0.0" | "ccm-1.1.0".
-    # Only a default: a model chosen on the Settings page is stored in the
-    # database and takes precedence (app/services/model_settings_service.py).
-    radio_burst_binary_model: str = "ccm-1.1.0"
-    # Second stage: classify the burst TYPE of every burst-positive file with
-    # CCMT. Runs on region crops (see app/ml/regions.py), never whole files.
-    radio_burst_classify_types: bool = True
-    radio_burst_type_model: str = "ccmt-1.0.0"
-    # Region proposals fed to the type model. Brightness in normalised [0,1]
-    # units where 0 = -1 dB and 1 = +8 dB above background; the effective
-    # threshold is capped adaptively per spectrum (see regions.resolve_threshold).
-    radio_burst_region_threshold: float = 0.35
-    radio_burst_region_min_area: int = 60
-    radio_burst_region_max: int = 8
-    # Smallest region worth typing, in pixels (frequency rows x time samples).
-    # Matches the smallest box CCMT was trained on, and drops e-CALLISTO's
-    # periodic narrow-band calibration marker, which otherwise fills every
-    # candidate slot. See app/ml/regions.py.
-    radio_burst_region_min_rows: int = 12
-    radio_burst_region_min_cols: int = 9
+    # Default model for the automatic scan (and the Burst Detector page's initial
+    # choice). Ids come from app/ml/registry.py; "ccm-2.0.0" is the only one. A
+    # model chosen on the Settings page is stored in the database and takes
+    # precedence (app/services/model_settings_service.py). Its region-finder
+    # settings and threshold come from the checkpoint, which was calibrated with
+    # them, so they are deliberately not configurable here.
+    radio_burst_model: str = "ccm-2.0.0"
 
     # Subdirectories are derived from data_dir (see properties below) so a single
     # DATA_DIR controls all file storage.
@@ -140,22 +127,16 @@ class Settings(BaseSettings):
     notify_max_per_pass: int = 8
     notify_lookback_hours: int = 48
 
-    # ── Native ML inference (burst classifiers) ───────────────────────────────
-    # Paths to the ResNet-18 checkpoints. Relative paths are resolved from the
-    # backend package root. They ship in the repo via Git LFS under
-    # backend/ml_model/, so a normal `git clone` + `git lfs pull` brings them
-    # down automatically — no manual download needed. See app/ml/registry.py for
-    # which id maps to which path.
-    ml_model_path: str = "ml_model/best.pt"            # CCM v1.0.0 (binary)
-    ml_ccm_v110_path: str = "ml_model/ccm_v1_1_0.pt"   # CCM v1.1.0 (binary)
-    ml_ccmt_v100_path: str = "ml_model/ccmt_v1_0_0.pt"  # CCMT v1.0.0 (burst type)
-    # Optional direct download URLs — only a fallback for environments without
-    # Git LFS (e.g. a GitHub "Download ZIP" that ships LFS pointer files).
-    # Set via ML_MODEL_URL / ML_CCM_V110_URL / ML_CCMT_V100_URL in .env; leave
-    # empty to rely on the LFS copies.
+    # ── Native ML inference (burst model) ─────────────────────────────────────
+    # Path to the CCM v2.0 checkpoint. A relative path is resolved from the
+    # backend package root. It ships in the repo via Git LFS under
+    # backend/ml_model/, so a normal `git clone` + `git lfs pull` brings it down
+    # automatically — no manual download needed.
+    ml_model_path: str = "ml_model/ccm_v2_0.pt"
+    # Optional direct download URL — only a fallback for environments without
+    # Git LFS (e.g. a GitHub "Download ZIP" that ships LFS pointer files). Leave
+    # empty to rely on the LFS copy.
     ml_model_url: str = ""
-    ml_ccm_v110_url: str = ""
-    ml_ccmt_v100_url: str = ""
     # When True and a checkpoint is missing AND its URL is set, download on startup.
     ml_model_auto_download: bool = True
     # Device for torch inference: "auto" (CUDA > MPS > CPU), "cpu", "cuda", "mps".

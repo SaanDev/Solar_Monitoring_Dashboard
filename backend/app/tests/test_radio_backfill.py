@@ -24,6 +24,8 @@ from app.services import radio_backfill_service as bf
 
 # Enough stations, confident enough, to clear the corroboration filter.
 _STATIONS = ["SRI-Lanka", "HUMAIN", "GLASGOW", "BIR"]
+# The active model, which the coverage ledger is kept per.
+_MODEL = "ccm-2.0.0"
 _GAP_DAY = datetime(2026, 6, 15, tzinfo=timezone.utc).date()
 
 
@@ -61,17 +63,17 @@ def _mock_archive(monkeypatch, files: list[FitsFile]) -> None:
 def _mock_inference(monkeypatch, probability: float = 0.95, scored=None):
     """Score every file as a burst; record which filenames were actually sent."""
 
-    async def _predict_url(url, filename=None, *, model_id=None, classify_types=None):
+    async def _predict_url(url, filename=None, *, model_id=None):
         if scored is not None:
             scored.append(filename)
         return {
             "burst_probability": probability,
             "predicted_label": "Burst",
             "alert_level": "High-confidence burst",
-            "model_id": model_id or "ccm-1.1.0",
+            "model_id": model_id or _MODEL,
             "burst_type": "Type III",
             "type_confidence": 0.8,
-            "type_model_id": "ccmt-1.0.0",
+            "type_model_id": model_id or _MODEL,
         }
 
     import app.services.burst_inference_client as client_mod
@@ -92,6 +94,7 @@ async def test_plan_skips_completed_days_but_never_today(db_session):
             state=STATE_DONE,
             archive_files=10,
             covered_files=10,
+            model_id=_MODEL,
         )
 
     days = await bf.plan_days(db_session, first, today)
@@ -104,12 +107,25 @@ async def test_plan_skips_completed_days_but_never_today(db_session):
 async def test_plan_includes_gaps_newest_first(db_session):
     today = datetime.now(timezone.utc).date()
     first = today - timedelta(days=3)
-    await upsert_day(db_session, today - timedelta(days=1), state=STATE_DONE)
-    await upsert_day(db_session, today - timedelta(days=2), state=STATE_PARTIAL)
+    await upsert_day(db_session, today - timedelta(days=1), state=STATE_DONE, model_id=_MODEL)
+    await upsert_day(db_session, today - timedelta(days=2), state=STATE_PARTIAL, model_id=_MODEL)
 
     days = await bf.plan_days(db_session, first, today)
 
     assert days == [today, today - timedelta(days=2), today - timedelta(days=3)]
+
+
+async def test_plan_reopens_days_finished_by_another_model(db_session):
+    """A model change re-scores history, so no day is a patchwork of models."""
+    today = datetime.now(timezone.utc).date()
+    await upsert_day(db_session, today - timedelta(days=1), state=STATE_DONE, model_id=_MODEL)
+    await upsert_day(
+        db_session, today - timedelta(days=2), state=STATE_DONE, model_id="ccm-1.1.0"
+    )
+
+    days = await bf.plan_days(db_session, today - timedelta(days=2), today)
+
+    assert days == [today, today - timedelta(days=2)]
 
 
 async def test_force_replans_even_completed_days(db_session):
@@ -153,30 +169,50 @@ async def test_process_day_fills_gap_and_builds_events(db_session, monkeypatch):
     assert row["events"] == 2
 
 
+def _stored_rows(files: list[FitsFile], model_id: str) -> list[dict]:
+    return [
+        {
+            "filename": f.filename, "station": f.station, "start_time": f.start,
+            "end_time": f.start + timedelta(minutes=15), "focus": f.focus,
+            "probability": 0.91, "predicted_label": "Burst",
+            "alert_level": "High-confidence burst", "model_id": model_id,
+        }
+        for f in files
+    ]
+
+
 async def test_already_scored_files_are_not_rescored(db_session, monkeypatch):
     files = _day_files(_GAP_DAY)
-    # Half the day was scored before the dashboard went down - by an older model.
-    await upsert_detections(
-        db_session,
-        [
-            {
-                "filename": f.filename, "station": f.station, "start_time": f.start,
-                "end_time": f.start + timedelta(minutes=15), "focus": f.focus,
-                "probability": 0.91, "predicted_label": "Burst",
-                "alert_level": "High-confidence burst", "model_id": "ccm-1.0.0",
-            }
-            for f in files[: len(_STATIONS)]
-        ],
-    )
+    # Half the day was scored by the active model before the dashboard went down.
+    await upsert_detections(db_session, _stored_rows(files[: len(_STATIONS)], _MODEL))
     scored: list[str] = []
     _mock_archive(monkeypatch, files)
     _mock_inference(monkeypatch, scored=scored)
 
     row = await bf.process_day(db_session, _GAP_DAY)
 
-    # A day covered by *any* model counts as covered, so only the rest is scored.
     assert sorted(scored) == sorted(f.filename for f in files[len(_STATIONS):])
     assert row["covered_files"] == len(files)
+
+
+async def test_files_scored_by_a_retired_model_are_rescored(db_session, monkeypatch):
+    files = _day_files(_GAP_DAY)
+    await upsert_detections(db_session, _stored_rows(files[: len(_STATIONS)], "ccm-1.0.0"))
+    scored: list[str] = []
+    _mock_archive(monkeypatch, files)
+    _mock_inference(monkeypatch, scored=scored)
+
+    row = await bf.process_day(db_session, _GAP_DAY)
+
+    # Coverage is per model, so the old model's files count as missing.
+    assert sorted(scored) == sorted(f.filename for f in files)
+    assert row["covered_files"] == len(files)
+    stored = await detections_for_range(
+        db_session,
+        datetime.combine(_GAP_DAY, time.min, tzinfo=timezone.utc),
+        datetime.combine(_GAP_DAY, time.min, tzinfo=timezone.utc) + timedelta(days=1),
+    )
+    assert {d["model_id"] for d in stored} == {_MODEL}  # replaced in place
 
 
 async def test_force_rescores_covered_files(db_session, monkeypatch):
@@ -314,7 +350,7 @@ async def test_unscorable_files_leave_the_day_open_for_retry(db_session, monkeyp
     files = _day_files(_GAP_DAY)
     _mock_archive(monkeypatch, files)
 
-    async def _failing(url, filename=None, *, model_id=None, classify_types=None):
+    async def _failing(url, filename=None, *, model_id=None):
         return None  # download or inference failed
 
     import app.services.burst_inference_client as client_mod
@@ -333,20 +369,26 @@ async def test_status_endpoint_reports_coverage(client, db_session):
     today = datetime.now(timezone.utc).date()
     await upsert_day(
         db_session, today - timedelta(days=1), state=STATE_DONE,
-        archive_files=4800, covered_files=4800, events=3,
+        archive_files=4800, covered_files=4800, events=3, model_id=_MODEL,
+    )
+    await upsert_day(
+        db_session, today - timedelta(days=2), state=STATE_DONE,
+        archive_files=4800, covered_files=4800, events=5, model_id="ccm-1.1.0",
     )
 
-    res = await client.get("/api/radio/backfill?days=3")
+    res = await client.get("/api/radio/backfill?days=4")
 
     assert res.status_code == 200
     body = res.json()
     assert body["auto_window_days"] == settings.radio_burst_backfill_max_days
     assert body["live_window_hours"] == settings.radio_burst_max_age_hours
     assert [d["day"] for d in body["coverage"]] == [
-        (today - timedelta(days=n)).isoformat() for n in (2, 1, 0)
+        (today - timedelta(days=n)).isoformat() for n in (3, 2, 1, 0)
     ]
-    yesterday = body["coverage"][1]
+    yesterday = body["coverage"][2]
     assert yesterday["state"] == "done" and yesterday["events"] == 3
+    # Finished by a retired model: covered, but queued to be re-scored.
+    assert body["coverage"][1]["state"] == "stale"
     assert body["coverage"][0]["state"] == "unknown"  # never inspected
 
 

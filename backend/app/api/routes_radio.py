@@ -25,7 +25,7 @@ from app.schemas.radio_schema import (
     BurstPredictionJob,
     BurstPredictionResult,
     BurstScorecardResponse,
-    BinaryModelSelection,
+    ModelSelection,
     ModelsResponse,
     OfficialBurstRangeResponse,
     BackfillDayCoverage,
@@ -151,7 +151,7 @@ async def burst_detections(
 
 @router.get("/models", response_model=ModelsResponse)
 async def list_models() -> ModelsResponse:
-    """The burst classifiers this backend can run, for the model selector.
+    """The burst models this backend can run, for the model selector.
 
     ``available`` reflects whether each checkpoint is actually on disk (and not
     an unpulled Git LFS pointer), so the UI can disable a model up front rather
@@ -165,17 +165,18 @@ async def list_models() -> ModelsResponse:
 
 @router.put("/models/default", response_model=ModelsResponse)
 async def select_default_model(
-    payload: BinaryModelSelection, db: AsyncSession = Depends(get_db)
+    payload: ModelSelection, db: AsyncSession = Depends(get_db)
 ) -> ModelsResponse:
-    """Choose the binary classifier the **automatic** burst scan runs.
+    """Choose the model the **automatic** burst scan runs.
 
     Persisted, so it survives a restart, and applied immediately: the next
     scheduled pass re-scores the recent window with the new model (detections are
-    deduped per model) and rebuilds the burst events from it. The Burst Detector
-    page's per-run picker is unaffected — this only moves its default.
+    deduped per model), the backfill re-scores older days, and the burst events
+    are rebuilt from them. The Burst Detector page's per-run picker is unaffected
+    — this only moves its default.
     """
     try:
-        return await model_settings.select_binary_model(db, payload.model_id)
+        return await model_settings.select_model(db, payload.model_id)
     except registry.UnknownModelError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except model_settings.ModelUnavailableError as exc:
@@ -258,9 +259,7 @@ async def start_prediction(req: BurstPredictionRequest) -> BurstPredictionJob:
         raise HTTPException(status_code=400, detail="date is in the future")
     stations = [s for s in (req.stations or []) if s]
     try:
-        job_id = predictor.start_prediction(
-            day, stations, req.raw, model_id=req.model, classify_types=req.classify_types
-        )
+        job_id = predictor.start_prediction(day, stations, req.raw, model_id=req.model)
     except registry.UnknownModelError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     job = predictor.get_job(job_id)
@@ -269,7 +268,7 @@ async def start_prediction(req: BurstPredictionRequest) -> BurstPredictionJob:
             k: job[k]
             for k in (
                 "job_id", "status", "scanned", "total", "date", "stations",
-                "model_id", "classify_types", "error",
+                "model_id", "error",
             )
         }
     )
@@ -339,7 +338,6 @@ async def prediction_status(
                 job["stations"],
                 effective_raw,
                 model_id=job.get("model_id"),
-                classify_types=job.get("classify_types"),
             )
         )
     return BurstPredictionJob(
@@ -350,7 +348,6 @@ async def prediction_status(
         date=job["date"],
         stations=job["stations"],
         model_id=job.get("model_id", ""),
-        classify_types=bool(job.get("classify_types", False)),
         error=job["error"],
         result=result,
     )

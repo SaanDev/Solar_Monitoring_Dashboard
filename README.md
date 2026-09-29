@@ -29,9 +29,9 @@ A web-based dashboard for monitoring and analyzing space-weather parameters, wit
 - Python 3.11+
 - Node.js 20+
 - Docker + Docker Compose
-- [Git LFS](https://git-lfs.com) — the radio-burst ML checkpoint (~128 MB) is
+- [Git LFS](https://git-lfs.com) — the radio-burst ML checkpoint (~43 MB) is
   stored in the repo via LFS. Install it **before** cloning (or run
-  `git lfs install && git lfs pull` after) so `backend/ml_model/best.pt` is
+  `git lfs install && git lfs pull` after) so `backend/ml_model/ccm_v2_0.pt` is
   fetched as the real file rather than a pointer.
 
 ### 1. Environment
@@ -67,20 +67,22 @@ Open [http://localhost:3000](http://localhost:3000).
 docker compose up postgres redis
 ```
 
-### 5. Radio-burst ML models (native inference)
+### 5. Radio-burst ML model (native inference)
 
-The solar radio-burst classifiers (ResNet-18) run **natively inside the backend**
-— no separate microservice. Three checkpoints ship in the repo via Git LFS under
-`backend/ml_model/`:
+The solar radio-burst model runs **natively inside the backend** — no separate
+microservice. One checkpoint ships in the repo via Git LFS:
 
 | Model | File | Task | Notes |
 |---|---|---|---|
-| **CCM v1.0.0** | `best.pt` | burst / no-burst | The original classifier. Threshold 0.595. Unchanged — kept selectable so past results stay comparable. |
-| **CCM v1.1.0** | `ccm_v1_1_0.pt` | burst / no-burst | Retrained. Threshold 0.51, validation F1 0.920, test F1 0.932. **Default.** |
-| **CCMT v1.0.0** | `ccmt_v1_0_0.pt` | burst type | 3-class (Type II / Type III / Other), validation accuracy 0.966, macro-F1 0.889. Runs only on segments a CCM model flagged as a burst. |
+| **CCM v2.0** | `backend/ml_model/ccm_v2_0.pt` | burst detection **and** type | Unified region model: No_Burst / RFI / Type II / Type III / Type IIIG / Other. Calibrated threshold 0.798 (≈5% of quiet files flagged, ≈66% of burst files found on validation); validation region accuracy 0.968, macro-F1 0.839. |
+
+It replaced CCM v1.0.0 / v1.1.0 (binary burst / no-burst) and CCMT v1.0.0 (burst
+type). The exported bundle it came from — model card, training config and a
+standalone `predict.py` — is kept alongside in `backend/ml_model/ccm_v2_0/`
+(its full-size weights are git-ignored).
 
 ```bash
-# One-time per machine, then fetch the checkpoints:
+# One-time per machine, then fetch the checkpoint:
 git lfs install
 git lfs pull
 
@@ -89,17 +91,26 @@ cd backend
 pip install -e ".[ml]"
 ```
 
-Which model the *automatic* scan uses is chosen from the dashboard's **Settings**
-page (Automatic Burst Detection) — stored in the database, applied to the running
-scanner, and preserved across restarts. `RADIO_BURST_BINARY_MODEL` /
-`RADIO_BURST_CLASSIFY_TYPES` remain the defaults until something is chosen there.
-The Burst Detector page still lets you pick per run. `GET /api/radio/models` lists
-what is available and `PUT /api/radio/models/default` sets the scan's model;
-`app/ml/registry.py` is the single source of truth for model ids and paths.
+The model works on regions, as it was trained: each segment is normalized as a
+whole, bright candidate regions are located, and every region is scored from
+three 224×224 views (the region, a wide full-band strip around it, and that strip
+on a quiet-part background) plus 28 measured drift and interference features. A
+region is a burst when its burst evidence — one minus P(No_Burst) minus P(RFI) —
+reaches the calibrated threshold; a segment is a burst when any region is, and
+takes the type of its largest burst region. **Type IIIG (a group of Type III
+bursts) is reported as Type III**: the two probabilities are added before the
+type is chosen. The region finder's settings, the threshold and the
+type-frequency correction all come from the checkpoint, which was calibrated with
+them. The port in `backend/app/ml/` reproduces the CALLISTO Trainer's
+`CascadePredictor` bit for bit (`app/tests/test_ml_unified.py` pins golden values).
 
-Switching models is safe: detections are deduped *per model*, so the next scan
-re-scores the recent window with the new classifier and rebuilds the burst events
-from it, each model gating alerts on its own tuned threshold.
+`GET /api/radio/models` lists what is available and `PUT /api/radio/models/default`
+sets the scan's model (Settings → Automatic Burst Detection, stored in the
+database); `RADIO_BURST_MODEL` is the default until something is chosen there, and
+`app/ml/registry.py` is the single source of truth for model ids and paths.
+Detections are deduped *per model*, so after a model change the next scan
+re-scores the recent window, and stored rows from a retired model keep being
+judged by that model's own threshold until they are re-scored.
 
 The scan only looks at the last `RADIO_BURST_MAX_AGE_HOURS`, so downtime would
 otherwise leave permanent holes in the burst timeline and the correlation
@@ -107,24 +118,21 @@ histograms. An **offline catch-up** closes them: it compares the archive listing
 against what has been scored and fills in the missing days, automatically (the
 last `RADIO_BURST_BACKFILL_MAX_DAYS`, re-checked hourly) or on demand from
 Settings → Detection Coverage, which also shows per-day coverage and lets a run
-be aimed at an older range. Runs are resumable and cancellable, a day covered by
-*any* model counts as covered, and filled-in events never send notifications —
-see [`app/services/radio_backfill_service.py`](backend/app/services/radio_backfill_service.py).
-
-CCMT is a *classifier*, not a detector: it was trained on hand-drawn crops around
-individual bursts, so the cascade finds bright connected regions inside a
-burst-positive segment, crops each, and classifies the crops. Regions smaller
-than CCMT's training distribution are discarded rather than guessed at, so a
-burst may legitimately come back untyped. Treat types as estimates.
+be aimed at an older range. Runs are resumable and cancellable, and filled-in
+events never send notifications. Coverage is kept *per model*, so a model change
+re-scores the whole automatic window with the new model, newest day first — about
+an hour of CPU per archive day with CCM v2.0 — see
+[`app/services/radio_backfill_service.py`](backend/app/services/radio_backfill_service.py).
 
 On Apple Silicon Macs, PyTorch automatically uses the MPS backend. Models are
 loaded once at startup; a missing checkpoint or missing PyTorch is non-fatal —
-that model is simply unavailable and logged.
+the model is simply unavailable and logged.
 
 **Adding a retrained checkpoint.** Trainer `best.pt` files carry optimizer state
 (~128 MB). `scripts/repack_model.py` strips it down to `{model_state, config}`
-(~43 MB), which is all the loader reads, and prints the architecture, threshold
-and class map so the right run can be confirmed before committing:
+(~43 MB), which is all the loader reads, and prints the architecture, views,
+feature set, calibrated threshold and class map so the right run can be confirmed
+before committing (run it with a Python that has torch, e.g. the Trainer's venv):
 
 ```bash
 python scripts/repack_model.py --all

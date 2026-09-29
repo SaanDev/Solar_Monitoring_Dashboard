@@ -464,31 +464,30 @@ export interface BurstCandidate {
   status: "pending" | "accepted" | "rejected";
 }
 
-// ─── Burst classifier registry (selectable models) ───────────────────────────
+// ─── Burst model registry (selectable models) ────────────────────────────────
 
 export interface ModelInfo {
-  id: string; // "ccm-1.1.0"
-  name: string; // "CCM v1.1.0"
+  id: string; // "ccm-2.0.0"
+  name: string; // "CCM v2.0"
   full_name: string;
-  kind: "binary" | "type";
+  /** "unified": detects bursts and types them in one pass. */
+  kind: "unified";
   version: string;
   description: string;
   /** False when the checkpoint is missing or an unpulled Git LFS pointer. */
   available: boolean;
-  threshold: number | null; // binary models only
-  classes: string[];
+  threshold: number | null; // calibrated burst threshold
+  classes: string[]; // burst types it reports
   metrics: Record<string, number>;
   is_default: boolean;
 }
 
 export interface ModelsResponse {
   models: ModelInfo[];
-  default_binary: string;
+  default_model: string;
   /** "selected" = chosen on the Settings page and stored server-side;
-   * "config" = still following the backend's RADIO_BURST_BINARY_MODEL. */
-  default_binary_source: "selected" | "config";
-  type_model: string | null;
-  classify_types: boolean;
+   * "config" = still following the backend's RADIO_BURST_MODEL. */
+  default_model_source: "selected" | "config";
 }
 
 // ─── Offline catch-up (backfill of missed archive days) ──────────────────────
@@ -497,9 +496,10 @@ export interface ModelsResponse {
 export interface BackfillDayCoverage {
   day: string; // YYYY-MM-DD
   /** "unknown" = never inspected; "partial" = segments still missing;
-   * "done" = fully scored; today is always partial (its last hours belong to
-   * the live scanner). */
-  state: "unknown" | "pending" | "running" | "partial" | "done" | "error";
+   * "done" = fully scored; "stale" = scored by an earlier model, queued to be
+   * re-scored; today is always partial (its last hours belong to the live
+   * scanner). */
+  state: "unknown" | "pending" | "running" | "partial" | "done" | "stale" | "error";
   archive_files: number;
   covered_files: number;
   events: number;
@@ -561,7 +561,7 @@ export interface PredictedDetection {
   time: string; // HH:MM:SS UTC
   probability: number;
   alert_level: string;
-  /** Null when typing was off or nothing in-distribution was found to classify. */
+  /** Type of the segment's largest burst region. */
   burst_type: string | null;
   type_confidence: number | null;
   regions: TypedRegion[];
@@ -604,10 +604,8 @@ export interface BurstPredictionResult {
   official_events: OfficialBurstCompare[];
   official_count: number;
   matched_count: number;
-  model_id: string; // binary classifier that scored these rows
+  model_id: string; // model that scored these rows
   model_name: string;
-  classify_types: boolean;
-  type_model_id: string | null;
   type_counts: Record<string, number>; // burst files per type
 }
 
@@ -619,7 +617,6 @@ export interface BurstPredictionJob {
   date: string;
   stations: string[];
   model_id: string;
-  classify_types: boolean;
   error: string | null;
   result: BurstPredictionResult | null;
 }
@@ -742,8 +739,8 @@ export interface SpaceWeatherEvent {
   description: string;
   /** Observing stations for station-based events (radio bursts); empty otherwise. */
   stations: string[];
-  /** Radio bursts only: "Type II" | "Type III" | "Other" from the burst-type
-   * classifier. Null when typing was off or nothing was classifiable. */
+  /** Radio bursts only: "Type II" | "Type III" | "Other" from the burst model.
+   * Null for bursts stored without a type by the earlier models. */
   burst_type?: string | null;
   related_event_ids: string[];
   source_url: string | null;

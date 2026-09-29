@@ -1,33 +1,28 @@
-"""Download a burst-classifier checkpoint from a URL (Git LFS fallback).
+"""Download the burst-model checkpoint from a URL (Git LFS fallback).
 
-The checkpoints normally ship in the repo via Git LFS under backend/ml_model/ —
-a clone with Git LFS installed already has them (`git lfs pull`). This script is
-a fallback for environments WITHOUT Git LFS (e.g. a "Download ZIP" that ships
-only LFS pointer files).
+The checkpoint normally ships in the repo via Git LFS under backend/ml_model/ —
+a clone with Git LFS installed already has it (`git lfs pull`). This script is a
+fallback for environments WITHOUT Git LFS (e.g. a "Download ZIP" that ships only
+LFS pointer files).
 
-Three models ship: CCM v1.0.0 and v1.1.0 (binary burst / no-burst) and
-CCMT v1.0.0 (burst type). Each has its own destination filename and its own
-URL environment variable.
+One model ships: CCM v2.0 (burst detection and typing), saved as
+backend/ml_model/ccm_v2_0.pt.
 
 Usage
 -----
 From the repo root:
 
-    python scripts/download_model.py                      # CCM v1.0.0
-    python scripts/download_model.py --model ccm-1.1.0
-    python scripts/download_model.py --model ccmt-1.0.0
+    python scripts/download_model.py
 
 Or with an explicit URL / destination:
 
     python scripts/download_model.py \\
-        --url https://example.com/best.pt \\
-        --dest backend/ml_model/best.pt
+        --url https://example.com/ccm_v2_0.pt \\
+        --dest backend/ml_model/ccm_v2_0.pt
 
-Environment variables (set in backend/.env; read when --url is omitted)
-----------------------------------------------------------------------
-ML_MODEL_URL        CCM v1.0.0  (backend/ml_model/best.pt)
-ML_CCM_V110_URL     CCM v1.1.0  (backend/ml_model/ccm_v1_1_0.pt)
-ML_CCMT_V100_URL    CCMT v1.0.0 (backend/ml_model/ccmt_v1_0_0.pt)
+Environment variable (set in backend/.env; read when --url is omitted)
+---------------------------------------------------------------------
+ML_MODEL_URL        CCM v2.0  (backend/ml_model/ccm_v2_0.pt)
 
 The script works standalone: it does NOT import from the backend package so it
 can run before dependencies are installed (it only needs stdlib).
@@ -44,15 +39,12 @@ from pathlib import Path
 # ── Defaults ──────────────────────────────────────────────────────────────────
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _ML_DIR = _REPO_ROOT / "backend" / "ml_model"
-_DEFAULT_DEST = _ML_DIR / "best.pt"
 _ENV_FILE = _REPO_ROOT / "backend" / ".env"
 
 # model id -> (destination filename, URL environment variable). Mirrors the
 # registry in backend/app/ml/registry.py; keep the two in step.
 _KNOWN: dict[str, tuple[str, str]] = {
-    "ccm-1.0.0": ("best.pt", "ML_MODEL_URL"),
-    "ccm-1.1.0": ("ccm_v1_1_0.pt", "ML_CCM_V110_URL"),
-    "ccmt-1.0.0": ("ccmt_v1_0_0.pt", "ML_CCMT_V100_URL"),
+    "ccm-2.0.0": ("ccm_v2_0.pt", "ML_MODEL_URL"),
 }
 
 
@@ -116,8 +108,8 @@ def main() -> None:
     parser.add_argument(
         "--model",
         choices=sorted(_KNOWN),
-        default="ccm-1.0.0",
-        help="Which model to fetch (default: ccm-1.0.0)",
+        default="ccm-2.0.0",
+        help="Which model to fetch (default: ccm-2.0.0)",
     )
     parser.add_argument("--url", default="", help="Direct download URL for the checkpoint")
     parser.add_argument(

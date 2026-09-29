@@ -57,8 +57,8 @@ async def test_assemble_result_filters_and_matches(monkeypatch):
     rows = [
         _row("SRI-Lanka", 2, 0, 0.97, "Burst", "High-confidence burst"),
         _row("HUMAIN", 2, 2, 0.93, "Burst", "High-confidence burst"),
-        _row("GLASGOW", 2, 4, 0.70, "Burst", "Likely burst"),
-        _row("BIR", 2, 6, 0.65, "Burst", "Likely burst"),
+        _row("GLASGOW", 2, 4, 0.85, "Burst", "Likely burst"),
+        _row("BIR", 2, 6, 0.82, "Burst", "Likely burst"),
         _row("INDIA-OOTY", 9, 30, 0.96, "Burst", "High-confidence burst"),  # lone -> filtered
         _row("ALASKA", 3, 0, 0.04, "No_Burst", "No alert"),
     ]
@@ -78,7 +78,7 @@ async def test_assemble_result_filters_and_matches(monkeypatch):
     result = await bps.assemble_result(rows, _D)
 
     assert result["total_files"] == 6
-    assert result["burst_count"] == 5          # five Burst-labelled (>= 0.595)
+    assert result["burst_count"] == 5          # five Burst-labelled (>= the 0.80 threshold)
     assert result["event_count"] == 1          # only the corroborated 02:00 cluster
 
     ev = result["events"][0]
@@ -160,8 +160,8 @@ async def test_match_uses_full_segment_window(monkeypatch):
     rows = [
         _row("A", 9, 30, 0.95, "Burst", "High-confidence burst"),
         _row("B", 9, 30, 0.93, "Burst", "High-confidence burst"),
-        _row("C", 9, 30, 0.70, "Burst", "Likely burst"),
-        _row("D", 9, 30, 0.65, "Burst", "Likely burst"),
+        _row("C", 9, 30, 0.85, "Burst", "Likely burst"),
+        _row("D", 9, 30, 0.82, "Burst", "Likely burst"),
     ]
 
     async def _official(day):

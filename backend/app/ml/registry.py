@@ -1,24 +1,20 @@
-"""Registry of the burst-classification models the dashboard can run.
+"""Registry of the burst models the dashboard can run.
 
-Three checkpoints ship, all ResNet-18 based and all trained in the CALLISTO
-Trainer project:
+One model ships: **CCM v2.0**, a unified region model trained in the CALLISTO
+Trainer. It detects *and* types bursts in one pass: candidate regions are located
+in the spectrum and each is classified as background, interference (RFI) or a
+burst type. The model's own classes split Type III into single bursts (Type III)
+and groups (Type IIIG); the dashboard reports both as **Type III**.
 
-* **CCM v1.0.0** — the original binary burst / no-burst classifier. Kept
-  byte-for-byte as it was: same checkpoint, same threshold, same header-derived
-  frequency metadata, so results stay comparable with everything already stored.
-* **CCM v1.1.0** — the newer binary classifier (val F1 0.920, test F1 0.932).
-  Same architecture, so it loads through the same builder; a lower tuned
-  threshold (0.51) and ``AXES``-table frequency metadata, which is what it was
-  actually trained on.
-* **CCMT v1.0.0** — burst *type* classifier: 3-class softmax over
-  ``Type II / Type III / Other``. Image-only (no metadata branch) and trained on
-  hand-drawn crops around single bursts, so it runs as a **second stage** on
-  region crops of files a binary model already called ``Burst`` — never on a
-  whole file, and never as a detector of its own.
+It replaced the earlier CCM v1.0.0 / v1.1.0 binary classifiers and the separate
+CCMT v1.0.0 type model. Their ids live on only in :data:`RETIRED_MODELS`, because
+detections they stored stay in the database until the backfill re-scores them,
+and each such row must still be judged by the threshold of the model that made
+it.
 
 This module owns model *identity* (ids, names, paths, thresholds, published
 metrics) and which model is currently active — the Settings-page selection,
-applied through :func:`set_binary_selection` and persisted by
+applied through :func:`set_model_selection` and persisted by
 :mod:`app.services.model_settings_service`. Loading and scoring live in
 :mod:`app.ml.inference`.
 """
@@ -28,13 +24,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-ModelKind = Literal["binary", "type"]
-# Where a model's freq_min / freq_max metadata features come from:
-#   "header" — CRVAL2/CDELT2 from the primary header (what the dashboard has
-#              always done; keeps CCM v1.0.0 unchanged).
-#   "axes"   — the FITS AXES bintable's FREQUENCY column, which is what the
-#              training pipeline used, falling back to the header when absent.
-FreqSource = Literal["header", "axes"]
+# "unified": one model that both detects and types bursts, over regions.
+ModelKind = Literal["unified"]
 
 
 class UnknownModelError(ValueError):
@@ -52,9 +43,8 @@ class ModelSpec:
     # Attribute on ``Settings`` holding an optional direct download URL.
     url_setting: str
     description: str
-    freq_source: FreqSource = "header"
-    # Fallback classes, in label order. The authoritative map is read from the
-    # checkpoint's ``data.classes``; this is only used if it is missing.
+    # The burst types the dashboard reports (after folding Type IIIG into
+    # Type III). The model's own class list is read from its checkpoint.
     classes: tuple[str, ...] = ()
     # Published evaluation numbers, surfaced in the UI so the choice is informed.
     metrics: dict[str, Any] = field(default_factory=dict)
@@ -64,82 +54,50 @@ class ModelSpec:
         return self.id.rsplit("-", 1)[-1]
 
 
-CCM_V100 = ModelSpec(
-    id="ccm-1.0.0",
-    name="CCM v1.0.0",
-    full_name="CALLISTO Classifier Model v1.0.0",
-    kind="binary",
+CCM_V200 = ModelSpec(
+    id="ccm-2.0.0",
+    name="CCM v2.0",
+    full_name="CALLISTO Classifier Model v2.0",
+    kind="unified",
     path_setting="ml_model_path",
     url_setting="ml_model_url",
     description=(
-        "Original binary burst / no-burst classifier. ResNet-18 with a "
-        "station/frequency/date metadata branch, tuned threshold 0.595."
+        "Unified burst detector and type classifier. Finds bright regions, then "
+        "one ResNet-18 over three views of each (crop, wide context, quiet "
+        "background) plus 28 measured drift and interference features calls it "
+        "background, RFI or a burst type. Its threshold is calibrated to flag at "
+        "most 5% of quiet files."
     ),
-    freq_source="header",
-    classes=("No_Burst", "Burst"),
-    metrics={"threshold": 0.595},
-)
-
-CCM_V110 = ModelSpec(
-    id="ccm-1.1.0",
-    name="CCM v1.1.0",
-    full_name="CALLISTO Classifier Model v1.1.0",
-    kind="binary",
-    path_setting="ml_ccm_v110_path",
-    url_setting="ml_ccm_v110_url",
-    description=(
-        "Retrained binary burst / no-burst classifier. Same architecture as "
-        "v1.0.0 with a lower tuned threshold (0.51) and frequency features read "
-        "from the FITS AXES table, matching how it was trained."
-    ),
-    freq_source="axes",
-    classes=("No_Burst", "Burst"),
-    metrics={
-        "threshold": 0.51,
-        "val_f1": 0.9197,
-        "val_accuracy": 0.9433,
-        "val_roc_auc": 0.9840,
-        "test_f1": 0.9315,
-        "test_accuracy": 0.9485,
-        "test_roc_auc": 0.9910,
-    },
-)
-
-CCMT_V100 = ModelSpec(
-    id="ccmt-1.0.0",
-    name="CCMT v1.0.0",
-    full_name="CALLISTO Classifier Model by Types v1.0.0",
-    kind="type",
-    path_setting="ml_ccmt_v100_path",
-    url_setting="ml_ccmt_v100_url",
-    description=(
-        "Burst-type classifier (Type II / Type III / Other). Image-only "
-        "ResNet-18 trained on crops around single bursts, so it runs on bright "
-        "region proposals inside files a binary model already flagged as a "
-        "burst. It has no background class and is not a detector."
-    ),
-    freq_source="axes",
     classes=("Type II", "Type III", "Other"),
     metrics={
-        "val_accuracy": 0.9655,
-        "val_macro_f1": 0.8888,
-        "val_f1_type_ii": 0.9286,
-        "val_f1_type_iii": 0.9877,
-        "val_f1_other": 0.75,
+        # Calibrated on the validation files for a <=5% false-alarm rate; the
+        # loader reads the same value from the checkpoint and warns on mismatch.
+        "threshold": 0.7975836745463312,
+        # Region-level, validation split.
+        "val_accuracy": 0.9679,
+        "val_macro_f1": 0.8390,
+        "val_detection_auc": 0.9997,
+        # File-level at the calibrated threshold, validation files.
+        "val_false_alarm_rate": 0.0470,
+        "val_burst_recall": 0.6565,
     },
 )
 
-_SPECS: dict[str, ModelSpec] = {
-    spec.id: spec for spec in (CCM_V100, CCM_V110, CCMT_V100)
+_SPECS: dict[str, ModelSpec] = {spec.id: spec for spec in (CCM_V200,)}
+
+# Models that used to ship: id -> (name, decision threshold). Kept so detections
+# they stored are still gated and labelled correctly until re-scored.
+RETIRED_MODELS: dict[str, tuple[str, float]] = {
+    "ccm-1.0.0": ("CCM v1.0.0", 0.595),
+    "ccm-1.1.0": ("CCM v1.1.0", 0.51),
 }
 
 
 # ── Lookup ────────────────────────────────────────────────────────────────────
 
 
-def list_specs(kind: ModelKind | None = None) -> list[ModelSpec]:
-    specs = list(_SPECS.values())
-    return [s for s in specs if kind is None or s.kind == kind]
+def list_specs() -> list[ModelSpec]:
+    return list(_SPECS.values())
 
 
 def get_spec(model_id: str) -> ModelSpec:
@@ -150,96 +108,74 @@ def get_spec(model_id: str) -> ModelSpec:
         raise UnknownModelError(f"unknown model '{model_id}' (known: {known})") from None
 
 
+def model_display_name(model_id: str | None) -> str:
+    """A model's name for display, including a retired model's; the id otherwise."""
+    if not model_id:
+        return ""
+    if model_id in _SPECS:
+        return _SPECS[model_id].name
+    if model_id in RETIRED_MODELS:
+        return RETIRED_MODELS[model_id][0]
+    return model_id
+
+
 # ── Selected model (Settings page) ────────────────────────────────────────────
 
-# The binary model chosen from the dashboard's Settings page, applied for the
-# life of this process. It is persisted in ``app_settings`` and re-applied on
-# startup (see app/services/model_settings_service.py); holding it here as a
-# process-global is what keeps ``resolve_binary`` synchronous, so the scheduler,
+# The model chosen from the dashboard's Settings page, applied for the life of
+# this process. It is persisted in ``app_settings`` and re-applied on startup
+# (see app/services/model_settings_service.py); holding it here as a
+# process-global is what keeps ``resolve_model`` synchronous, so the scheduler,
 # the inference layer and request handlers all read the same choice without any
 # of them needing a DB session. Single-process deployment assumed — the backend
 # runs one uvicorn worker with the scheduler in it.
-_binary_selection: str | None = None
+_selection: str | None = None
 
 
-def set_binary_selection(model_id: str | None) -> ModelSpec | None:
+def set_model_selection(model_id: str | None) -> ModelSpec | None:
     """Point every default-model lookup at ``model_id`` until it changes again.
 
-    Validates before applying — an unknown or non-binary id raises rather than
-    silently degrading, because unlike a stale env var this comes from a user
-    action that deserves an error message. ``None`` or ``""`` clears the
-    selection, falling back to ``RADIO_BURST_BINARY_MODEL``.
+    Validates before applying — an unknown id raises rather than silently
+    degrading, because unlike a stale env var this comes from a user action that
+    deserves an error message. ``None`` or ``""`` clears the selection, falling
+    back to ``RADIO_BURST_MODEL``.
     """
-    global _binary_selection
+    global _selection
 
     cleaned = (model_id or "").strip()
     if not cleaned:
-        _binary_selection = None
+        _selection = None
         return None
-
     spec = get_spec(cleaned)
-    if spec.kind != "binary":
-        raise UnknownModelError(f"'{cleaned}' is not a binary model")
-    _binary_selection = spec.id
+    _selection = spec.id
     return spec
 
 
-def binary_selection() -> str | None:
-    """The selected binary model id, or None when following configuration."""
-    return _binary_selection
+def model_selection() -> str | None:
+    """The selected model id, or None when following configuration."""
+    return _selection
 
 
-def resolve_binary(model_id: str | None = None) -> ModelSpec:
-    """The binary model to use: an explicit id, else the selected/configured one.
+def resolve_model(model_id: str | None = None) -> ModelSpec:
+    """The model to use: an explicit id, else the selected/configured one.
 
     Precedence is explicit argument > Settings-page selection > env default.
 
-    A configured default that is somehow invalid falls back to CCM v1.0.0 rather
-    than breaking every scan — a typo in ``RADIO_BURST_BINARY_MODEL`` should
-    degrade to the shipped model, not disable burst detection.
+    A configured default that is somehow invalid (a typo, or a retired model's
+    id left in an old .env) falls back to CCM v2.0 rather than breaking every
+    scan.
     """
     if model_id:
-        spec = get_spec(model_id)
-        if spec.kind != "binary":
-            raise UnknownModelError(f"'{model_id}' is not a binary model")
-        return spec
-
-    if _binary_selection:
-        # Validated in set_binary_selection, so this cannot raise in practice.
-        return get_spec(_binary_selection)
+        return get_spec(model_id)
+    if _selection:
+        # Validated in set_model_selection, so this cannot raise in practice.
+        return get_spec(_selection)
 
     from app.config import settings
 
-    configured = (settings.radio_burst_binary_model or "").strip()
     try:
-        spec = get_spec(configured)
+        return get_spec((settings.radio_burst_model or "").strip())
     except UnknownModelError:
-        return CCM_V100
-    return spec if spec.kind == "binary" else CCM_V100
-
-
-def resolve_type(model_id: str | None = None) -> ModelSpec:
-    """The type model to use: an explicit id, else the configured default."""
-    if model_id:
-        spec = get_spec(model_id)
-        if spec.kind != "type":
-            raise UnknownModelError(f"'{model_id}' is not a burst-type model")
-        return spec
-
-    from app.config import settings
-
-    configured = (settings.radio_burst_type_model or "").strip()
-    try:
-        spec = get_spec(configured)
-    except UnknownModelError:
-        return CCMT_V100
-    return spec if spec.kind == "type" else CCMT_V100
-
-
-def classify_types_default() -> bool:
-    from app.config import settings
-
-    return bool(settings.radio_burst_classify_types)
+        return CCM_V200
 
 
 # ── Checkpoint location ───────────────────────────────────────────────────────
@@ -280,11 +216,8 @@ def is_available(spec: ModelSpec) -> bool:
 def alert_min_probability(spec: ModelSpec) -> float:
     """Minimum probability for a detection to contribute to an alert/event.
 
-    Each binary model has its own tuned decision threshold, so a single global
-    figure cannot serve both: 0.595 (CCM v1.0.0's) would silently drop every
-    CCM v1.1.0 detection between 0.51 and 0.595. So the model's own threshold is
-    the default, and ``RADIO_BURST_ALERT_MIN_PROBABILITY`` becomes an explicit
-    override for gating *above* it.
+    The model's own calibrated threshold, unless
+    ``RADIO_BURST_ALERT_MIN_PROBABILITY`` explicitly overrides it to gate higher.
     """
     from app.config import settings
     from app.ml.inference import model_threshold
@@ -293,3 +226,22 @@ def alert_min_probability(spec: ModelSpec) -> float:
     if override > 0:
         return override
     return model_threshold(spec)
+
+
+def alert_min_probability_for(model_id: str | None) -> float:
+    """:func:`alert_min_probability` for whichever model stored a detection row.
+
+    A retired model's rows are gated by that model's own threshold — one
+    threshold for every row would drop, say, CCM v1.1.0's detections between its
+    0.51 and CCM v2.0's 0.80. An empty or unknown id means the active model.
+    """
+    if model_id in RETIRED_MODELS:
+        from app.config import settings
+
+        override = float(settings.radio_burst_alert_min_probability or 0.0)
+        return override if override > 0 else RETIRED_MODELS[model_id][1]
+    try:
+        spec = get_spec(model_id) if model_id else resolve_model()
+    except UnknownModelError:
+        spec = resolve_model()
+    return alert_min_probability(spec)

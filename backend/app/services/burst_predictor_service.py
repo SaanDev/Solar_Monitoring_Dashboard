@@ -7,11 +7,9 @@ detections into time events (the same single-linkage ``cluster_events`` grouping
 10-min gap), and compares those predicted events against the published
 e-CALLISTO burst list for that day.
 
-Unlike the automatic scan, which is pinned to one configured model, a run here
-names its own: ``model_id`` selects the binary classifier and ``classify_types``
-toggles the burst-type stage. Both are fixed per job because they change the
-scores; the ``raw`` event-selection mode is not, so it can be toggled on an
-existing result without re-scoring.
+A run names the model it scores with (``model_id``; the active one by default),
+fixed for the job because it changes the scores. The ``raw`` event-selection
+mode is not, so it can be toggled on an existing result without re-scoring.
 
 This is a self-contained, ephemeral tool: scoring runs as a background job whose
 results live **in memory** on the job record — it needs neither the database nor
@@ -30,11 +28,9 @@ from uuid import uuid4
 from app.collectors.collect_ecallisto import FitsFile, list_day_files
 from app.config import settings
 from app.ml.registry import (
-    UnknownModelError,
-    alert_min_probability,
-    classify_types_default,
-    resolve_binary,
-    resolve_type,
+    alert_min_probability_for,
+    model_display_name,
+    resolve_model,
 )
 from app.services.burst_inference_client import predict_url
 from app.services.ecallisto_service import get_burst_events_for_date
@@ -127,7 +123,6 @@ def _row_for(file: FitsFile, record: dict) -> dict:
         "model_id": record.get("model_id", ""),
         "burst_type": record.get("burst_type"),
         "type_confidence": record.get("type_confidence"),
-        "type_model_id": record.get("type_model_id"),
         "type_regions": record.get("type_regions") or [],
     }
 
@@ -163,7 +158,6 @@ def start_prediction(
     stations: list[str],
     raw: bool = False,
     model_id: str | None = None,
-    classify_types: bool | None = None,
 ) -> str:
     """Create a prediction job and kick off scoring in the background.
 
@@ -171,11 +165,10 @@ def start_prediction(
     :func:`assemble_result`). It only affects result assembly, not scoring — the
     same scored rows can be re-assembled in either mode without re-scoring.
 
-    ``model_id`` and ``classify_types`` are fixed for the job's lifetime, since
-    they *do* affect scoring: changing either means a new run.
+    ``model_id`` is fixed for the job's lifetime, since it *does* affect scoring:
+    changing it means a new run.
     """
-    spec = resolve_binary(model_id)
-    wants_types = classify_types_default() if classify_types is None else bool(classify_types)
+    spec = resolve_model(model_id)
     job_id = uuid4().hex
     _JOBS[job_id] = {
         "job_id": job_id,
@@ -186,7 +179,6 @@ def start_prediction(
         "stations": stations,
         "raw": raw,
         "model_id": spec.id,
-        "classify_types": wants_types,
         "error": None,
         "rows": [],
         "finished_at": None,
@@ -204,16 +196,10 @@ async def _score_files(files: list[FitsFile], job: dict) -> list[dict]:
     """Score files concurrently (bounded), updating job progress as each finishes."""
     sem = asyncio.Semaphore(max(1, settings.radio_burst_concurrency))
     model_id = job.get("model_id")
-    classify_types = job.get("classify_types")
 
     async def _one(f: FitsFile) -> dict | None:
         async with sem:
-            record = await predict_url(
-                f.url,
-                filename=f.filename,
-                model_id=model_id,
-                classify_types=classify_types,
-            )
+            record = await predict_url(f.url, filename=f.filename, model_id=model_id)
         job["scanned"] += 1
         return _row_for(f, record) if record is not None else None
 
@@ -327,7 +313,6 @@ async def assemble_result(
     stations: list[str] | None = None,
     raw: bool = False,
     model_id: str | None = None,
-    classify_types: bool | None = None,
 ) -> dict:
     """Build the prediction result from the scored rows + the official burst list.
 
@@ -349,41 +334,31 @@ async def assemble_result(
     from the rows themselves (stored real-time detections carry it) — it matters
     because the criteria-mode probability minimum is per-model.
     """
-    def _spec_for(candidate: str | None):
-        """Resolve a model id, tolerating one written by a since-retired model."""
-        try:
-            return resolve_binary(candidate)
-        except UnknownModelError:
-            return resolve_binary()
-
     if model_id:
         # A job states which model scored its rows; that is authoritative.
-        spec = _spec_for(model_id)
-        per_row_gate = False
+        day_model = model_id
     else:
-        # A day of *stored* detections can span two models, because switching the
-        # configured scan model only re-scores the recent window. Attribute the day
-        # to whichever model produced most rows, but gate each row by its own —
-        # one threshold for the whole day would drop the other model's detections.
+        # A day of *stored* detections can span models: a model change reaches
+        # older days only as the backfill re-scores them. Attribute the day to
+        # whichever model produced most rows.
         counts: dict[str, int] = {}
         for r in rows:
             if r.get("model_id"):
                 counts[r["model_id"]] = counts.get(r["model_id"], 0) + 1
-        spec = _spec_for(max(counts, key=counts.get) if counts else None)
-        per_row_gate = len(counts) > 1
+        day_model = max(counts, key=counts.get) if counts else resolve_model().id
 
     # Raw mode takes the model's own Burst decision as-is (its decision threshold
     # already gated the label); criteria mode additionally enforces the alert
-    # probability minimum, which is the model's threshold unless overridden.
-    default_min_prob = 0.0 if raw else alert_min_probability(spec)
+    # probability minimum of the model that scored each row — one threshold for
+    # a mixed day would drop the other model's detections.
     _min_prob_cache: dict[str, float] = {}
 
     def _min_prob_for(row: dict) -> float:
-        if raw or not per_row_gate:
-            return default_min_prob
-        row_model = row.get("model_id") or spec.id
+        if raw:
+            return 0.0
+        row_model = row.get("model_id") or day_model
         if row_model not in _min_prob_cache:
-            _min_prob_cache[row_model] = alert_min_probability(_spec_for(row_model))
+            _min_prob_cache[row_model] = alert_min_probability_for(row_model)
         return _min_prob_cache[row_model]
 
     bursts = [
@@ -432,12 +407,6 @@ async def assemble_result(
     for b in bursts:
         if b.get("burst_type"):
             type_counts[b["burst_type"]] = type_counts.get(b["burst_type"], 0) + 1
-    typed = next((r for r in rows if r.get("type_model_id")), None)
-    if classify_types is None:
-        classify_types = typed is not None
-    type_model_id = typed.get("type_model_id") if typed else (
-        resolve_type().id if classify_types else None
-    )
 
     return {
         "date": day.isoformat(),
@@ -450,9 +419,7 @@ async def assemble_result(
         "official_events": official,
         "official_count": len(official),
         "matched_count": matched_predicted,
-        "model_id": spec.id,
-        "model_name": spec.name,
-        "classify_types": bool(classify_types),
-        "type_model_id": type_model_id,
+        "model_id": day_model,
+        "model_name": model_display_name(day_model),
         "type_counts": type_counts,
     }

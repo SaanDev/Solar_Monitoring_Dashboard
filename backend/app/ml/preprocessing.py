@@ -1,40 +1,107 @@
-"""Preprocess raw e-CALLISTO FITS spectra into model input tensors.
+"""Read e-CALLISTO FITS spectra and build CCM v2.0's image inputs.
 
-Ported from the Burst Identifier project (src/preprocessing/) with the
-training/batch-processing code removed — only the inference path is kept.
+Ported from the CALLISTO Trainer (``core/fits_reader.py``, ``core/preprocess.py``,
+``core/crops.py`` and ``core/coords.py``). The model only means anything on input
+prepared exactly the way its training samples were, so every numeric step here
+mirrors its original; change one and the model still answers, confidently and
+wrongly.
 
 Pipeline per file:
-  1. Read 2D [frequency, time] spectrum + metadata from the .fit.gz FITS file.
-  2. Replace NaN/Inf with the finite median.
-  3. Background subtraction (row-median, then Plotutil dB scale).
-  4. Normalise into [0, 1] using a fixed dB window [-1, 8].
-  5. Resize to the model's target shape (224×224).
-  6. Return [1, H, W] float32 numpy array + metadata dict.
+  1. Read the 2D [frequency, time] spectrum, its physical axes and the station's
+     flagged RFI channels. The axes come from the ``AXES`` bintable when the file
+     has one and are synthesized from the header otherwise — the header's
+     CRVAL2/CDELT2 are placeholders on this archive, but training synthesized
+     them the same way, so the model's physics features expect it.
+  2. Normalize the **whole** file: NaN/Inf -> finite median, per-channel median
+     background in Plotutil dB, then the [-1, 8] dB window mapped to [0, 1].
+  3. The same with each channel's *quiet* background (its 10th percentile), so a
+     continuum lasting most of the file stays visible.
+  4. Per candidate region, three 224x224 views: the exact crop, a wide context
+     strip (full band, extended in time) and that strip of the quiet array.
 
-Steps 2-4 are split out as :func:`normalize_full_spectrum` because the burst-type
-model (CCMT) is fed *crops*: background subtraction must run over the whole
-file's time axis **before** slicing, otherwise a burst becomes its own baseline
-and is erased. :func:`crop_from_normalized` then slices and resizes.
+Background subtraction must run over the whole file's time axis before any crop
+is taken: cropped first, a burst that fills its crop becomes its own baseline
+and is erased.
 
 All numeric steps are pure NumPy — identical results on every machine.
 """
 from __future__ import annotations
 
-import math
 import shutil
 import tempfile
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 
-# ── Raw digit → dB conversion (Plotutil Digit2Voltage / 25.4) ────────────────
+# ── Raw digit -> dB conversion (Plotutil Digit2Voltage / 25.4) ────────────────
 
 PLOTUTIL_DB_SCALE = 2500.0 / 255.0 / 25.4
 PLOTUTIL_DISPLAY_LIMITS = (-1.0, 8.0)
+_PLOTUTIL_METHODS = {"plotutil_median_db", "plotutil", "plotutil_median", "ecallisto_db"}
+
+# Each channel's background for the quiet-background view: this percentile of
+# its samples over the file, i.e. its quietest tenth.
+QUIET_PERCENTILE = 10.0
+
+VIEW_CROP = "crop"
+VIEW_CONTEXT = "context"
+VIEW_QUIET_CONTEXT = "quiet_context"
+VIEWS = (VIEW_CROP, VIEW_CONTEXT, VIEW_QUIET_CONTEXT)
+
+
+# ─── Physical axes ────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class SpectrumAxes:
+    """Physical axes of one dynamic spectrum, in array row/column order.
+
+    ``time_s[j]`` is column ``j``'s offset in seconds from the first sample and
+    ``freq_mhz[i]`` row ``i``'s frequency — normally *descending*, since row 0 is
+    the first FITS row. ``source`` is ``"axes_table"`` when the frequencies are
+    real, ``"header"`` when synthesized from the unreliable header keywords.
+    """
+
+    time_s: np.ndarray
+    freq_mhz: np.ndarray
+    source: str = "none"
+
+    @property
+    def n_time(self) -> int:
+        return int(self.time_s.size)
+
+    @property
+    def n_freq(self) -> int:
+        return int(self.freq_mhz.size)
+
+
+def box_to_physical(
+    axes: SpectrumAxes, row0: int, row1: int, col0: int, col1: int
+) -> dict[str, float]:
+    """A half-open pixel box's bounds in MHz and seconds (``lo``/``hi`` ordered)."""
+
+    def at(values: np.ndarray, index: int) -> float:
+        if values.size == 0:
+            return float("nan")
+        return float(np.interp(index, np.arange(values.size, dtype=np.float64), values))
+
+    freq_a = at(axes.freq_mhz, max(0, int(row0)))
+    freq_b = at(axes.freq_mhz, max(0, int(row1) - 1))
+    time_a = at(axes.time_s, max(0, int(col0)))
+    time_b = at(axes.time_s, max(0, int(col1) - 1))
+    return {
+        "freq_lo_mhz": min(freq_a, freq_b),
+        "freq_hi_mhz": max(freq_a, freq_b),
+        "t_start_s": min(time_a, time_b),
+        "t_end_s": max(time_a, time_b),
+    }
 
 
 # ─── FITS reading ─────────────────────────────────────────────────────────────
+
 
 def _import_fits():
     try:
@@ -55,13 +122,14 @@ def _clean_header_string(value: Any) -> str | None:
 
 
 def _format_date_token(token: str | None) -> str | None:
+    """``YYYYMMDD`` / ``YYYY-MM-DD`` / ``YYYY/MM/DD`` (as DATE-OBS writes it)."""
     if token is None:
         return None
     token = token.strip()
     if len(token) == 8 and token.isdigit():
         return f"{token[0:4]}-{token[4:6]}-{token[6:8]}"
-    if len(token) >= 10 and token[4] == "-" and token[7] == "-":
-        return token[:10]
+    if len(token) >= 10 and token[4] in "-/" and token[7] in "-/":
+        return token[:10].replace("/", "-")
     return None
 
 
@@ -96,115 +164,130 @@ def parse_filename_fallback(path: str | Path) -> dict[str, Any]:
     return meta
 
 
-def _compute_frequency_bounds(
-    header: Any, n_freq: int | None = None
-) -> tuple[float | None, float | None]:
+def _axis_table_candidates(hdul: Any) -> list[Any]:
+    """Extensions holding TIME and FREQUENCY columns, one named AXES first.
+
+    Located by structure, not by name: much of the archive writes the identical
+    table with no EXTNAME at all.
+    """
+    named, unnamed = [], []
+    for hdu in hdul[1:]:
+        if not hasattr(hdu, "columns"):
+            continue
+        try:
+            columns = {name.strip().upper() for name in hdu.columns.names}
+        except Exception:
+            continue
+        if not {"TIME", "FREQUENCY"} <= columns:
+            continue
+        if str(getattr(hdu, "name", "") or "").strip().upper() == "AXES":
+            named.append(hdu)
+        else:
+            unnamed.append(hdu)
+    return named + unnamed
+
+
+def read_axes(
+    hdul: Any, n_freq: int | None = None, n_time: int | None = None
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """``(time_seconds, frequency_mhz)`` from the file's axis table, or Nones.
+
+    A table whose lengths disagree with the image is skipped rather than trusted.
+    Time is returned as an offset from the first sample, since some writers store
+    the absolute second-of-day.
+    """
+    for hdu in _axis_table_candidates(hdul):
+        try:
+            table = hdu.data
+            if table is None:
+                continue
+            time_s = np.asarray(table["TIME"], dtype=np.float64).ravel()
+            freq_mhz = np.asarray(table["FREQUENCY"], dtype=np.float64).ravel()
+        except Exception:
+            continue
+        if time_s.size == 0 or freq_mhz.size == 0:
+            continue
+        if not np.isfinite(time_s).all() or not np.isfinite(freq_mhz).all():
+            continue
+        if n_time is not None and time_s.size != int(n_time):
+            continue
+        if n_freq is not None and freq_mhz.size != int(n_freq):
+            continue
+        return time_s - float(time_s[0]), freq_mhz
+    return None, None
+
+
+def read_rfi_channels(hdul: Any) -> np.ndarray | None:
+    """The station's flagged interference frequencies (MHz), from ``RFI_FREQ``."""
+    names = {str(getattr(hdu, "name", "") or "").strip().upper() for hdu in hdul}
+    if "RFI_FREQ" not in names:
+        return None
+    try:
+        table = hdul["RFI_FREQ"].data
+        if table is None or len(table.columns.names) == 0:
+            return None
+        values = np.asarray(table[table.columns.names[0]], dtype=np.float64).ravel()
+    except Exception:
+        return None
+    values = values[np.isfinite(values)]
+    return values if values.size else None
+
+
+def _cadence_from_header(header: Any) -> float | None:
+    try:
+        cadence = float(header.get("CDELT1"))
+    except (TypeError, ValueError):
+        return None
+    return cadence if cadence > 0 else None
+
+
+def synthesize_axes(header: Any, n_freq: int, n_time: int) -> tuple[np.ndarray, np.ndarray]:
+    """Approximate axes from the header, for files without an AXES table.
+
+    CRVAL2/CDELT2 are placeholders on this archive (usually a channel index), so
+    the frequencies are not real MHz — but this is exactly how training built
+    them, and the model's physics features are scaled accordingly.
+    """
+    cadence = _cadence_from_header(header) or 1.0
+    time_s = np.arange(int(n_time), dtype=np.float64) * cadence
     try:
         crval = float(header.get("CRVAL2"))
         cdelt = float(header.get("CDELT2"))
     except (TypeError, ValueError):
-        return None, None
-    if n_freq is None:
-        try:
-            n_freq = int(header.get("NAXIS2"))
-        except (TypeError, ValueError):
-            return None, None
-    if n_freq <= 0:
-        return None, None
-    first = crval
-    last = crval + (n_freq - 1) * cdelt
-    return float(min(first, last)), float(max(first, last))
+        crval, cdelt = float(n_freq), -1.0
+    freq_mhz = crval + np.arange(int(n_freq), dtype=np.float64) * cdelt
+    return time_s, freq_mhz
 
 
-def _column_array(table: Any, name: str) -> np.ndarray | None:
-    """A FITS bintable column as a flat float array, or None.
-
-    e-CALLISTO ``AXES`` tables store each axis as one row holding an array cell,
-    so the raw column comes back shaped (1, N); ravel handles both that and the
-    plain (N,) layout.
-    """
-    try:
-        column = table.data[name]
-    except (KeyError, TypeError, AttributeError):
-        return None
-    try:
-        values = np.asarray(column, dtype=np.float64).ravel()
-    except (TypeError, ValueError):
-        return None
-    return values if values.size else None
-
-
-def _find_axes_frequencies(
-    hdul: Any, n_freq: int | None, n_time: int | None
-) -> np.ndarray | None:
-    """The FREQUENCY axis from an ``AXES``-style bintable, if one is present.
-
-    Located by structure rather than by name — the extension carries both TIME
-    and FREQUENCY columns whose lengths match the image axes — with an extension
-    literally named AXES preferred. This is the axis the training pipeline used
-    (``freq_axis_source == "axes_table"`` on every training row); the
-    CRVAL2/CDELT2 header fallback is known to be wrong on many stations.
-    """
-    if not n_freq:
-        return None
-    candidates = list(hdul[1:])
-    candidates.sort(key=lambda h: 0 if str(getattr(h, "name", "")).upper() == "AXES" else 1)
-    for hdu in candidates:
-        freqs = _column_array(hdu, "FREQUENCY")
-        if freqs is None or freqs.size != n_freq:
-            continue
-        times = _column_array(hdu, "TIME")
-        if times is None or (n_time and times.size != n_time):
-            continue
-        return freqs
-    return None
-
-
-def _extract_metadata(
-    path: str | Path, hdul: Any, freq_source: str = "header"
-) -> dict[str, Any]:
+def _extract_metadata(path: str | Path, hdul: Any) -> dict[str, Any]:
     fallback = parse_filename_fallback(path)
     header = hdul[0].header
     data = hdul[0].data
     shape = tuple(data.shape) if data is not None else ()
-    n_freq = int(shape[-2]) if len(shape) >= 2 else None
-    n_time = int(shape[-1]) if len(shape) >= 2 else None
+    n_freq = int(shape[-2]) if len(shape) >= 2 else 0
+    n_time = int(shape[-1]) if len(shape) >= 2 else 0
 
-    freq_axis: np.ndarray | None = None
-    freq_min = freq_max = None
-    if freq_source == "axes":
-        freq_axis = _find_axes_frequencies(hdul, n_freq, n_time)
-        if freq_axis is not None:
-            freq_min = float(np.min(freq_axis))
-            freq_max = float(np.max(freq_axis))
-    if freq_min is None:
-        freq_min, freq_max = _compute_frequency_bounds(header, n_freq=n_freq)
+    time_s, freq_mhz = read_axes(hdul, n_freq=n_freq, n_time=n_time)
+    source = "axes_table"
+    if time_s is None or freq_mhz is None:
+        time_s, freq_mhz = synthesize_axes(header, n_freq, n_time)
+        source = "header"
 
     header_date = _format_date_token(_clean_header_string(header.get("DATE-OBS")))
     header_time = _format_time_token(_clean_header_string(header.get("TIME-OBS")))
-    station = _clean_header_string(header.get("INSTRUME")) or fallback["station"]
-
     return {
-        "station": station,
+        "station": _clean_header_string(header.get("INSTRUME")) or fallback["station"],
         "date": header_date or fallback["date"],
         "start_time": header_time or fallback["start_time"],
-        "freq_min_mhz": freq_min,
-        "freq_max_mhz": freq_max,
         "n_freq": n_freq,
         "n_time": n_time,
-        # Per-row frequencies when available (row 0 is normally the HIGHEST
-        # frequency — the FREQUENCY column is stored descending). Used to label
-        # burst-type region proposals in MHz; None falls back to interpolating
-        # between freq_min/freq_max.
-        "freq_axis": freq_axis,
-        "freq_axis_source": "axes_table" if freq_axis is not None else "header",
+        "axes": SpectrumAxes(time_s=time_s, freq_mhz=freq_mhz, source=source),
+        "rfi_channels_mhz": read_rfi_channels(hdul),
     }
 
 
-def read_fits_spectrum(
-    path: str | Path, freq_source: str = "header"
-) -> tuple[np.ndarray, dict[str, Any]]:
-    """Return (spectrum [freq, time] float32, metadata dict)."""
+def read_fits_spectrum(path: str | Path) -> tuple[np.ndarray, dict[str, Any]]:
+    """Return (spectrum [freq, time] float32, metadata incl. ``axes``)."""
     fits = _import_fits()
     with fits.open(path, memmap=False) as hdul:
         data = hdul[0].data
@@ -212,14 +295,37 @@ def read_fits_spectrum(
             raise ValueError(f"No primary HDU image data in {path}")
         spectrum = np.squeeze(np.asarray(data, dtype=np.float32))
         if spectrum.ndim != 2:
-            raise ValueError(
-                f"Expected a 2D spectrum in {path}, got shape {spectrum.shape}"
-            )
-        metadata = _extract_metadata(path, hdul, freq_source=freq_source)
+            raise ValueError(f"Expected a 2D spectrum in {path}, got shape {spectrum.shape}")
+        metadata = _extract_metadata(path, hdul)
     return spectrum, metadata
 
 
-# ─── Spectrum processing ───────────────────────────────────────────────────────
+@contextmanager
+def _with_real_filename(content: bytes, filename: str) -> Iterator[Path]:
+    """Write bytes to a temp dir under their real filename.
+
+    Station, date and time fall back to the e-CALLISTO filename
+    ``STATION_YYYYMMDD_HHMMSS_NN.fit.gz`` when the header lacks them, so a random
+    temp name would lose them.
+    """
+    safe = Path(filename).name or "remote.fit.gz"
+    tmpdir = Path(tempfile.mkdtemp(prefix="swd_ml_"))
+    try:
+        path = tmpdir / safe
+        path.write_bytes(content)
+        yield path
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def read_spectrum_bytes(content: bytes, filename: str) -> tuple[np.ndarray, dict[str, Any]]:
+    """Raw FITS bytes -> (spectrum [freq, time], metadata incl. ``axes``)."""
+    with _with_real_filename(content, filename) as path:
+        return read_fits_spectrum(path)
+
+
+# ─── Normalization (whole file) ───────────────────────────────────────────────
+
 
 def clean_invalid_values(spectrum: np.ndarray) -> np.ndarray:
     data = np.asarray(spectrum, dtype=np.float32)
@@ -231,6 +337,7 @@ def clean_invalid_values(spectrum: np.ndarray) -> np.ndarray:
 
 
 def plotutil_median_db(spectrum: np.ndarray) -> np.ndarray:
+    """Per-channel median over time subtracted, then scaled to Plotutil dB."""
     data = np.asarray(spectrum, dtype=np.float32)
     baseline = np.median(data, axis=1, keepdims=True)
     centered = (data - baseline).astype(np.float32)
@@ -238,15 +345,54 @@ def plotutil_median_db(spectrum: np.ndarray) -> np.ndarray:
 
 
 def db_window_normalize(
-    spectrum: np.ndarray,
-    vmin: float = -1.0,
-    vmax: float = 8.0,
+    spectrum: np.ndarray, vmin: float = -1.0, vmax: float = 8.0
 ) -> np.ndarray:
     data = np.asarray(spectrum, dtype=np.float32)
     span = float(vmax) - float(vmin)
     if span <= 0:
         raise ValueError(f"db_window needs vmax > vmin, got [{vmin}, {vmax}]")
     return np.clip((data - float(vmin)) / span, 0.0, 1.0).astype(np.float32)
+
+
+def _check_preprocessing(prep: dict[str, Any]) -> tuple[float, float]:
+    """The dB window, after confirming the checkpoint uses the supported steps."""
+    method = str(prep.get("background_method") or "").strip().lower().replace("-", "_")
+    if method not in _PLOTUTIL_METHODS:
+        raise ValueError(f"unsupported background_method {method!r}")
+    normalization = str(prep.get("normalization", "db_window")).lower()
+    if normalization != "db_window":
+        raise ValueError(f"unsupported normalization {normalization!r}")
+    return (
+        float(prep.get("db_vmin", PLOTUTIL_DISPLAY_LIMITS[0])),
+        float(prep.get("db_vmax", PLOTUTIL_DISPLAY_LIMITS[1])),
+    )
+
+
+def normalize_full_spectrum(spectrum: np.ndarray, prep: dict[str, Any]) -> np.ndarray:
+    """clean -> background -> normalize on the **whole** file, without resizing."""
+    vmin, vmax = _check_preprocessing(prep)
+    data = plotutil_median_db(clean_invalid_values(spectrum))
+    return db_window_normalize(data, vmin=vmin, vmax=vmax)
+
+
+def quiet_normalized_spectrum(
+    spectrum: np.ndarray, prep: dict[str, Any], percentile: float = QUIET_PERCENTILE
+) -> np.ndarray:
+    """The whole file with each channel's background taken from its quiet part.
+
+    Identical to :func:`normalize_full_spectrum` except for the baseline — the
+    ``percentile``-th sample of each channel instead of its median — so emission
+    lasting most of the recording (a Type IV continuum) stays above background.
+    """
+    vmin, vmax = _check_preprocessing(prep)
+    data = clean_invalid_values(spectrum)
+    baseline = np.percentile(data, float(percentile), axis=1, keepdims=True).astype(np.float32)
+    data = (data - baseline).astype(np.float32)
+    data = (data * np.float32(PLOTUTIL_DB_SCALE)).astype(np.float32)
+    return db_window_normalize(data, vmin=vmin, vmax=vmax)
+
+
+# ─── Resizing ─────────────────────────────────────────────────────────────────
 
 
 def _linear_resample_weights(
@@ -281,164 +427,161 @@ def resize_spectrum(spectrum: np.ndarray, target_shape: tuple[int, int] = (224, 
     data = np.asarray(spectrum, dtype=np.float32)
     if data.ndim != 2:
         raise ValueError(f"Expected 2D spectrum, got shape {data.shape}")
-    target_freq, target_time = int(target_shape[0]), int(target_shape[1])
-    data = _resize_axis(data, target_time, axis=1)
-    data = _resize_axis(data, target_freq, axis=0)
+    data = _resize_axis(data, int(target_shape[1]), axis=1)
+    data = _resize_axis(data, int(target_shape[0]), axis=0)
     return data.astype(np.float32)
 
 
-def target_shape_of(config: dict[str, Any]) -> tuple[int, int]:
-    shape = tuple(config["data"]["target_shape"])
-    return int(shape[0]), int(shape[1])
+def _max_pool_axis(data: np.ndarray, target: int, axis: int) -> np.ndarray:
+    """Block-max along ``axis`` down to no fewer than ``target`` samples."""
+    size = data.shape[axis]
+    factor = size // max(1, int(target))
+    if factor < 2:
+        return data
+    blocks = int(np.ceil(size / factor))
+    padding = blocks * factor - size
+    if padding:
+        widths = [(0, 0), (0, 0)]
+        widths[axis] = (0, padding)
+        data = np.pad(data, widths, mode="edge")
+    if axis == 1:
+        return data.reshape(data.shape[0], blocks, factor).max(axis=2)
+    return data.reshape(blocks, factor, data.shape[1]).max(axis=1)
 
 
-def normalize_full_spectrum(spectrum: np.ndarray, config: dict[str, Any]) -> np.ndarray:
-    """clean → background → normalize on the **whole** file, without resizing.
+def resize_keeping_peaks(patch: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
+    """Resize with a max-pool first, so one-sample interference spikes survive."""
+    data = np.asarray(patch, dtype=np.float32)
+    data = _max_pool_axis(data, int(target_shape[1]), axis=1)
+    data = _max_pool_axis(data, int(target_shape[0]), axis=0)
+    return resize_spectrum(data, target_shape=target_shape)
 
-    Kept separate from the resize so a crop can be taken afterwards: the
-    row-median baseline must be computed over the file's full time axis, or a
-    burst that fills its own crop would be subtracted away.
+
+# ─── Region views ─────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class PixelBox:
+    """A half-open box in spectrum pixels: rows ``[row0, row1)``, cols ``[col0, col1)``."""
+
+    row0: int
+    row1: int
+    col0: int
+    col1: int
+
+    def __post_init__(self) -> None:
+        if self.row1 <= self.row0 or self.col1 <= self.col0:
+            raise ValueError(
+                f"PixelBox must have positive extent, got rows [{self.row0}, {self.row1}) "
+                f"cols [{self.col0}, {self.col1})"
+            )
+
+    @property
+    def n_rows(self) -> int:
+        return self.row1 - self.row0
+
+    @property
+    def n_cols(self) -> int:
+        return self.col1 - self.col0
+
+
+@dataclass(frozen=True)
+class CropConfig:
+    """Crop geometry, from the checkpoint's ``crops`` section.
+
+    CCM v2.0 was trained with zero margin and no size floor, so a crop is exactly
+    the region; the fields exist so a checkpoint trained otherwise still crops
+    the way it was trained.
     """
-    prep = config["preprocessing"]
-    data = clean_invalid_values(spectrum)
-    data = plotutil_median_db(data)
-    return db_window_normalize(
-        data,
-        vmin=float(prep.get("db_vmin", PLOTUTIL_DISPLAY_LIMITS[0])),
-        vmax=float(prep.get("db_vmax", PLOTUTIL_DISPLAY_LIMITS[1])),
-    )
+
+    context_margin: float = 0.0
+    min_rows: int = 1
+    min_cols: int = 1
+    target_shape: tuple[int, int] = (224, 224)
+    # The context view extends a region by its own width on each side, and by at
+    # least this many samples (about a minute at the usual 0.25 s cadence).
+    context_min_pad_cols: int = 240
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> "CropConfig":
+        crops = config.get("crops", {}) or {}
+        target = crops.get("target_shape") or config["data"]["target_shape"]
+        return cls(
+            context_margin=float(crops.get("context_margin", 0.0)),
+            min_rows=int(crops.get("min_rows", 1)),
+            min_cols=int(crops.get("min_cols", 1)),
+            target_shape=(int(target[0]), int(target[1])),
+            context_min_pad_cols=int(crops.get("context_min_pad_cols", 240)),
+        )
 
 
-def expand_box(
-    box: tuple[int, int, int, int],
-    shape: tuple[int, int],
-    context_margin: float = 0.0,
-    min_rows: int = 1,
-    min_cols: int = 1,
-) -> tuple[int, int, int, int]:
-    """Grow a half-open pixel box by a fractional margin, clipped to ``shape``.
+def _grow_to_minimum(low: int, high: int, minimum: int, limit: int) -> tuple[int, int]:
+    target = min(int(minimum), limit)
+    deficit = target - (high - low)
+    if deficit <= 0:
+        return low, high
+    return low - deficit // 2, high + (deficit - deficit // 2)
 
-    Both trained runs use ``context_margin: 0.0``, so this is a no-op today; it
-    exists so a checkpoint retrained with a margin still crops the way it was
-    trained.
+
+def _clamp_span(low: int, high: int, limit: int) -> tuple[int, int]:
+    """Shift then clip ``[low, high)`` into ``[0, limit)``, keeping its width if possible."""
+    width = min(high - low, limit)
+    if low < 0:
+        low, high = 0, width
+    if high > limit:
+        high, low = limit, limit - width
+    return max(0, low), min(limit, max(high, low + 1))
+
+
+def expand_box(box: PixelBox, shape: tuple[int, ...], crop: CropConfig) -> PixelBox:
+    """Grow a box by the margin and up to the minimum size, clamped to bounds."""
+    n_freq, n_time = int(shape[0]), int(shape[1])
+    row_pad = int(round(box.n_rows * crop.context_margin))
+    col_pad = int(round(box.n_cols * crop.context_margin))
+    row0, row1 = _grow_to_minimum(box.row0 - row_pad, box.row1 + row_pad, crop.min_rows, n_freq)
+    col0, col1 = _grow_to_minimum(box.col0 - col_pad, box.col1 + col_pad, crop.min_cols, n_time)
+    row0, row1 = _clamp_span(row0, row1, n_freq)
+    col0, col1 = _clamp_span(col0, col1, n_time)
+    return PixelBox(row0, row1, col0, col1)
+
+
+def crop_view(normalized: np.ndarray, box: PixelBox, crop: CropConfig) -> np.ndarray:
+    """The region itself, resized to the model input as ``[H, W]``."""
+    effective = expand_box(box, normalized.shape, crop)
+    patch = normalized[effective.row0:effective.row1, effective.col0:effective.col1]
+    return resize_spectrum(patch, target_shape=crop.target_shape)
+
+
+def context_view(normalized: np.ndarray, box: PixelBox, crop: CropConfig) -> np.ndarray:
+    """The full band over the region's columns widened each side, as ``[H, W]``.
+
+    Where interference gives itself away: a carrier continues far beyond the box,
+    an impulse runs the full height of the band, periodic interference repeats.
     """
-    row0, row1, col0, col1 = (int(v) for v in box)
-    n_rows, n_cols = int(shape[0]), int(shape[1])
-    margin = float(context_margin)
-
-    if margin > 0:
-        pad_rows = int(round((row1 - row0) * margin))
-        pad_cols = int(round((col1 - col0) * margin))
-        row0, row1 = row0 - pad_rows, row1 + pad_rows
-        col0, col1 = col0 - pad_cols, col1 + pad_cols
-
-    row0, col0 = max(0, row0), max(0, col0)
-    row1, col1 = min(n_rows, row1), min(n_cols, col1)
-    # Guarantee the minimum extent even at an edge, by growing away from it.
-    if row1 - row0 < min_rows:
-        row1 = min(n_rows, row0 + min_rows)
-        row0 = max(0, row1 - min_rows)
-    if col1 - col0 < min_cols:
-        col1 = min(n_cols, col0 + min_cols)
-        col0 = max(0, col1 - min_cols)
-    return row0, row1, col0, col1
+    n_freq, n_time = normalized.shape
+    pad = max(box.n_cols, int(crop.context_min_pad_cols))
+    col0, col1 = _clamp_span(box.col0 - pad, box.col1 + pad, n_time)
+    return resize_keeping_peaks(normalized[0:n_freq, col0:col1], crop.target_shape)
 
 
-def crop_from_normalized(
+def region_views(
     normalized: np.ndarray,
-    box: tuple[int, int, int, int],
-    target_shape: tuple[int, int] = (224, 224),
-    context_margin: float = 0.0,
-    min_rows: int = 1,
-    min_cols: int = 1,
+    box: PixelBox,
+    crop: CropConfig,
+    views: tuple[str, ...],
+    quiet: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Slice an already-normalized spectrum and resize the patch to [1, H, W].
-
-    ``box`` is half-open ``(row0, row1, col0, col1)`` — rows are frequency
-    channels, columns time samples. ``normalized`` must be the output of
-    :func:`normalize_full_spectrum` for the whole file.
-    """
-    if normalized.ndim != 2:
-        raise ValueError(f"Expected a 2D normalized spectrum, got {normalized.shape}")
-    row0, row1, col0, col1 = expand_box(
-        box, normalized.shape, context_margin, min_rows, min_cols
-    )
-    if row1 <= row0 or col1 <= col0:
-        raise ValueError(f"Empty crop for box {box} in shape {normalized.shape}")
-    patch = normalized[row0:row1, col0:col1]
-    resized = resize_spectrum(patch, target_shape=target_shape)
-    return resized[np.newaxis, :, :].astype(np.float32)
-
-
-def whole_file_box(shape: tuple[int, int]) -> tuple[int, int, int, int]:
-    return 0, int(shape[0]), 0, int(shape[1])
-
-
-def preprocess_array(spectrum: np.ndarray, config: dict[str, Any]) -> np.ndarray:
-    """Full pipeline: clean → background → normalize → resize → [1, H, W]."""
-    data = normalize_full_spectrum(spectrum, config)
-    data = resize_spectrum(data, target_shape=target_shape_of(config))
-    return data[np.newaxis, :, :].astype(np.float32)
-
-
-def preprocess_file(
-    file_path: str | Path,
-    config: dict[str, Any],
-    freq_source: str = "header",
-) -> tuple[np.ndarray, dict[str, Any]]:
-    """Read a FITS file and return (tensor [1,H,W], metadata dict)."""
-    spectrum, metadata = read_fits_spectrum(file_path, freq_source=freq_source)
-    tensor = preprocess_array(spectrum, config)
-    return tensor, metadata
-
-
-def _with_real_filename(content: bytes, filename: str):
-    """Context helper: write bytes to a temp dir under their real filename.
-
-    The binary models are metadata-conditioned on station and date, which are
-    parsed from the e-CALLISTO filename ``STATION_YYYYMMDD_HHMMSS_NN.fit.gz``, so
-    a random tmp name would change the features. Returns a context manager
-    yielding the path.
-    """
-    from contextlib import contextmanager
-
-    @contextmanager
-    def _ctx():
-        safe = Path(filename).name or "remote.fit.gz"
-        tmpdir = Path(tempfile.mkdtemp(prefix="swd_ml_"))
-        try:
-            path = tmpdir / safe
-            path.write_bytes(content)
-            yield path
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-
-    return _ctx()
-
-
-def preprocess_bytes(
-    content: bytes,
-    filename: str,
-    config: dict[str, Any],
-    freq_source: str = "header",
-) -> tuple[np.ndarray, dict[str, Any]]:
-    """Preprocess raw FITS bytes preserving the real filename."""
-    with _with_real_filename(content, filename) as path:
-        return preprocess_file(path, config, freq_source=freq_source)
-
-
-def read_and_normalize_bytes(
-    content: bytes,
-    filename: str,
-    config: dict[str, Any],
-    freq_source: str = "header",
-) -> tuple[np.ndarray, dict[str, Any]]:
-    """Raw FITS bytes → (normalized full spectrum [freq, time], metadata).
-
-    The un-resized normalized array is what both stages of the burst cascade
-    need: the whole-file crop for the binary model and per-region crops for the
-    type model, from one read and one background pass.
-    """
-    with _with_real_filename(content, filename) as path:
-        spectrum, metadata = read_fits_spectrum(path, freq_source=freq_source)
-    return normalize_full_spectrum(spectrum, config), metadata
+    """Stack the model's views of one region into a ``[V, H, W]`` tensor."""
+    layers = []
+    for view in views:
+        if view == VIEW_CROP:
+            layers.append(crop_view(normalized, box, crop))
+        elif view == VIEW_CONTEXT:
+            layers.append(context_view(normalized, box, crop))
+        elif view == VIEW_QUIET_CONTEXT:
+            if quiet is None:
+                raise ValueError("the quiet_context view needs the quiet-background spectrum")
+            layers.append(context_view(quiet, box, crop))
+        else:
+            raise ValueError(f"Unknown view {view!r}; expected one of {VIEWS}")
+    return np.stack(layers).astype(np.float32)

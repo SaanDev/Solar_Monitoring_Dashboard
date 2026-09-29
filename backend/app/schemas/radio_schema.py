@@ -110,7 +110,7 @@ class RadioBurstDetectionResponse(BaseModel):
     probability: float
     predicted_label: str
     alert_level: str
-    model_id: str = ""                 # which classifier produced this verdict
+    model_id: str = ""                 # which model produced this verdict
     burst_type: str | None = None      # "Type II" | "Type III" | "Other"
     type_confidence: float | None = None
 
@@ -122,40 +122,38 @@ class RadioBurstDetectionsResponse(BaseModel):
     detections: list[RadioBurstDetectionResponse] = []
 
 
-# ── Model registry (which classifiers are available to run) ───────────────────
+# ── Model registry (which burst models are available to run) ──────────────────
 
 
 class ModelInfo(BaseModel):
-    """One selectable classifier, as advertised to the UI."""
-    id: str                            # "ccm-1.1.0"
-    name: str                          # "CCM v1.1.0"
+    """One selectable burst model, as advertised to the UI."""
+    id: str                            # "ccm-2.0.0"
+    name: str                          # "CCM v2.0"
     full_name: str
-    kind: str                          # "binary" (burst / no-burst) | "type"
+    kind: str                          # "unified" (detects and types bursts)
     version: str
     description: str
     # False when the checkpoint is missing or still a Git LFS pointer — the UI
     # greys the option out instead of letting a run fail mid-scan.
     available: bool = True
-    threshold: float | None = None     # binary models only
-    classes: list[str] = []
+    threshold: float | None = None     # calibrated burst threshold
+    classes: list[str] = []            # burst types it reports
     metrics: dict[str, float] = {}
     is_default: bool = False
 
 
 class ModelsResponse(BaseModel):
     models: list[ModelInfo] = []
-    default_binary: str                # id the page should preselect
-    # Where `default_binary` comes from: "selected" = chosen on the Settings page
+    default_model: str                 # id the page should preselect
+    # Where `default_model` comes from: "selected" = chosen on the Settings page
     # and stored in the database; "config" = still following the deployment's
-    # RADIO_BURST_BINARY_MODEL. Lets the UI say which one is in force.
-    default_binary_source: Literal["selected", "config"] = "config"
-    type_model: str | None = None      # id used for the burst-type stage
-    classify_types: bool = True        # server default for the type stage
+    # RADIO_BURST_MODEL. Lets the UI say which one is in force.
+    default_model_source: Literal["selected", "config"] = "config"
 
 
-class BinaryModelSelection(BaseModel):
-    """PUT body: which binary classifier the automatic scan should run."""
-    model_id: str                      # "ccm-1.0.0" | "ccm-1.1.0"
+class ModelSelection(BaseModel):
+    """PUT body: which model the automatic scan should run."""
+    model_id: str                      # "ccm-2.0.0"
 
 
 # ── Burst Predictor (on-demand daily prediction vs official burst list) ───────
@@ -168,22 +166,22 @@ class BurstPredictionRequest(BaseModel):
     # alert filter). True = raw model output: every segment the model labels
     # "Burst" becomes an event, so a narrow station selection never hides bursts.
     raw: bool = False
-    # Binary classifier id; null = the server default. Unlike `raw`, this changes
-    # the scores, so it is fixed for the job's lifetime.
+    # Model id; null = the server default. Unlike `raw`, this changes the
+    # scores, so it is fixed for the job's lifetime.
     model: str | None = None
-    # Run the burst-type stage on burst-positive files; null = server default.
-    classify_types: bool | None = None
 
 
 class TypedRegion(BaseModel):
-    """A bright region inside one segment, with its predicted burst type."""
+    """A burst region inside one segment, with its predicted burst type."""
+    # Null when the file has no AXES table: its header frequencies are
+    # placeholders, not MHz.
     freq_min_mhz: float | None = None
     freq_max_mhz: float | None = None
     start_seconds: int                 # from the start of the segment
     end_seconds: int
     burst_type: str | None = None
-    confidence: float | None = None
-    area: int = 0                      # pixels above the brightness threshold
+    confidence: float | None = None    # confidence in the type, given a burst
+    area: int = 0                      # pixels above the region finder's level
 
 
 class PredictedDetection(BaseModel):
@@ -193,7 +191,7 @@ class PredictedDetection(BaseModel):
     time: str                          # HH:MM:SS UTC
     probability: float
     alert_level: str
-    # Null when typing was off or nothing in-distribution was found to classify.
+    # Type of the segment's largest burst region.
     burst_type: str | None = None
     type_confidence: float | None = None
     regions: list[TypedRegion] = []
@@ -236,10 +234,8 @@ class BurstPredictionResult(BaseModel):
     official_events: list[OfficialBurstCompare] = []
     official_count: int = 0
     matched_count: int = 0             # predicted events matching the official list
-    model_id: str = ""                 # binary classifier that scored these rows
+    model_id: str = ""                 # model that scored these rows
     model_name: str = ""
-    classify_types: bool = False
-    type_model_id: str | None = None
     type_counts: dict[str, int] = {}   # burst files per type, e.g. {"Type III": 4}
 
 
@@ -251,7 +247,6 @@ class BurstPredictionJob(BaseModel):
     date: str
     stations: list[str] = []
     model_id: str = ""
-    classify_types: bool = False
     error: str | None = None
     result: BurstPredictionResult | None = None
 
@@ -306,10 +301,11 @@ class OfficialBurstRangeResponse(BaseModel):
 class BackfillDayCoverage(BaseModel):
     """How much of one UTC day's e-CALLISTO archive has been scored."""
     day: str                       # YYYY-MM-DD
-    # "unknown" (never inspected) | pending | running | partial | done | error
+    # "unknown" (never inspected) | pending | running | partial | done | error,
+    # or "stale": done, but by a model other than the active one (to re-score)
     state: str
     archive_files: int = 0         # segments the archive published that day
-    covered_files: int = 0         # segments with a detection row (any model)
+    covered_files: int = 0         # segments scored by the day's model
     events: int = 0                # radio_burst events standing for the day
     model_id: str = ""
     error: str | None = None
