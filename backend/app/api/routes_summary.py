@@ -1,3 +1,4 @@
+from collections import Counter
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
@@ -9,7 +10,7 @@ from app.services.goes_xrs_service import get_goes_xrs_latest
 from app.services.goes_proton_service import get_goes_proton_latest
 from app.services.kp_service import get_kp_latest
 from app.services.dst_service import get_dst_latest
-from app.services.event_service import get_latest_alerts
+from app.services.event_service import get_active_alerts, highest_alert_level
 from app.services.solar_wind_service import get_solar_wind_latest
 from app.services.sunspot_service import get_sunspot_latest
 
@@ -57,11 +58,16 @@ async def get_summary_latest(db: AsyncSession = Depends(get_db)) -> SummaryLates
         sunspot = None
 
     try:
-        active_alerts = len(await get_latest_alerts(db))
+        active = await get_active_alerts(db)
+        active_count = len(active)
+        active_level = highest_alert_level(active)
+        active_types = dict(Counter(a.type for a in active))
     except Exception:
         # Fall back to the proton flag so a stale/empty events table doesn't
         # under-report an in-progress radiation storm.
-        active_alerts = 1 if proton_event else 0
+        active_count = 1 if proton_event else 0
+        active_level = "watch" if proton_event else None
+        active_types = {"proton_event": 1} if proton_event else {}
 
     return SummaryLatest(
         timestamp=datetime.now(timezone.utc),
@@ -74,5 +80,7 @@ async def get_summary_latest(db: AsyncSession = Depends(get_db)) -> SummaryLates
         sunspot_number=sunspot,
         imf_bz=imf_bz,
         imf_bt=imf_bt,
-        active_alerts=active_alerts,
+        active_alerts=active_count,
+        active_alert_level=active_level,
+        active_alert_types=active_types,
     )

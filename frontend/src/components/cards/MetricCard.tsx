@@ -10,6 +10,10 @@ interface MetricCardProps {
   /** `unknown` = the value could not be fetched; never render that as green. */
   severity?: "ok" | "watch" | "warning" | "critical" | "unknown";
   loading?: boolean;
+  /** One short line of context under the value. */
+  caption?: string;
+  /** Hover text for the whole card. */
+  title?: string;
 }
 
 const severityColor = {
@@ -28,9 +32,11 @@ export function MetricCard({
   icon: Icon,
   severity = "ok",
   loading = false,
+  caption,
+  title,
 }: MetricCardProps) {
   return (
-    <div className="rounded-lg border border-surface-border bg-surface-card p-4">
+    <div className="rounded-lg border border-surface-border bg-surface-card p-4" title={title}>
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs text-slate-500 uppercase tracking-wider">{label}</span>
         {Icon && <Icon className="h-4 w-4 text-slate-600" />}
@@ -42,6 +48,9 @@ export function MetricCard({
           {value ?? "—"}
           {unit && <span className="ml-1 text-sm font-normal text-slate-500">{unit}</span>}
         </p>
+      )}
+      {caption && !loading && (
+        <p className="mt-1 truncate text-[11px] text-slate-500">{caption}</p>
       )}
     </div>
   );

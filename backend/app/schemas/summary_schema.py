@@ -13,4 +13,10 @@ class SummaryLatest(BaseModel):
     sunspot_number: float | None = None
     imf_bz: float | None = None
     imf_bt: float | None = None
+    # Alerts for events in progress or that subsided within the last few hours
+    # (not the whole feed history).
     active_alerts: int = 0
+    # Most severe level among them: "info" | "watch" | "warning" | "critical".
+    active_alert_level: str | None = None
+    # Event type -> number of active alerts of that type.
+    active_alert_types: dict[str, int] = {}

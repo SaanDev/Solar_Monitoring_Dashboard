@@ -2,6 +2,8 @@
 
 import useSWR from "swr";
 import { api } from "@/lib/api";
+import { ALERT_CATEGORIES, categoryOf, type AlertCategoryKey } from "@/lib/alerts";
+import type { SummaryLatest } from "@/lib/types";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { Activity, Zap, Compass, Wind, Bell } from "lucide-react";
 
@@ -64,11 +66,46 @@ export function OverviewMetrics() {
         // `?? 0` here would assert "zero active alerts" during an outage.
         value={data?.active_alerts ?? null}
         icon={Bell}
-        severity={sev(data && data.active_alerts > 0 ? "warning" : "ok")}
+        severity={sev(levelSeverity(data?.active_alert_level))}
         loading={isLoading}
+        caption={data ? activeAlertsCaption(data.active_alert_types) : undefined}
+        title={
+          "Alerts for events in progress or that subsided within the last 6 h " +
+          "(the full history is on the Alerts page)."
+        }
       />
     </div>
   );
+}
+
+// Compact per-category nouns for the caption: [singular, plural].
+const CATEGORY_NOUN: Record<AlertCategoryKey, [string, string]> = {
+  xray_flare: ["flare", "flares"],
+  radio_burst: ["burst", "bursts"],
+  geomagnetic_storm: ["storm", "storms"],
+  proton_event: ["proton", "proton"],
+  cme: ["CME", "CMEs"],
+};
+
+/** "1 flare · 2 bursts", in the alert-area order, or a quiet-sky note. */
+function activeAlertsCaption(types: Record<string, number>): string {
+  const byCategory = new Map<AlertCategoryKey, number>();
+  for (const [type, n] of Object.entries(types)) {
+    const cat = categoryOf(type);
+    if (cat) byCategory.set(cat, (byCategory.get(cat) ?? 0) + n);
+  }
+  const parts = ALERT_CATEGORIES.filter((c) => byCategory.has(c.key)).map((c) => {
+    const n = byCategory.get(c.key)!;
+    return `${n} ${CATEGORY_NOUN[c.key][n === 1 ? 0 : 1]}`;
+  });
+  return parts.length ? parts.join(" · ") : "none in the last 6 h";
+}
+
+/** The card color follows the most severe active alert, not merely "any". */
+function levelSeverity(
+  level: SummaryLatest["active_alert_level"] | undefined
+): "ok" | "watch" | "warning" | "critical" {
+  return level === "critical" || level === "warning" || level === "watch" ? level : "ok";
 }
 
 function xraySeverity(cls: string | null | undefined): "ok" | "watch" | "warning" | "critical" {

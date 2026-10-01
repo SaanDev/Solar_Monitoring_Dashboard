@@ -9,10 +9,11 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.models.events import SpaceWeatherEvent
 
@@ -31,6 +32,11 @@ _EVENT_FIELDS = (
     "burst_type",
     "source_url",
 )
+
+
+# Rows per INSERT statement: a history re-derivation can upsert thousands of
+# events, which in one statement would exceed the bind-parameter limits.
+_UPSERT_CHUNK = 500
 
 
 def _utcnow() -> datetime:
@@ -61,16 +67,17 @@ async def upsert_events(
         }
         for e in events
     ]
-    stmt = _insert(db).values(values)
-    update_cols = {
-        c.name: getattr(stmt.excluded, c.name)
-        for c in SpaceWeatherEvent.__table__.columns
-        if c.name not in ("type", "start_time")
-    }
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["type", "start_time"], set_=update_cols
-    )
-    await db.execute(stmt)
+    for i in range(0, len(values), _UPSERT_CHUNK):
+        stmt = _insert(db).values(values[i : i + _UPSERT_CHUNK])
+        update_cols = {
+            c.name: getattr(stmt.excluded, c.name)
+            for c in SpaceWeatherEvent.__table__.columns
+            if c.name not in ("type", "start_time")
+        }
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["type", "start_time"], set_=update_cols
+        )
+        await db.execute(stmt)
     await db.commit()
     return len(values)
 
@@ -96,11 +103,66 @@ async def query_range(db: AsyncSession, start: datetime, end: datetime) -> list[
     return [_to_dict(o) for o in res.scalars().all()]
 
 
+async def query_active_or_recent(db: AsyncSession, since: datetime) -> list[dict]:
+    """Ongoing events, or those that ended on/after ``since`` — newest first."""
+    stmt = (
+        select(SpaceWeatherEvent)
+        .where(
+            or_(
+                SpaceWeatherEvent.end_time.is_(None),
+                SpaceWeatherEvent.end_time >= since,
+            )
+        )
+        .order_by(SpaceWeatherEvent.start_time.desc())
+    )
+    res = await db.execute(stmt)
+    return [_to_dict(o) for o in res.scalars().all()]
+
+
 async def query_all(db: AsyncSession) -> list[dict]:
     """Every event, newest first — the full historical alert/event feed."""
     stmt = select(SpaceWeatherEvent).order_by(SpaceWeatherEvent.start_time.desc())
     res = await db.execute(stmt)
     return [_to_dict(o) for o in res.scalars().all()]
+
+
+async def earliest_inconsistent_start(
+    db: AsyncSession, event_type: str, open_before: datetime
+) -> datetime | None:
+    """Start of the earliest ``event_type`` row that a clean derivation could not
+    have produced, or ``None`` if there is none.
+
+    That is a row still open although it began before ``open_before`` (no longer
+    re-derived by the rolling window, so nothing will ever close it), or one that
+    overlaps a later row of the same type — a detector's spans never overlap, so
+    such rows are fragments of one event stored under several starts.
+    """
+    ev = SpaceWeatherEvent
+    stale_open = await db.scalar(
+        select(func.min(ev.start_time)).where(
+            ev.type == event_type, ev.end_time.is_(None), ev.start_time < open_before
+        )
+    )
+    a, b = aliased(ev), aliased(ev)
+    overlapping = await db.scalar(
+        select(func.min(a.start_time))
+        .join(
+            b,
+            and_(
+                b.type == a.type,
+                b.start_time > a.start_time,
+                or_(a.end_time.is_(None), a.end_time >= b.start_time),
+            ),
+        )
+        .where(a.type == event_type)
+    )
+    found = [_as_utc(t) for t in (stale_open, overlapping) if t is not None]
+    return min(found, default=None)
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """SQLite returns naive datetimes; treat them as UTC."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 async def delete_events_of_type_since(

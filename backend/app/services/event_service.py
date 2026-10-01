@@ -3,8 +3,9 @@
 The detection pass reads a recent window of GOES XRS / proton / Kp / Dst from
 TimescaleDB (populated by the ingestion scheduler), runs the pure detectors in
 ``app.processing.event_detection``, and upserts the results into the ``events``
-table. Reads are served from that table (Redis-cached); alerts are a live *view*
-over events that are ongoing or only just subsided.
+table. Reads are served from that table (Redis-cached). The alert feed is a view
+over every event (the full history); *active* alerts are the subset that is
+ongoing or only just subsided.
 
 Events are derived from already-ingested data — there is no live fallback here
 (unlike the numeric services); if the DB is empty the pass simply finds nothing.
@@ -12,7 +13,8 @@ Events are derived from already-ingested data — there is no live fallback here
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,9 +32,16 @@ from app.processing.event_correlation import (
     correlate_events,
     event_key,
 )
-from app.processing.event_detection import detect_events
+from app.processing.event_detection import (
+    detect_dst_storms,
+    detect_kp_storms,
+    detect_proton_events,
+    detect_xray_flares,
+)
 from app.repositories.event_repo import (
     delete_events_of_type_since,
+    earliest_inconsistent_start,
+    query_active_or_recent,
     query_all,
     query_range,
     upsert_events,
@@ -46,6 +55,10 @@ logger = logging.getLogger(__name__)
 # event whose onset predates the last pass is still re-evaluated (and its
 # end_time/peak updated) rather than missed.
 LOOKBACK_DAYS = 3
+
+# An alert stays *active* while its event is in progress and for this long after
+# it subsides. The feed keeps every alert; this only scopes the headline count.
+ALERT_LINGER = timedelta(hours=6)
 
 _EVENTS_TTL = 60
 _ALERTS_TTL = 30
@@ -69,6 +82,25 @@ def event_id_for(e: dict) -> str:
 # ── Detection pass ───────────────────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class _Derived:
+    model: type
+    field: str  # the column the detector reads
+    detect: Callable[[list[dict]], list[dict]]
+    # Data read *before* the window as context only, so an event already running
+    # when the window opens is still seen from its real onset. Must exceed the
+    # longest event of the type; flares last hours, storms and proton events days.
+    lead_in: timedelta
+
+
+_DERIVED: dict[str, _Derived] = {
+    "xray_flare": _Derived(GoesXrs, "long_channel", detect_xray_flares, timedelta(days=1)),
+    "proton_event": _Derived(GoesProton, "flux_gt10", detect_proton_events, timedelta(days=14)),
+    "geomagnetic_storm_kp": _Derived(KpIndex, "kp", detect_kp_storms, timedelta(days=14)),
+    "geomagnetic_storm_dst": _Derived(DstIndex, "dst", detect_dst_storms, timedelta(days=14)),
+}
+
+
 async def detect_and_store(db: AsyncSession, lookback_days: int = LOOKBACK_DAYS) -> int:
     """Run detection over the recent window and upsert events. Never raises.
 
@@ -77,35 +109,54 @@ async def detect_and_store(db: AsyncSession, lookback_days: int = LOOKBACK_DAYS)
     but has since decayed and been re-segmented/ended — is deleted rather than
     left lingering with a stale ``end_time=None``. Reconciliation is skipped for a
     feed that returned no data (a transient read failure must not wipe history).
+
+    The window also reaches back to the earliest row the rolling window can't keep
+    consistent (see ``earliest_inconsistent_start``): an event still running past
+    the lookback, which then keeps being updated in place, or rows left broken by
+    downtime or by earlier versions of this pass. Once those are re-derived the
+    window falls back to ``lookback_days``.
     """
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=lookback_days)
-    try:
-        series = {
-            "xray_flare": await safe_query_range(db, GoesXrs, start, end),
-            "proton_event": await safe_query_range(db, GoesProton, start, end),
-            "geomagnetic_storm_kp": await safe_query_range(db, KpIndex, start, end),
-            "geomagnetic_storm_dst": await safe_query_range(db, DstIndex, start, end),
-        }
-        events = detect_events(
-            series["xray_flare"],
-            series["proton_event"],
-            series["geomagnetic_storm_kp"],
-            series["geomagnetic_storm_dst"],
-        )
-        keep_starts: dict[str, set[datetime]] = defaultdict(set)
-        for e in events:
-            keep_starts[e["type"]].add(e["start_time"])
-        for etype, points in series.items():
-            if points:  # only reconcile a feed we actually read (see docstring)
-                await delete_events_of_type_since(db, etype, start, keep_starts[etype])
-        count = await upsert_events(db, events)
-        logger.info("detection pass stored %d events", count)
-        return count
-    except Exception as exc:  # pragma: no cover - defensive, mirrors ingest runner
-        await db.rollback()
-        logger.warning("event detection failed: %s", exc)
-        return 0
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(days=lookback_days)
+    total = 0
+    for etype, spec in _DERIVED.items():
+        try:
+            start = window_start
+            repair_from = await earliest_inconsistent_start(db, etype, window_start)
+            if repair_from is not None and repair_from < start:
+                logger.info("re-deriving %s from %s (stale or overlapping rows)", etype, repair_from)
+                start = repair_from
+            total += await _rederive(db, etype, spec, start, now)
+        except Exception as exc:  # pragma: no cover - defensive, mirrors ingest runner
+            await db.rollback()
+            logger.warning("event detection failed for %s: %s", etype, exc)
+    logger.info("detection pass stored %d events", total)
+    return total
+
+
+async def _rederive(
+    db: AsyncSession, etype: str, spec: _Derived, start: datetime, end: datetime
+) -> int:
+    """Make the stored ``etype`` events starting in ``[start, end]`` match a fresh
+    detection over that range; returns the number of events written."""
+    points = await safe_query_range(db, spec.model, start - spec.lead_in, end)
+    first_sample = next((p["time"] for p in points if p.get(spec.field) is not None), None)
+    if first_sample is None:
+        return 0  # a feed we couldn't read: leave its events alone (see detect_and_store)
+    events = [
+        e
+        for e in spec.detect(points)
+        # A span already running at the first sample read has an onset we never
+        # saw; the detector would date it to that sample, and as the window slid
+        # each pass would store another fragment of one event under a new start.
+        # The lead-in makes that only the event longer than it — skip it rather
+        # than store a made-up onset.
+        if e["start_time"] != first_sample
+        # The lead-in is context: keep only events that reach into the range.
+        and (e["end_time"] is None or _as_utc(e["end_time"]) >= start)
+    ]
+    await delete_events_of_type_since(db, etype, start, {e["start_time"] for e in events})
+    return await upsert_events(db, events)
 
 
 # ── Reads ────────────────────────────────────────────────────────────────────
@@ -310,3 +361,26 @@ async def get_latest_alerts(db: AsyncSession) -> list[AlertResponse]:
     alerts = [_to_alert_response(r, _related_ids(r, related)) for r in rows]
     await cache_set_json(key, [a.model_dump(mode="json") for a in alerts], _ALERTS_TTL)
     return alerts
+
+
+async def get_active_alerts(db: AsyncSession) -> list[AlertResponse]:
+    """Alerts for events in progress or that subsided within ``ALERT_LINGER``,
+    newest first — what the headline "active alerts" count reflects.
+
+    An open row is trusted as in progress: the detection pass re-derives, and so
+    closes, any open row the rolling window would otherwise leave behind.
+    """
+    key = "alerts:active"
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return [AlertResponse.model_validate(d) for d in cached]
+
+    now = datetime.now(timezone.utc)
+    alerts = [_to_alert_response(r) for r in await query_active_or_recent(db, now - ALERT_LINGER)]
+    await cache_set_json(key, [a.model_dump(mode="json") for a in alerts], _ALERTS_TTL)
+    return alerts
+
+
+def highest_alert_level(alerts: list[AlertResponse]) -> str | None:
+    """The most severe level among ``alerts`` (None when there are none)."""
+    return max((a.severity for a in alerts), key=lambda s: _LEVEL_RANK.get(s, 0), default=None)

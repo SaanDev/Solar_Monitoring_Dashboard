@@ -15,13 +15,19 @@ from app.processing.event_detection import (
     detect_proton_events,
     detect_xray_flares,
 )
-from app.repositories.event_repo import query_range as query_events, upsert_events
+from app.repositories.event_repo import (
+    earliest_inconsistent_start,
+    query_range as query_events,
+    upsert_events,
+)
 from app.repositories.timeseries_repo import upsert_points
 from app.services.event_service import (
     detect_and_store,
+    get_active_alerts,
     get_event_chains,
     get_events,
     get_latest_alerts,
+    highest_alert_level,
 )
 
 _T0 = datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)
@@ -317,6 +323,181 @@ async def test_alert_feed_is_full_history_newest_first(db_session):
     flares = [a for a in await get_latest_alerts(db_session) if a.type == "xray_flare"]
     assert len(flares) == 2                              # both kept (no age cutoff)
     assert flares[0].timestamp >= flares[1].timestamp    # recent one at the top
+
+
+# ── Active alerts (the headline count) ───────────────────────────────────────
+
+
+def _stored_event(etype: str, severity: str, start: datetime, end: datetime | None) -> dict:
+    return {
+        "type": etype,
+        "start_time": start,
+        "end_time": end,
+        "peak_time": None,
+        "peak_value": None,
+        "severity": severity,
+        "description": f"{etype} {severity}",
+        "source_url": None,
+    }
+
+
+async def test_active_alerts_are_ongoing_or_recently_subsided(db_session):
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    await upsert_events(db_session, [
+        # in progress -> active
+        _stored_event("xray_flare", "M2.0", now - timedelta(minutes=30), None),
+        # subsided 2 h ago (inside the linger) -> active
+        _stored_event("radio_burst", "Likely burst", now - timedelta(hours=2, minutes=15), now - timedelta(hours=2)),
+        # subsided 11 h ago -> history only
+        _stored_event("xray_flare", "C3.0", now - timedelta(hours=12), now - timedelta(hours=11)),
+    ])
+
+    active = await get_active_alerts(db_session)
+    assert sorted((a.type, a.severity) for a in active) == [
+        ("radio_burst", "watch"),
+        ("xray_flare", "warning"),
+    ]
+    assert highest_alert_level(active) == "warning"
+    assert len(await get_latest_alerts(db_session)) == 3  # the feed keeps all of them
+
+
+def test_highest_alert_level_of_nothing_is_none():
+    assert highest_alert_level([]) is None
+
+
+async def test_summary_counts_only_active_alerts(client, db_session, monkeypatch):
+    async def _offline(*_args):
+        raise RuntimeError("no network in tests")
+
+    # The other summary sources fall back to live feeds on an empty DB; keep
+    # this test off the network (each source failing alone is tolerated).
+    for name in (
+        "get_goes_xrs_latest",
+        "get_goes_proton_latest",
+        "get_kp_latest",
+        "get_dst_latest",
+        "get_solar_wind_latest",
+        "get_sunspot_latest",
+    ):
+        monkeypatch.setattr(f"app.api.routes_summary.{name}", _offline)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    await upsert_events(db_session, [
+        _stored_event("xray_flare", "X1.2", now - timedelta(minutes=10), None),
+        _stored_event("radio_burst", "High-confidence burst", now - timedelta(hours=1), now - timedelta(minutes=45)),
+        _stored_event("radio_burst", "Likely burst", now - timedelta(days=5), now - timedelta(days=5) + 15 * _MIN),
+    ])
+
+    body = (await client.get("/api/summary/latest")).json()
+    assert body["active_alerts"] == 2
+    assert body["active_alert_level"] == "critical"
+    assert body["active_alert_types"] == {"xray_flare": 1, "radio_burst": 1}
+
+
+# ── Rolling-window consistency (no fragments, no stale open rows) ────────────
+
+
+def _hour(hours_ago: int) -> datetime:
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    return now - timedelta(hours=hours_ago)
+
+
+def _dst(start: datetime, values: list[float]) -> list[dict]:
+    return [{"time": start + timedelta(hours=i), "dst": v} for i, v in enumerate(values)]
+
+
+def _aware(dt: datetime | None) -> datetime | None:
+    """Rows come back tz-naive on SQLite; compare them as UTC."""
+    return dt if dt is None or dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+async def _spans_of(db_session, etype: str) -> list[tuple]:
+    rows = await query_events(db_session, _hour(60 * 24), datetime.now(timezone.utc) + _MIN)
+    return sorted((_aware(r["start_time"]), _aware(r["end_time"])) for r in rows if r["type"] == etype)
+
+
+async def test_storm_older_than_window_keeps_its_real_onset(db_session):
+    # A 5-day storm that began 6 days ago: the 3-day window opens mid-storm. It
+    # must be stored once under its real onset — not under the window's first
+    # sample, which used to mint a new fragment every pass as the window slid.
+    t0 = _hour(7 * 24)
+    await upsert_points(
+        db_session, DstIndex, _dst(t0, [-10] * 24 + [-80] * (5 * 24) + [-10] * 24), "kyoto"
+    )
+    onset = t0 + timedelta(hours=24)
+
+    await detect_and_store(db_session)
+    await detect_and_store(db_session, lookback_days=2)  # the window has slid on
+
+    assert await _spans_of(db_session, "geomagnetic_storm_dst") == [
+        (onset, onset + timedelta(hours=5 * 24 - 1)),
+    ]
+
+
+async def test_span_running_since_before_the_lead_in_is_not_stored(db_session):
+    # Disturbed for longer than the lead-in reaches back: the onset was never
+    # seen, so there is no honest start to store it under.
+    await upsert_points(db_session, DstIndex, _dst(_hour(20 * 24), [-80] * (20 * 24)), "kyoto")
+
+    await detect_and_store(db_session)
+
+    assert await _spans_of(db_session, "geomagnetic_storm_dst") == []
+
+
+async def test_open_flare_left_by_downtime_is_closed(db_session):
+    # The backend stopped mid-flare and only came back after the flare's onset
+    # had left the window, so nothing re-derived it: "in progress" for good.
+    t0 = _recent(10 * 24 * 60)
+    await upsert_points(db_session, GoesXrs, _xrs(t0, [1e-7, 2e-6, 8e-6, 3e-6, 1e-7]), "noaa-swpc")
+    await upsert_events(db_session, [_stored_event("xray_flare", "C2.0", t0 + _MIN, None)])
+
+    await detect_and_store(db_session)
+
+    assert await _spans_of(db_session, "xray_flare") == [(t0 + _MIN, t0 + 3 * _MIN)]
+    assert await get_active_alerts(db_session) == []
+
+
+async def test_window_fragments_of_one_storm_are_merged(db_session):
+    # What earlier passes left behind: one storm stored under a new start each
+    # hour as the window slid, the oldest fragments never closed.
+    t0 = _hour(30 * 24)
+    await upsert_points(db_session, DstIndex, _dst(t0, [-10] * 6 + [-80] * 48 + [-10] * 6), "kyoto")
+    onset, end = t0 + timedelta(hours=6), t0 + timedelta(hours=53)
+    await upsert_events(db_session, [
+        _stored_event(
+            "geomagnetic_storm_dst", "Moderate storm", onset + timedelta(hours=h), None if h < 3 else end
+        )
+        for h in range(1, 6)
+    ])
+
+    await detect_and_store(db_session)
+
+    assert await _spans_of(db_session, "geomagnetic_storm_dst") == [(onset, end)]
+    assert await get_active_alerts(db_session) == []
+
+
+async def test_earliest_inconsistent_start(db_session):
+    now = _hour(0)
+    window_start = now - timedelta(days=3)
+
+    def flare(start: datetime, end: datetime | None) -> dict:
+        return _stored_event("xray_flare", "C1.0", start, end)
+
+    await upsert_events(db_session, [
+        flare(now - timedelta(days=20), now - timedelta(days=20) + _MIN * 30),  # closed, alone
+        flare(now - timedelta(hours=1), None),                                  # open, recent
+    ])
+    assert await earliest_inconsistent_start(db_session, "xray_flare", window_start) is None
+
+    overlap = now - timedelta(days=8)
+    await upsert_events(db_session, [
+        flare(overlap, overlap + timedelta(hours=2)),
+        flare(overlap + timedelta(hours=1), overlap + timedelta(hours=2)),
+    ])
+    assert _aware(await earliest_inconsistent_start(db_session, "xray_flare", window_start)) == overlap
+
+    stale_open = now - timedelta(days=9)
+    await upsert_events(db_session, [flare(stale_open, None)])
+    assert _aware(await earliest_inconsistent_start(db_session, "xray_flare", window_start)) == stale_open
 
 
 # ── Event chains (causal storylines) ─────────────────────────────────────────

@@ -31,7 +31,12 @@ export interface SummaryLatest {
   sunspot_number: number | null;
   imf_bz: number | null;
   imf_bt: number | null;
+  /** Alerts for events in progress or that subsided within the last 6 h (not the feed history). */
   active_alerts: number;
+  /** Most severe level among them; null when there are none. */
+  active_alert_level: "info" | "watch" | "warning" | "critical" | null;
+  /** Event type → number of active alerts of that type. */
+  active_alert_types: Record<string, number>;
 }
 
 // ─── GOES XRS ────────────────────────────────────────────────────────────────
