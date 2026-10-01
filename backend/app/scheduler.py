@@ -12,7 +12,7 @@ from app.database import AsyncSessionLocal
 from app.ingest.runner import run_all, run_ingest
 from app.ingest.sources import SOURCES, IngestSource
 from app.services.cme_service import collect_and_store as collect_cmes
-from app.services.event_service import detect_and_store
+from app.services.event_service import detect_and_store, rederive_history_if_outdated
 from app.services.forecast_service import detect_and_store_predicted_storms
 from app.services.notification_service import dispatch_pending
 from app.services.radio_backfill_service import run_auto_catch_up
@@ -144,9 +144,11 @@ def start_scheduler() -> None:
 
 async def run_initial_ingest() -> None:
     """One-shot ingest on startup so the DB is warm before the first interval,
-    then a detection pass so events exist immediately."""
+    then a detection pass so events exist immediately (after re-deriving the
+    whole event history, if it was derived by an older detection version)."""
     async with AsyncSessionLocal() as db:
         await run_all(db)
+        await rederive_history_if_outdated(db)
         await detect_and_store(db)
         await collect_cmes(db)
         await detect_and_store_predicted_storms(db)

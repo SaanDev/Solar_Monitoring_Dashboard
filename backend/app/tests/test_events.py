@@ -21,13 +21,16 @@ from app.repositories.event_repo import (
     upsert_events,
 )
 from app.repositories.timeseries_repo import upsert_points
+from app.repositories.app_settings_repo import get_or_create_settings
 from app.services.event_service import (
+    DERIVATION_VERSION,
     detect_and_store,
     get_active_alerts,
     get_event_chains,
     get_events,
     get_latest_alerts,
     highest_alert_level,
+    rederive_history_if_outdated,
 )
 
 _T0 = datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)
@@ -498,6 +501,65 @@ async def test_earliest_inconsistent_start(db_session):
     stale_open = now - timedelta(days=9)
     await upsert_events(db_session, [flare(stale_open, None)])
     assert _aware(await earliest_inconsistent_start(db_session, "xray_flare", window_start)) == stale_open
+
+
+# ── One-time history re-derivation (DERIVATION_VERSION) ──────────────────────
+
+
+async def _seed_storm_and_phantom(db_session) -> tuple[datetime, datetime, datetime]:
+    """Dst history 50-40 days ago with one real storm, plus a stored single-hour
+    "Super storm" the data does not support — what a since-corrected bad sample
+    leaves behind. Returns (storm onset, storm end, phantom start)."""
+    t0 = _hour(50 * 24)
+    await upsert_points(
+        db_session, DstIndex, _dst(t0, [-10] * 24 + [-80] * 12 + [-10] * (9 * 24)), "kyoto"
+    )
+    onset, end = t0 + timedelta(hours=24), t0 + timedelta(hours=35)
+    phantom = t0 + timedelta(days=5)  # Dst there now reads -10
+    await upsert_events(db_session, [
+        _stored_event("geomagnetic_storm_dst", "Intense storm", onset, end),
+        _stored_event("geomagnetic_storm_dst", "Super storm", phantom, phantom),
+    ])
+    return onset, end, phantom
+
+
+async def test_outdated_history_is_rederived_once(db_session):
+    onset, end, phantom = await _seed_storm_and_phantom(db_session)
+
+    # A consistent-looking row (closed, no overlap) outside the window: the
+    # rolling pass alone never revisits it.
+    await detect_and_store(db_session)
+    assert (phantom, phantom) in await _spans_of(db_session, "geomagnetic_storm_dst")
+
+    assert await rederive_history_if_outdated(db_session) is True
+    assert await _spans_of(db_session, "geomagnetic_storm_dst") == [(onset, end)]
+    assert (await get_or_create_settings(db_session)).event_derivation_version == DERIVATION_VERSION
+
+    assert await rederive_history_if_outdated(db_session) is False  # done; marked current
+
+
+async def test_rederivation_does_not_derive_months_never_detected(db_session):
+    # A storm in a month someone browsed on the archive page a year back: its
+    # Dst rows are stored, but detection never covered that period.
+    await upsert_points(
+        db_session, DstIndex, _dst(_hour(400 * 24), [-10] * 6 + [-90] * 6 + [-10] * 6), "kyoto"
+    )
+    onset, end, _ = await _seed_storm_and_phantom(db_session)
+
+    await rederive_history_if_outdated(db_session)
+
+    rows = await query_events(db_session, _hour(500 * 24), datetime.now(timezone.utc))
+    assert [(_aware(r["start_time"]), _aware(r["end_time"])) for r in rows] == [(onset, end)]
+
+
+async def test_current_history_is_not_rederived(db_session):
+    onset, end, phantom = await _seed_storm_and_phantom(db_session)
+    settings_row = await get_or_create_settings(db_session)
+    settings_row.event_derivation_version = DERIVATION_VERSION
+    await db_session.commit()
+
+    assert await rederive_history_if_outdated(db_session) is False
+    assert await _spans_of(db_session, "geomagnetic_storm_dst") == [(onset, end), (phantom, phantom)]
 
 
 # ── Event chains (causal storylines) ─────────────────────────────────────────

@@ -5,9 +5,11 @@ This table holds the choices made from the dashboard's Settings page, which
 have to outlive the process and apply to the background scheduler just as much
 as to API requests — an env var can do neither without a restart and a file edit.
 
-One field today: which burst model the automatic radio-burst scan runs. Empty
+One setting today: which burst model the automatic radio-burst scan runs. Empty
 means "follow ``RADIO_BURST_MODEL``", so a database whose row was never written
-behaves exactly as it did before this table existed.
+behaves exactly as it did before this table existed. The row also carries a
+piece of internal state with the same outlive-the-process need (the event
+derivation version).
 """
 from datetime import datetime, timezone
 
@@ -31,6 +33,12 @@ class AppSettings(Base):
     # had when only binary classifiers existed, to avoid a migration.
     radio_burst_binary_model: Mapped[str] = mapped_column(
         String(64), nullable=False, default=""
+    )
+
+    # Not a user setting: which version of the event-detection logic last
+    # re-derived the stored event history (event_service.DERIVATION_VERSION).
+    event_derivation_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
     )
 
     updated_at: Mapped[datetime] = mapped_column(

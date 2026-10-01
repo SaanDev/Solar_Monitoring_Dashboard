@@ -126,6 +126,14 @@ async def query_all(db: AsyncSession) -> list[dict]:
     return [_to_dict(o) for o in res.scalars().all()]
 
 
+async def earliest_event_start(db: AsyncSession, event_type: str) -> datetime | None:
+    """Start of the oldest stored ``event_type`` event, or ``None`` if there is none."""
+    first = await db.scalar(
+        select(func.min(SpaceWeatherEvent.start_time)).where(SpaceWeatherEvent.type == event_type)
+    )
+    return _as_utc(first) if first is not None else None
+
+
 async def earliest_inconsistent_start(
     db: AsyncSession, event_type: str, open_before: datetime
 ) -> datetime | None:

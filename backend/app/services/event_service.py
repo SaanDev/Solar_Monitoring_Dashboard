@@ -40,12 +40,14 @@ from app.processing.event_detection import (
 )
 from app.repositories.event_repo import (
     delete_events_of_type_since,
+    earliest_event_start,
     earliest_inconsistent_start,
     query_active_or_recent,
     query_all,
     query_range,
     upsert_events,
 )
+from app.repositories.app_settings_repo import get_or_create_settings
 from app.repositories.timeseries_repo import safe_query_range
 from app.schemas.alert_schema import AlertResponse, EventChain, EventResponse
 
@@ -126,7 +128,7 @@ async def detect_and_store(db: AsyncSession, lookback_days: int = LOOKBACK_DAYS)
             if repair_from is not None and repair_from < start:
                 logger.info("re-deriving %s from %s (stale or overlapping rows)", etype, repair_from)
                 start = repair_from
-            total += await _rederive(db, etype, spec, start, now)
+            total += await _rederive(db, etype, spec, start, now) or 0
         except Exception as exc:  # pragma: no cover - defensive, mirrors ingest runner
             await db.rollback()
             logger.warning("event detection failed for %s: %s", etype, exc)
@@ -136,13 +138,14 @@ async def detect_and_store(db: AsyncSession, lookback_days: int = LOOKBACK_DAYS)
 
 async def _rederive(
     db: AsyncSession, etype: str, spec: _Derived, start: datetime, end: datetime
-) -> int:
+) -> int | None:
     """Make the stored ``etype`` events starting in ``[start, end]`` match a fresh
-    detection over that range; returns the number of events written."""
+    detection over that range; returns the number of events written, or ``None``
+    when the series returned no data and nothing was touched."""
     points = await safe_query_range(db, spec.model, start - spec.lead_in, end)
     first_sample = next((p["time"] for p in points if p.get(spec.field) is not None), None)
     if first_sample is None:
-        return 0  # a feed we couldn't read: leave its events alone (see detect_and_store)
+        return None  # a feed we couldn't read: leave its events alone (see detect_and_store)
     events = [
         e
         for e in spec.detect(points)
@@ -157,6 +160,50 @@ async def _rederive(
     ]
     await delete_events_of_type_since(db, etype, start, {e["start_time"] for e in events})
     return await upsert_events(db, events)
+
+
+# Version of the detection logic. Bump it when a change should reach the stored
+# history too, not only events detected from then on: at startup, a database
+# whose history was last derived by an older version re-derives its stored
+# events from the time-series once (``rederive_history_if_outdated``).
+#   1 — history rebuilt after the rolling-window fixes, which also drops events
+#       left behind by data revised upstream since they were derived.
+DERIVATION_VERSION = 1
+
+
+async def rederive_history_if_outdated(db: AsyncSession) -> bool:
+    """Re-derive the stored event history when it predates ``DERIVATION_VERSION``;
+    returns whether it ran. Never raises: on a failure the version marker is left
+    alone, so the next startup retries.
+
+    Each type is re-derived from its oldest stored event on — the span detection
+    has actually covered. Older time-series rows are left underived: besides the
+    continuous ingest, the tables hold whichever historical months someone viewed
+    on the archive pages, and events derived from those would be scattered across
+    arbitrary past months with nothing around them.
+    """
+    try:
+        row = await get_or_create_settings(db)
+        if row.event_derivation_version >= DERIVATION_VERSION:
+            return False
+        now = datetime.now(timezone.utc)
+        for etype, spec in _DERIVED.items():
+            first = await earliest_event_start(db, etype)
+            if first is None:
+                continue  # nothing derived yet, so nothing to re-derive
+            written = await _rederive(db, etype, spec, first, now)
+            if written is None:
+                logger.warning("no time-series data under the stored %s events; left as is", etype)
+            else:
+                logger.info("re-derived %s history since %s: %d events", etype, first, written)
+        row.event_derivation_version = DERIVATION_VERSION
+        await db.commit()
+        logger.info("event history re-derived (derivation version %d)", DERIVATION_VERSION)
+        return True
+    except Exception as exc:  # pragma: no cover - defensive, startup must not fail on this
+        await db.rollback()
+        logger.warning("event history re-derivation failed: %s", exc)
+        return False
 
 
 # ── Reads ────────────────────────────────────────────────────────────────────
