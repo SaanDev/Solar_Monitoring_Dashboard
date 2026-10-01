@@ -21,38 +21,27 @@ import httpx
 
 from app.config import settings
 from app.schemas.solar_image_schema import SolarArchiveImage, SolarArchiveResponse
+from app.services.sdo_latest import SDO_BROWSE_DIR, latest_sdo_frames
 
 _NOAA_FRM = "NOAA_SWPC_Observer"
 _TARGET_PX = 1024
 DEFAULT_TIME = "12:00"
 
-# Near-real-time browse frames (same sources the Overview/Solar-Images pages use).
+# Near-real-time quick-look frames (same sources the Overview/Solar-Images pages
+# use: SDO via app.services.sdo_latest, LASCO via SOHO's realtime folder).
 # Helioviewer's science archive lags real time by hours-to-days, so its "closest"
 # frame is stale; in *latest* mode we display these instead so the archive looks
 # current, while the raw downloads still resolve to the newest *science* product.
-_SDO_BROWSE = "https://sdo.gsfc.nasa.gov/assets/img/latest/latest_2048_{code}.jpg"
-_LASCO_BROWSE = "https://soho.nascom.nasa.gov/data/realtime/{cam}/1024/latest.jpg"
-_BROWSE_URL = {
-    "aia094": _SDO_BROWSE.format(code="0094"),
-    "aia131": _SDO_BROWSE.format(code="0131"),
-    "aia171": _SDO_BROWSE.format(code="0171"),
-    "aia193": _SDO_BROWSE.format(code="0193"),
-    "aia211": _SDO_BROWSE.format(code="0211"),
-    "aia304": _SDO_BROWSE.format(code="0304"),
-    "aia335": _SDO_BROWSE.format(code="0335"),
-    "aia1600": _SDO_BROWSE.format(code="1600"),
-    "hmic": _SDO_BROWSE.format(code="HMIIC"),
-    "hmib": _SDO_BROWSE.format(code="HMIB"),
-    "lascoc2": _LASCO_BROWSE.format(cam="c2"),
-    "lascoc3": _LASCO_BROWSE.format(cam="c3"),
+_LASCO_LATEST = {
+    "lascoc2": "https://soho.nascom.nasa.gov/data/realtime/c2/1024/latest.jpg",
+    "lascoc3": "https://soho.nascom.nasa.gov/data/realtime/c3/1024/latest.jpg",
 }
 
 # SDO's *dated* browse archive holds timestamped full-disk frames per day (unlike
 # Helioviewer, which lags), so browsing a past date+time returns a real frame from
 # that day rather than the nearest ingested science frame (which may be days off).
 # Files are ``YYYYMMDD_HHMMSS_<res>_<code>.jpg``. SOHO has no equivalent dated JPEG
-# archive, so LASCO history falls back to Helioviewer. Codes match _BROWSE_URL.
-_SDO_BROWSE_DIR = "https://sdo.gsfc.nasa.gov/assets/img/browse/{y:04d}/{m:02d}/{d:02d}/"
+# archive, so LASCO history falls back to Helioviewer.
 _SDO_BROWSE_RES = 2048
 _BROWSE_CODE = {
     "aia094": "0094", "aia131": "0131", "aia171": "0171", "aia193": "0193",
@@ -155,12 +144,14 @@ async def _listing(client: httpx.AsyncClient, url: str) -> str:
 
 # A dated browse/JSOC directory listing is ~1-2 MB and immutable once the day is
 # past, so cache it in-process to avoid re-downloading it every time the user
-# scrubs to another time on the same day.
+# scrubs to another time on the same day. Today's listing still gains a frame
+# every few minutes, so it's only kept briefly.
 _LISTING_TTL = 3600.0
+_LISTING_TTL_TODAY = 300.0
 _listing_cache: dict[str, tuple[float, str]] = {}
 
 
-async def _cached_listing(client: httpx.AsyncClient, url: str) -> str:
+async def _cached_listing(client: httpx.AsyncClient, url: str, ttl: float = _LISTING_TTL) -> str:
     now = time.monotonic()
     hit = _listing_cache.get(url)
     if hit and hit[0] > now:
@@ -168,7 +159,7 @@ async def _cached_listing(client: httpx.AsyncClient, url: str) -> str:
     text = await _listing(client, url)
     if len(_listing_cache) > 32:  # crude bound; these are large
         _listing_cache.clear()
-    _listing_cache[url] = (now + _LISTING_TTL, text)
+    _listing_cache[url] = (now + ttl, text)
     return text
 
 
@@ -241,7 +232,7 @@ def _cache_busted(url: str, ts: datetime) -> str:
 
 
 def _browse_dir_url(dt: datetime) -> str:
-    return _SDO_BROWSE_DIR.format(y=dt.year, m=dt.month, d=dt.day)
+    return SDO_BROWSE_DIR.format(d=dt)
 
 
 def _resolve_browse_frame(
@@ -328,10 +319,13 @@ async def _historical_images(
     with its actual time.
     """
     dir_url = _browse_dir_url(ref)
+    is_today = ref.date() == datetime.now(timezone.utc).date()
     listing = ""
     if not with_events:
         try:
-            listing = await _cached_listing(client, dir_url)
+            listing = await _cached_listing(
+                client, dir_url, _LISTING_TTL_TODAY if is_today else _LISTING_TTL
+            )
         except Exception:
             listing = ""  # listing unavailable -> Helioviewer fallback below
 
@@ -367,30 +361,46 @@ async def _historical_images(
     return images
 
 
+async def _latest_images(
+    client: httpx.AsyncClient, ref: datetime, with_events: bool
+) -> list[SolarArchiveImage]:
+    """Latest view: fresh near-real-time frame for the display, newest available
+    *science* frame (Helioviewer/JSOC lag real time) for downloads. An SDO channel
+    with no live frame shows Helioviewer's newest science frame instead."""
+    sci_times, sdo, lasco_times = await asyncio.gather(
+        asyncio.gather(*[_closest_time(client, s, _frame_iso(ref)) for s in CATALOG]),
+        latest_sdo_frames(client),
+        asyncio.gather(*[_browse_time(client, url) for url in _LASCO_LATEST.values()]),
+    )
+    live: dict[str, tuple[str, datetime]] = {
+        key: (url, t) for (key, url), t in zip(_LASCO_LATEST.items(), lasco_times)
+    }
+    for key, code in _BROWSE_CODE.items():
+        if frame := sdo.get(code):
+            live[key] = (frame.full_url, frame.time)
+
+    images: list[SolarArchiveImage] = []
+    for src, sci_t in zip(CATALOG, sci_times):
+        sci = sci_t or ref
+        if src.id in live:
+            url, t = live[src.id]
+            images.append(_archive_image(src, t, _cache_busted(url, t), sci, with_events))
+        else:
+            images.append(
+                _archive_image(
+                    src, sci_t, screenshot_url(src, _frame_iso(sci), with_events), sci, with_events
+                )
+            )
+    return images
+
+
 async def get_archive_images(
     d: date, time_hm: str, with_events: bool, latest: bool = False
 ) -> SolarArchiveResponse:
     ref = _reference_instant(d, time_hm, latest)
     async with httpx.AsyncClient(timeout=30) as client:
         if latest:
-            # Latest view: fresh near-real-time browse frame for the display, newest
-            # available *science* frame (Helioviewer/JSOC lag real time) for downloads.
-            sci_times = await asyncio.gather(
-                *[_closest_time(client, s, _frame_iso(ref)) for s in CATALOG]
-            )
-            browse_times = await asyncio.gather(
-                *[_browse_time(client, _BROWSE_URL[s.id]) for s in CATALOG]
-            )
-            images = [
-                _archive_image(
-                    src,
-                    br_t,
-                    _cache_busted(_BROWSE_URL[src.id], br_t or ref),
-                    sci_t or ref,
-                    with_events,
-                )
-                for src, sci_t, br_t in zip(CATALOG, sci_times, browse_times)
-            ]
+            images = await _latest_images(client, ref, with_events)
         else:
             images = await _historical_images(client, ref, with_events)
 

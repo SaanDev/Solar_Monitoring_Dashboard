@@ -1,0 +1,134 @@
+project:
+  name: callisto_trainer_binary_20261001_173813
+paths:
+  raw_dir_candidates:
+  - datasets\binary\20261001_173813
+  manifest_path: datasets\binary\20261001_173813\manifest.csv
+  processed_dir: datasets\binary\20261001_173813\npz
+  checkpoint_dir: outputs\binary_20261001_173813\checkpoints
+  figures_dir: outputs\binary_20261001_173813\figures
+  reports_dir: outputs\binary_20261001_173813\reports
+data:
+  classes:
+    No_Burst: 0
+    Burst: 1
+  target_shape:
+  - 224
+  - 224
+  drop_missing_processed: true
+  assume_processed_complete: true
+  expected_counts: {}
+  strict_expected_counts: false
+  split:
+    train: 0.7
+    val: 0.15
+    test: 0.15
+    seed: 42
+    group_by_event: true
+preprocessing:
+  background_method: plotutil_median_db
+  normalization: db_window
+  db_vmin: -1.0
+  db_vmax: 8.0
+  normalization_clip: 8.0
+  epsilon: 1.0e-06
+  overwrite: false
+  device: auto
+  num_workers: auto
+  save_compressed: false
+crops:
+  context_margin: 0.0
+  min_rows: 1
+  min_cols: 1
+  target_shape:
+  - 224
+  - 224
+augmentation:
+  enabled: true
+  probability: 0.9
+  time_shift_max: 24
+  intensity_scale_min: 0.85
+  intensity_scale_max: 1.15
+  noise_std: 0.05
+  freq_mask_max: 24
+  time_mask_max: 32
+  num_freq_masks: 2
+  num_time_masks: 2
+  mask_value: 0.0
+performance:
+  device: auto
+  mixed_precision: true
+  amp_dtype: float16
+  channels_last: false
+  torch_compile: false
+  cudnn_benchmark: true
+  deterministic: false
+  matmul_precision: high
+model:
+  name: resnet34
+  in_channels: 1
+  dropout: 0.25
+  pretrained: true
+  use_metadata: true
+  station_emb_dim: 8
+  num_classes: 1
+  use_physics: false
+  station_vocab:
+    ALASKA-ANCHORAGE: 1
+    ALASKA-COHOE: 2
+    ALASKA-HAARP: 3
+    ALMATY: 4
+    AUSTRIA-Krumbach: 5
+    AUSTRIA-MICHELBACH: 6
+    AUSTRIA-OE3FLB: 7
+    AUSTRIA-UNIGRAZ: 8
+    Arecibo-Observatory: 9
+    Australia-ASSA: 10
+    BIR: 11
+    BRAZIL: 12
+    Croatia-Visnjan: 13
+    EGYPT-Alexandria: 14
+    EGYPT-SpaceAgency: 15
+    FINLAND-RUISSALO: 16
+    FINLAND-Siuntio: 17
+    Finland-Kempele: 18
+    GERMANY-DLR: 19
+    GLASGOW: 20
+    GREENLAND: 21
+    HUMAIN: 22
+    SRI-Lanka: 23
+    SSRT: 24
+    SWISS-CalU: 25
+    SWISS-HB9SCT: 26
+    SWISS-HEITERSWIL: 27
+    SWISS-IRSOL: 28
+    SWISS-Landschlacht: 29
+    SWISS-PHLWA: 30
+    TAIWAN-NCU: 31
+    TRIEST: 32
+    TURKEY: 33
+    UK-GLASGOW: 34
+    UNAM: 35
+    URUGUAY: 36
+    USA-BOSTON: 37
+    UZBEKISTAN: 38
+training:
+  batch_size: 64
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+  epochs: 100
+  learning_rate: 0.0005
+  weight_decay: 0.0001
+  patience: 0
+  seed: 42
+  label_smoothing: 0.05
+  threshold: 0.5634765625
+  auto_threshold: false
+  threshold_metric: f1
+  monitor: pr_auc
+  scheduler: plateau
+  keep_checkpoints: 3
+  class_balance:
+    strategy: auto_pos_weight

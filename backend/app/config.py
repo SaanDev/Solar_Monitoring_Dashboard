@@ -47,8 +47,8 @@ class Settings(BaseSettings):
     # the first-run backlog and keeps alerting focused on recent activity).
     radio_burst_max_age_hours: int = 3
     # Minimum burst probability for a detection to contribute to an alert/event.
-    # 0 (default) = use the model's own calibrated decision threshold (CCM v2.0:
-    # 0.798), read from its checkpoint. Set a positive value only to deliberately
+    # 0 (default) = use the model's own tuned decision threshold (BnB v1.0:
+    # 0.563), read from its checkpoint. Set a positive value only to deliberately
     # gate *above* that.
     radio_burst_alert_min_probability: float = 0.0
     # Corroboration filter for raising a burst ALERT: a 15-min window only becomes
@@ -70,7 +70,8 @@ class Settings(BaseSettings):
     # (app/services/radio_backfill_service.py).
     radio_burst_backfill_enabled: bool = True
     # How far back the AUTOMATIC catch-up reaches, in days. A day of archive is
-    # ~5k segments (about an hour of CPU scoring with CCM v2.0), so a cold start
+    # ~5k segments (a few minutes of CPU scoring with BnB v1.0 at ~0.07 s each,
+    # plus the downloads, which take longer), so a cold start
     # on a long gap — or a model change, which re-scores the window — is a long
     # job. It is resumable and cancellable, and runs newest day first. Wider gaps
     # can still be filled by hand from the Settings page.
@@ -83,21 +84,23 @@ class Settings(BaseSettings):
     radio_burst_backfill_concurrency: int = 3
 
     # Default model for the automatic scan (and the Burst Detector page's initial
-    # choice). Ids come from app/ml/registry.py; "ccm-2.0.0" is the only one. A
+    # choice). Ids come from app/ml/registry.py; "bnb-1.0.0" is the only one. A
     # model chosen on the Settings page is stored in the database and takes
-    # precedence (app/services/model_settings_service.py). Its region-finder
-    # settings and threshold come from the checkpoint, which was calibrated with
-    # them, so they are deliberately not configurable here.
-    radio_burst_model: str = "ccm-2.0.0"
+    # precedence (app/services/model_settings_service.py). Its threshold comes
+    # from the checkpoint, where it was tuned, so it is deliberately not
+    # configurable here.
+    radio_burst_model: str = "bnb-1.0.0"
 
     # Subdirectories are derived from data_dir (see properties below) so a single
     # DATA_DIR controls all file storage.
     data_dir: str = _DEFAULT_DATA_DIR
 
     noaa_base_url: str = "https://services.swpc.noaa.gov"
-    # NASA DONKI (CME catalog + WSA-ENLIL arrival predictions). The CCMC web
-    # service needs no API key, unlike the api.nasa.gov mirror.
-    donki_base_url: str = "https://kauai.ccmc.gsfc.nasa.gov/DONKI"
+    # NASA DONKI (CME catalog + WSA-ENLIL arrival predictions). CCMC's public
+    # DONKI-API needs no API key; the collector appends /get/CME. It replaced
+    # kauai.ccmc.gsfc.nasa.gov/DONKI/WS on 2026-09-30 (the old host and the
+    # api.nasa.gov mirror now redirect to a CCMC news page).
+    donki_base_url: str = "https://ccmc.gsfc.nasa.gov/DONKI-API"
     # How often to re-fetch the DONKI window (analyses are revised for days),
     # and how far back that window reaches.
     cme_poll_seconds: int = 7200
@@ -128,11 +131,11 @@ class Settings(BaseSettings):
     notify_lookback_hours: int = 48
 
     # ── Native ML inference (burst model) ─────────────────────────────────────
-    # Path to the CCM v2.0 checkpoint. A relative path is resolved from the
+    # Path to the BnB v1.0 checkpoint. A relative path is resolved from the
     # backend package root. It ships in the repo via Git LFS under
     # backend/ml_model/, so a normal `git clone` + `git lfs pull` brings it down
     # automatically — no manual download needed.
-    ml_model_path: str = "ml_model/ccm_v2_0.pt"
+    ml_model_path: str = "ml_model/bnb_v1_0.pt"
     # Optional direct download URL — only a fallback for environments without
     # Git LFS (e.g. a GitHub "Download ZIP" that ships LFS pointer files). Leave
     # empty to rely on the LFS copy.

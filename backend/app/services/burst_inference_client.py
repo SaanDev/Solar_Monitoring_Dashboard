@@ -1,9 +1,9 @@
 """In-process burst model client — replaces the HTTP microservice.
 
 The model runs natively inside the dashboard backend (no separate port 9000
-service). Inference is blocking (region search, feature measurement and PyTorch
-forward passes); it runs in a thread pool via asyncio.to_thread so the event
-loop is never blocked.
+service). Inference is blocking (FITS decoding, normalization and a PyTorch
+forward pass); it runs in a thread pool via asyncio.to_thread so the event loop
+is never blocked.
 
 The rest of the backend (radio_burst_service, burst_predictor_service) calls
 predict_url(), optionally naming which model to score with — see
@@ -33,9 +33,8 @@ async def predict_url(
 ) -> dict[str, Any] | None:
     """Download the .fit.gz at ``url`` and return the in-process prediction.
 
-    ``model_id`` selects the model (None = the active one). The record carries
-    the burst type too, since the model detects and types in one pass. Returns
-    the prediction record dict or None if download or inference failed.
+    ``model_id`` selects the model (None = the active one). Returns the
+    prediction record dict or None if download or inference failed.
     """
     name = filename or Path(url).name or "remote.fit.gz"
     try:

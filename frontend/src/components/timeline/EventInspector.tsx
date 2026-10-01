@@ -18,9 +18,17 @@ import { DstChart } from "@/components/charts/DstChart";
 
 const iso = (ms: number) => new Date(ms).toISOString().slice(0, 19) + "Z";
 
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+function Panel({
+  title,
+  className,
+  children,
+}: {
+  title: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="rounded-lg border border-surface-border bg-surface-card p-3">
+    <div className={clsx("rounded-lg border border-surface-border bg-surface-card p-3", className)}>
       <h4 className="mb-2 text-[10px] uppercase tracking-wider text-slate-500">{title}</h4>
       {children}
     </div>
@@ -279,8 +287,11 @@ export function EventInspector({
 
       {/* instrument panels */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-        <Panel title="GOES X-ray Flux">
-          <div className="h-56">
+        {/* Shares a row with the spectrogram, whose image sets the row height:
+            fill it instead of leaving a gap under a fixed-height chart. h-56 is
+            the floor (stacked on narrow screens, or no spectrogram to load). */}
+        <Panel title="GOES X-ray Flux" className="flex flex-col">
+          <div className="min-h-56 flex-1">
             <GoesXrsChart data={xrs?.data ?? []} loading={xrsLoading} />
           </div>
         </Panel>

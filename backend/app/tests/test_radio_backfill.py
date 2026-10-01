@@ -25,7 +25,7 @@ from app.services import radio_backfill_service as bf
 # Enough stations, confident enough, to clear the corroboration filter.
 _STATIONS = ["SRI-Lanka", "HUMAIN", "GLASGOW", "BIR"]
 # The active model, which the coverage ledger is kept per.
-_MODEL = "ccm-2.0.0"
+_MODEL = "bnb-1.0.0"
 _GAP_DAY = datetime(2026, 6, 15, tzinfo=timezone.utc).date()
 
 
@@ -71,9 +71,6 @@ def _mock_inference(monkeypatch, probability: float = 0.95, scored=None):
             "predicted_label": "Burst",
             "alert_level": "High-confidence burst",
             "model_id": model_id or _MODEL,
-            "burst_type": "Type III",
-            "type_confidence": 0.8,
-            "type_model_id": model_id or _MODEL,
         }
 
     import app.services.burst_inference_client as client_mod
@@ -120,7 +117,7 @@ async def test_plan_reopens_days_finished_by_another_model(db_session):
     today = datetime.now(timezone.utc).date()
     await upsert_day(db_session, today - timedelta(days=1), state=STATE_DONE, model_id=_MODEL)
     await upsert_day(
-        db_session, today - timedelta(days=2), state=STATE_DONE, model_id="ccm-1.1.0"
+        db_session, today - timedelta(days=2), state=STATE_DONE, model_id="ccm-2.0.1"
     )
 
     days = await bf.plan_days(db_session, today - timedelta(days=2), today)

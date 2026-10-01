@@ -1,13 +1,12 @@
 """Registry of the burst models the dashboard can run.
 
-One model ships: **CCM v2.0**, a unified region model trained in the CALLISTO
-Trainer. It detects *and* types bursts in one pass: candidate regions are located
-in the spectrum and each is classified as background, interference (RFI) or a
-burst type. The model's own classes split Type III into single bursts (Type III)
-and groups (Type IIIG); the dashboard reports both as **Type III**.
+One model ships: **BnB v1.0**, a whole-file burst / no-burst classifier trained
+in the CALLISTO Trainer. It answers one question per segment — is there a burst
+in it — and does not name the burst's type.
 
-It replaced the earlier CCM v1.0.0 / v1.1.0 binary classifiers and the separate
-CCMT v1.0.0 type model. Their ids live on only in :data:`RETIRED_MODELS`, because
+It replaced CCM v2.0 / v2.0.1, a unified region model that also typed bursts,
+and before it the CCM v1.0.0 / v1.1.0 binary classifiers and the separate CCMT
+v1.0.0 type model. Their ids live on only in :data:`RETIRED_MODELS`, because
 detections they stored stay in the database until the backfill re-scores them,
 and each such row must still be judged by the threshold of the model that made
 it.
@@ -24,8 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-# "unified": one model that both detects and types bursts, over regions.
-ModelKind = Literal["unified"]
+# "binary": whole-file burst / no-burst, no burst type.
+ModelKind = Literal["binary"]
 
 
 class UnknownModelError(ValueError):
@@ -43,8 +42,7 @@ class ModelSpec:
     # Attribute on ``Settings`` holding an optional direct download URL.
     url_setting: str
     description: str
-    # The burst types the dashboard reports (after folding Type IIIG into
-    # Type III). The model's own class list is read from its checkpoint.
+    # The burst types the model reports; empty for a model that does not type.
     classes: tuple[str, ...] = ()
     # Published evaluation numbers, surfaced in the UI so the choice is informed.
     metrics: dict[str, Any] = field(default_factory=dict)
@@ -54,42 +52,48 @@ class ModelSpec:
         return self.id.rsplit("-", 1)[-1]
 
 
-CCM_V200 = ModelSpec(
-    id="ccm-2.0.0",
-    name="CCM v2.0",
-    full_name="CALLISTO Classifier Model v2.0",
-    kind="unified",
+BNB_V100 = ModelSpec(
+    id="bnb-1.0.0",
+    name="BnB v1.0",
+    full_name="Burst / No-Burst classifier v1.0",
+    kind="binary",
     path_setting="ml_model_path",
     url_setting="ml_model_url",
     description=(
-        "Unified burst detector and type classifier. Finds bright regions, then "
-        "one ResNet-18 over three views of each (crop, wide context, quiet "
-        "background) plus 28 measured drift and interference features calls it "
-        "background, RFI or a burst type. Its threshold is calibrated to flag at "
-        "most 5% of quiet files."
+        "Whole-file burst / no-burst classifier. A ResNet-34 reads the whole "
+        "15-minute spectrum, and a small metadata branch adds the station, "
+        "frequency range and date. It says whether a segment holds a burst, not "
+        "which type."
     ),
-    classes=("Type II", "Type III", "Other"),
     metrics={
-        # Calibrated on the validation files for a <=5% false-alarm rate; the
-        # loader reads the same value from the checkpoint and warns on mismatch.
-        "threshold": 0.7975836745463312,
-        # Region-level, validation split.
-        "val_accuracy": 0.9679,
-        "val_macro_f1": 0.8390,
-        "val_detection_auc": 0.9997,
-        # File-level at the calibrated threshold, validation files.
-        "val_false_alarm_rate": 0.0470,
-        "val_burst_recall": 0.6565,
+        # Tuned on the validation split; the loader reads the same value from
+        # the checkpoint and warns on mismatch.
+        "threshold": 0.5634765625,
+        # File-level at the threshold, validation split (535 files, 198 bursts).
+        "val_precision": 0.9471,
+        "val_recall": 0.9040,
+        "val_f1": 0.9251,
+        "val_false_alarm_rate": 0.0297,
+        # Share of held-out files flagged in the Trainer's NO_BURST folder (~96%
+        # quiet by hand labels), none of them seen in training: 1,410 files from
+        # 11 trained stations and 1,623 from 36 others. The extra on unseen
+        # stations comes from a few cluttered ones (INDIA-OOTY, MRO, MEXART, ...);
+        # without them they flag 6.3%. The station input itself moves a file's
+        # probability by ~0.01, so an unseen station's untrained slot is harmless.
+        "heldout_quiet_flagged_trained_stations": 0.073,
+        "heldout_quiet_flagged_other_stations": 0.132,
     },
 )
 
-_SPECS: dict[str, ModelSpec] = {spec.id: spec for spec in (CCM_V200,)}
+_SPECS: dict[str, ModelSpec] = {spec.id: spec for spec in (BNB_V100,)}
 
 # Models that used to ship: id -> (name, decision threshold). Kept so detections
 # they stored are still gated and labelled correctly until re-scored.
 RETIRED_MODELS: dict[str, tuple[str, float]] = {
     "ccm-1.0.0": ("CCM v1.0.0", 0.595),
     "ccm-1.1.0": ("CCM v1.1.0", 0.51),
+    "ccm-2.0.0": ("CCM v2.0", 0.7975836745463312),
+    "ccm-2.0.1": ("CCM v2.0.1", 0.7975836745463312),
 }
 
 
@@ -161,7 +165,7 @@ def resolve_model(model_id: str | None = None) -> ModelSpec:
     Precedence is explicit argument > Settings-page selection > env default.
 
     A configured default that is somehow invalid (a typo, or a retired model's
-    id left in an old .env) falls back to CCM v2.0 rather than breaking every
+    id left in an old .env) falls back to BnB v1.0 rather than breaking every
     scan.
     """
     if model_id:
@@ -175,7 +179,7 @@ def resolve_model(model_id: str | None = None) -> ModelSpec:
     try:
         return get_spec((settings.radio_burst_model or "").strip())
     except UnknownModelError:
-        return CCM_V200
+        return BNB_V100
 
 
 # ── Checkpoint location ───────────────────────────────────────────────────────
@@ -216,7 +220,7 @@ def is_available(spec: ModelSpec) -> bool:
 def alert_min_probability(spec: ModelSpec) -> float:
     """Minimum probability for a detection to contribute to an alert/event.
 
-    The model's own calibrated threshold, unless
+    The model's own tuned threshold, unless
     ``RADIO_BURST_ALERT_MIN_PROBABILITY`` explicitly overrides it to gate higher.
     """
     from app.config import settings
@@ -232,8 +236,9 @@ def alert_min_probability_for(model_id: str | None) -> float:
     """:func:`alert_min_probability` for whichever model stored a detection row.
 
     A retired model's rows are gated by that model's own threshold — one
-    threshold for every row would drop, say, CCM v1.1.0's detections between its
-    0.51 and CCM v2.0's 0.80. An empty or unknown id means the active model.
+    threshold for every row would count CCM v2.0's 0.6 burst evidence (under its
+    0.80) as a burst by BnB v1.0's 0.56. An empty or unknown id means the active
+    model.
     """
     if model_id in RETIRED_MODELS:
         from app.config import settings

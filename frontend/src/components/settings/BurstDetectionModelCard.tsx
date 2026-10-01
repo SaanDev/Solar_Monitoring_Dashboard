@@ -11,9 +11,9 @@ import { EmptyState } from "@/components/ui/EmptyState";
 
 /** Metrics worth showing per model, in the order they read best. */
 const METRIC_LABELS: [key: string, label: string][] = [
-  ["val_macro_f1", "val macro-F1"],
-  ["val_burst_recall", "burst-file recall"],
-  ["val_false_alarm_rate", "false alarms"],
+  ["val_precision", "val precision"],
+  ["val_recall", "val recall"],
+  ["val_false_alarm_rate", "val false alarms"],
 ];
 
 function metricSummary(model: ModelInfo): string {
@@ -94,8 +94,8 @@ export function BurstDetectionModelCard() {
     <section className="rounded-lg border border-surface-border bg-surface-card p-5">
       <h2 className="text-sm font-semibold text-slate-200">Automatic Burst Detection</h2>
       <p className="mt-1 text-xs text-slate-500">
-        The model the background scan runs over new e-CALLISTO data to detect and
-        type radio bursts and raise alerts. Applies to every viewer, not just this
+        The model the background scan runs over new e-CALLISTO data to detect
+        radio bursts and raise alerts. Applies to every viewer, not just this
         browser.
       </p>
 
@@ -158,7 +158,7 @@ export function BurstDetectionModelCard() {
 
       <p className="mt-3 text-[11px] text-slate-600">
         {choosable
-          ? "A change takes effect on the next scan: the last few hours are re-scored with the new model and the burst alerts rebuilt from that, and the catch-up then re-scores older days in the background. Each model alerts on its own calibrated threshold. The Burst Detector page’s per-run picker is unaffected."
+          ? "A change takes effect on the next scan: the last few hours are re-scored with the new model and the burst alerts rebuilt from that, and the catch-up then re-scores older days in the background. Each model alerts on its own decision threshold. The Burst Detector page’s per-run picker is unaffected."
           : "Detections a retired model stored are re-scored with this one by the background catch-up, newest day first; until then each is judged by its own model’s threshold."}
         {choosable &&
           data.default_model_source === "config" &&

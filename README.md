@@ -29,9 +29,9 @@ A web-based dashboard for monitoring and analyzing space-weather parameters, wit
 - Python 3.11+
 - Node.js 20+
 - Docker + Docker Compose
-- [Git LFS](https://git-lfs.com) — the radio-burst ML checkpoint (~43 MB) is
+- [Git LFS](https://git-lfs.com) — the radio-burst ML checkpoint (~81 MB) is
   stored in the repo via LFS. Install it **before** cloning (or run
-  `git lfs install && git lfs pull` after) so `backend/ml_model/ccm_v2_0.pt` is
+  `git lfs install && git lfs pull` after) so `backend/ml_model/bnb_v1_0.pt` is
   fetched as the real file rather than a pointer.
 
 ### 1. Environment
@@ -74,12 +74,16 @@ microservice. One checkpoint ships in the repo via Git LFS:
 
 | Model | File | Task | Notes |
 |---|---|---|---|
-| **CCM v2.0** | `backend/ml_model/ccm_v2_0.pt` | burst detection **and** type | Unified region model: No_Burst / RFI / Type II / Type III / Type IIIG / Other. Calibrated threshold 0.798 (≈5% of quiet files flagged, ≈66% of burst files found on validation); validation region accuracy 0.968, macro-F1 0.839. |
+| **BnB v1.0** | `backend/ml_model/bnb_v1_0.pt` | burst / no-burst | Whole-file ResNet-34 with a station / frequency / date metadata branch. Threshold 0.563, tuned on the validation split: precision 0.947, recall 0.904, 3.0% of quiet files flagged. Does not type bursts. |
 
-It replaced CCM v1.0.0 / v1.1.0 (binary burst / no-burst) and CCMT v1.0.0 (burst
-type). The exported bundle it came from — model card, training config and a
-standalone `predict.py` — is kept alongside in `backend/ml_model/ccm_v2_0/`
-(its full-size weights are git-ignored).
+It replaced CCM v2.0 (a region model that also typed bursts), which is set aside
+until it is retrained, and before it CCM v1.0.0 / v1.1.0 and CCMT v1.0.0. The
+exported bundle BnB v1.0 came from — model card, training config and a standalone
+`predict.py` — is kept alongside in `backend/ml_model/bnb-v1.0/` (its full-size
+weights are git-ignored; `checkpoint.pt` is over GitHub's 100 MB limit, so
+`scripts/repack_model.py` slims it to the file the backend loads). Note that the
+bundle's `predict.py` does not pass the metadata input this model needs, so it
+fails as exported; the backend builds that input itself.
 
 ```bash
 # One-time per machine, then fetch the checkpoint:
@@ -91,18 +95,23 @@ cd backend
 pip install -e ".[ml]"
 ```
 
-The model works on regions, as it was trained: each segment is normalized as a
-whole, bright candidate regions are located, and every region is scored from
-three 224×224 views (the region, a wide full-band strip around it, and that strip
-on a quiet-part background) plus 28 measured drift and interference features. A
-region is a burst when its burst evidence — one minus P(No_Burst) minus P(RFI) —
-reaches the calibrated threshold; a segment is a burst when any region is, and
-takes the type of its largest burst region. **Type IIIG (a group of Type III
-bursts) is reported as Type III**: the two probabilities are added before the
-type is chosen. The region finder's settings, the threshold and the
-type-frequency correction all come from the checkpoint, which was calibrated with
-them. The port in `backend/app/ml/` reproduces the CALLISTO Trainer's
-`CascadePredictor` bit for bit (`app/tests/test_ml_unified.py` pins golden values).
+The model scores whole segments, as it was trained: each segment's spectrum is
+cleaned, each channel's median over the whole file is subtracted as background,
+the result is scaled to Plotutil dB, windowed to [-1, 8] dB and resized to
+224×224. A metadata vector — the station's index among the 38 trained stations
+(0 for any other), the frequency range and the date — joins the image features
+before one burst probability; the segment is a burst when it reaches the
+threshold stored in the checkpoint. Burst types are not reported: the type fields
+stay empty, and the UI shows type information only for rows a typing model
+stored. The port in `backend/app/ml/` matches the CALLISTO Trainer on synthetic
+golden files (`app/tests/bnb_cases.py`) and on real files.
+
+On held-out files the model was never trained on, stations outside its 38 find
+bursts as well as trained ones but flag more quiet files (13% against 7%), almost
+all from a few cluttered stations (INDIA-OOTY, MRO, MEXART, ...). The station
+input itself barely matters (about 0.01 on the probability), so those stations
+are scored as the Trainer would; the 4-station corroboration rule keeps their
+false alarms out of the alerts.
 
 `GET /api/radio/models` lists what is available and `PUT /api/radio/models/default`
 sets the scan's model (Settings → Automatic Burst Detection, stored in the
@@ -121,7 +130,7 @@ Settings → Detection Coverage, which also shows per-day coverage and lets a ru
 be aimed at an older range. Runs are resumable and cancellable, and filled-in
 events never send notifications. Coverage is kept *per model*, so a model change
 re-scores the whole automatic window with the new model, newest day first — about
-an hour of CPU per archive day with CCM v2.0 — see
+a few minutes of CPU per archive day with BnB v1.0, plus the downloads — see
 [`app/services/radio_backfill_service.py`](backend/app/services/radio_backfill_service.py).
 
 On Apple Silicon Macs, PyTorch automatically uses the MPS backend. Models are

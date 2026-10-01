@@ -40,22 +40,22 @@ class RadioBurstDetection(Base):
         UTCDateTime(), nullable=True
     )
     focus: Mapped[str] = mapped_column(String(8), nullable=False, default="")
-    # Burst probability in [0, 1] — for CCM v2.0 the strongest region's burst
-    # evidence — and the model's verdict at its calibrated threshold.
+    # Burst probability in [0, 1] and the model's verdict at its decision
+    # threshold.
     probability: Mapped[float] = mapped_column(Float, nullable=False)
     predicted_label: Mapped[str] = mapped_column(String(16), nullable=False)
     # Human-facing band: "High-confidence burst" | "Likely burst" | ...
     alert_level: Mapped[str] = mapped_column(String(32), nullable=False, default="")
-    # Which model produced this verdict, e.g. "ccm-2.0.0". Rows that predate
+    # Which model produced this verdict, e.g. "bnb-1.0.0". Rows that predate
     # model selection are all CCM v1.0.0 (the migration's default); rows from
     # retired models are re-scored by the backfill (app/ml/registry.py).
     model_id: Mapped[str] = mapped_column(
         String(32), nullable=False, default="ccm-1.0.0", index=True
     )
-    # Burst type of the file's largest burst region: "Type II" | "Type III" |
-    # "Other" (CCM v2.0's Type IIIG is reported as Type III). Null when the file
-    # is not a burst. ``type_model_id`` is the model that assigned it — the same
-    # model as ``model_id`` since CCM v2.0 detects and types in one pass.
+    # Burst type: "Type II" | "Type III" | "Other", from a model that types
+    # bursts. Null when the file is not a burst or the model does not type —
+    # BnB v1.0 never does; rows the retired CCM v2.0 stored keep their types
+    # until re-scored. ``type_model_id`` is the model that assigned it.
     burst_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
     type_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     type_model_id: Mapped[str | None] = mapped_column(String(32), nullable=True)

@@ -48,8 +48,8 @@ scratch. Only paths and metadata go in Postgres. A platform with an ephemeral
 filesystem loses all of it on every deploy.
 
 **Real memory and disk.** The backend image carries the SunPy/Astropy/reproject
-scientific stack, ffmpeg, PyTorch (CPU), and ~214 MB of model checkpoints in
-[`backend/ml_model/`](../backend/ml_model) — call it 3–5 GB built. ResNet-18
+scientific stack, ffmpeg, PyTorch (CPU), and an ~81 MB model checkpoint in
+[`backend/ml_model/`](../backend/ml_model) — call it 3–5 GB built. ResNet-34
 inference on CPU plus Postgres, Redis, and Next.js alongside it means 8 GB RAM is
 comfortable and 4 GB is tight.
 

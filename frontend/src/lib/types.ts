@@ -467,11 +467,11 @@ export interface BurstCandidate {
 // ─── Burst model registry (selectable models) ────────────────────────────────
 
 export interface ModelInfo {
-  id: string; // "ccm-2.0.0"
-  name: string; // "CCM v2.0"
+  id: string; // "bnb-1.0.0"
+  name: string; // "BnB v1.0"
   full_name: string;
-  /** "unified": detects bursts and types them in one pass. */
-  kind: "unified";
+  /** "binary": burst / no burst for a whole segment, without a type. */
+  kind: "binary";
   version: string;
   description: string;
   /** False when the checkpoint is missing or an unpulled Git LFS pointer. */
@@ -739,8 +739,8 @@ export interface SpaceWeatherEvent {
   description: string;
   /** Observing stations for station-based events (radio bursts); empty otherwise. */
   stations: string[];
-  /** Radio bursts only: "Type II" | "Type III" | "Other" from the burst model.
-   * Null for bursts stored without a type by the earlier models. */
+  /** Radio bursts only: "Type II" | "Type III" | "Other" from a burst model
+   * that types bursts. Null when it does not — BnB v1.0 never types. */
   burst_type?: string | null;
   related_event_ids: string[];
   source_url: string | null;

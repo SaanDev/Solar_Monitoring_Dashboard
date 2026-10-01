@@ -1,6 +1,6 @@
-"""The CCM v2.0 network: one backbone over several views, fused with region features.
+"""The BnB v1.0 network: a ResNet over the whole file, fused with file metadata.
 
-Ported from the CALLISTO Trainer (``core/models/physics_model.py`` and the
+Ported from the CALLISTO Trainer (``core/models/metadata_model.py`` and the
 backbone half of ``core/models/model_factory.py``). Only the architecture the
 shipped checkpoint uses is rebuilt here; weights always come from its state
 dict, so nothing is downloaded.
@@ -14,56 +14,58 @@ from typing import Any
 import torch
 from torch import nn
 
+_RESNETS = ("resnet18", "resnet34", "resnet50")
 
-class RegionContextModel(nn.Module):
-    """One shared backbone embeds each view; embeddings meet the feature MLP.
 
-    The views (exact crop, wide context strip, quiet-background strip) are not
-    pixel-aligned, so they are embedded one at a time by the same backbone rather
-    than stacked as input channels. The input stays a single ``[B, V, H, W]``
-    tensor.
+class MetadataConditionedModel(nn.Module):
+    """Image backbone fused with station / frequency / date metadata.
+
+    The station is embedded, concatenated with the numeric features and passed
+    through a small MLP; the result joins the image features before a single
+    burst logit.
     """
 
     def __init__(
         self,
         backbone: nn.Module,
         feature_dim: int,
-        num_views: int,
-        num_features: int,
-        num_classes: int,
-        hidden: int = 64,
+        num_stations: int,
+        num_numeric: int,
+        station_emb_dim: int = 8,
+        meta_hidden: int = 32,
         dropout: float = 0.25,
     ) -> None:
         super().__init__()
         self.backbone = backbone
         self.feature_dim = int(feature_dim)
-        self.num_views = int(num_views)
-        self.num_features = int(num_features)
-        self.num_classes = int(num_classes)
+        self.num_stations = int(num_stations)
+        self.num_numeric = int(num_numeric)
 
-        self.feature_mlp = nn.Sequential(
-            nn.Linear(self.num_features, hidden),
+        self.station_embedding = nn.Embedding(self.num_stations, int(station_emb_dim))
+        self.meta_mlp = nn.Sequential(
+            nn.Linear(int(station_emb_dim) + self.num_numeric, meta_hidden),
             nn.ReLU(inplace=True),
-            nn.Linear(hidden, hidden),
+            nn.Linear(meta_hidden, meta_hidden),
             nn.ReLU(inplace=True),
         )
         self.classifier = nn.Sequential(
             nn.Dropout(dropout),
-            nn.Linear(self.feature_dim * self.num_views + hidden, self.num_classes),
+            nn.Linear(self.feature_dim + meta_hidden, 1),
         )
 
-    def forward(self, image: torch.Tensor, features: torch.Tensor) -> torch.Tensor:
-        batch = image.shape[0]
-        views = image.reshape(batch * self.num_views, 1, image.shape[-2], image.shape[-1])
-        embedded = self.backbone(views)
-        if embedded.dim() > 2:
-            embedded = torch.flatten(embedded, 1)
-        embedded = embedded.reshape(batch, self.num_views * self.feature_dim)
-        return self.classifier(torch.cat([embedded, self.feature_mlp(features)], dim=1))
+    def forward(self, image: torch.Tensor, meta: torch.Tensor) -> torch.Tensor:
+        features = self.backbone(image)
+        if features.dim() > 2:
+            features = torch.flatten(features, 1)
+        # meta is float32 [B, 1 + num_numeric]: column 0 is the station index.
+        station = meta[:, 0].long().clamp_(0, self.num_stations - 1)
+        numeric = meta[:, 1 : 1 + self.num_numeric]
+        meta_features = self.meta_mlp(torch.cat([self.station_embedding(station), numeric], dim=1))
+        return self.classifier(torch.cat([features, meta_features], dim=1)).squeeze(1)
 
 
-def _resnet18_backbone(in_channels: int) -> tuple[nn.Module, int]:
-    """ResNet-18 feature extractor (head removed) with an ``in_channels`` stem."""
+def _resnet_backbone(name: str, in_channels: int) -> tuple[nn.Module, int]:
+    """ResNet feature extractor (head removed) with an ``in_channels`` stem."""
     try:
         import torchvision.models as tv
     except ImportError as exc:
@@ -71,7 +73,7 @@ def _resnet18_backbone(in_channels: int) -> tuple[nn.Module, int]:
             "torchvision is required for the burst model. Install with: pip install -e '.[ml]'"
         ) from exc
 
-    model = tv.resnet18(weights=None)
+    model = getattr(tv, name)(weights=None)
     old = model.conv1
     model.conv1 = nn.Conv2d(
         in_channels, old.out_channels, kernel_size=old.kernel_size, stride=old.stride,
@@ -83,17 +85,20 @@ def _resnet18_backbone(in_channels: int) -> tuple[nn.Module, int]:
     return model, feature_dim
 
 
-def build_model(model_cfg: dict[str, Any], num_classes: int, num_features: int) -> nn.Module:
+def build_model(model_cfg: dict[str, Any], num_numeric: int) -> nn.Module:
     """Rebuild the architecture a checkpoint's ``model`` config describes."""
     name = str(model_cfg.get("name", "")).lower().replace("-", "_")
-    if name != "resnet18":
-        raise ValueError(f"unsupported backbone {model_cfg.get('name')!r} (expected resnet18)")
-    backbone, feature_dim = _resnet18_backbone(int(model_cfg.get("in_channels", 1)))
-    return RegionContextModel(
+    if name not in _RESNETS:
+        raise ValueError(f"unsupported backbone {model_cfg.get('name')!r} (expected one of {_RESNETS})")
+    if not model_cfg.get("use_metadata"):
+        raise ValueError("expected a metadata-conditioned binary model (model.use_metadata)")
+    backbone, feature_dim = _resnet_backbone(name, int(model_cfg.get("in_channels", 1)))
+    return MetadataConditionedModel(
         backbone,
         feature_dim=feature_dim,
-        num_views=len(model_cfg.get("views") or ["crop"]),
-        num_features=num_features,
-        num_classes=num_classes,
+        # The known stations plus the unknown slot (0).
+        num_stations=len(model_cfg.get("station_vocab") or {}) + 1,
+        num_numeric=num_numeric,
+        station_emb_dim=int(model_cfg.get("station_emb_dim", 8)),
         dropout=float(model_cfg.get("dropout", 0.25)),
     )

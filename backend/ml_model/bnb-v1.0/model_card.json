@@ -1,0 +1,127 @@
+{
+  "bundle_format_version": 1,
+  "exported_at": "2026-10-01T21:45:33",
+  "exported_by": "CALLISTO Trainer 0.1.0",
+  "task": "binary",
+  "source_checkpoint": "outputs\\binary_20261001_173813\\checkpoints\\best.pt",
+  "trained_epoch": 22,
+  "architecture": {
+    "name": "resnet34",
+    "in_channels": 1,
+    "num_classes": 1,
+    "uses_metadata": true,
+    "station_vocab_size": 38,
+    "uses_physics": false,
+    "views": [
+      "crop"
+    ]
+  },
+  "classes": [
+    "No_Burst",
+    "Burst"
+  ],
+  "input": {
+    "shape": [
+      1,
+      224,
+      224
+    ],
+    "views": [
+      "crop"
+    ],
+    "dtype": "float32",
+    "value_range": [
+      0.0,
+      1.0
+    ],
+    "unit": "normalized dB above per-frequency background"
+  },
+  "preprocessing": {
+    "orientation": "[frequency, time]; row 0 is the FIRST FITS row (normally the highest frequency)",
+    "steps": [
+      "replace NaN/Inf with the finite median",
+      "subtract per-frequency median over time, scale to dB (plotutil_median_db)",
+      "map [-1.0, 8.0] dB to [0, 1] and clip",
+      "bilinear resize to the input shape"
+    ],
+    "background_method": "plotutil_median_db",
+    "normalization": "db_window",
+    "db_vmin": -1.0,
+    "db_vmax": 8.0,
+    "critical_note": "Background subtraction MUST be computed over the whole file's time axis before any cropping. Cropping first makes a burst its own background and erases it."
+  },
+  "metrics": {
+    "train": {
+      "accuracy": 0.9344855305466238,
+      "precision": 0.9171151776103337,
+      "recall": 0.908315565031983,
+      "f1": 0.9126941617568292,
+      "roc_auc": 0.977830318453814,
+      "pr_auc": 0.9730434202909234,
+      "false_positive_rate": 0.04967741935483871,
+      "false_negative_rate": 0.09168443496801706,
+      "tn": 1473,
+      "fp": 77,
+      "fn": 86,
+      "tp": 852,
+      "threshold": 0.5,
+      "specificity": 0.9503225806451613,
+      "balanced_accuracy": 0.9293190728385721,
+      "loss": 0.3283694104749673
+    },
+    "val": {
+      "accuracy": 0.9457943925233645,
+      "precision": 0.9470899470899471,
+      "recall": 0.9040404040404041,
+      "f1": 0.9250645994832042,
+      "roc_auc": 0.9770404340137278,
+      "pr_auc": 0.9732838637328075,
+      "false_positive_rate": 0.02967359050445104,
+      "false_negative_rate": 0.09595959595959595,
+      "tn": 327,
+      "fp": 10,
+      "fn": 19,
+      "tp": 179,
+      "threshold": 0.5634765625,
+      "specificity": 0.9703264094955489,
+      "balanced_accuracy": 0.9371834067679765,
+      "loss": 0.32876606878833237,
+      "default_threshold": 0.5
+    },
+    "decision_threshold": 0.5634765625
+  },
+  "scope": {
+    "operates_on": "a whole-file spectrum"
+  },
+  "output": {
+    "head": "sigmoid",
+    "decision_threshold": 0.5634765625,
+    "interpretation": "probability >= decision_threshold means Burst. The threshold was tuned on the validation split; do not assume 0.5."
+  },
+  "metadata_features": {
+    "order": [
+      "station_index",
+      "freq_min",
+      "freq_max",
+      "freq_span",
+      "doy_sin",
+      "doy_cos",
+      "year"
+    ],
+    "note": "frequency features are MHz/1000; station_index 0 means unknown"
+  },
+  "training_data": {
+    "snapshot": "binary",
+    "samples": 3562,
+    "class_counts": {
+      "No_Burst": 2226,
+      "Burst": 1336
+    },
+    "split_counts": {
+      "train": 2488,
+      "val": 535,
+      "test": 539
+    },
+    "event_leakage": 0
+  }
+}

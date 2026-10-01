@@ -5,7 +5,7 @@ background scanner in this process, survive a restart, and refuse a model that
 cannot actually run — a silently broken selection would stop burst alerts
 entirely, which is the one failure mode a model picker must not introduce.
 
-Only CCM v2.0 ships, so a stand-in second model is registered here to exercise
+Only BnB v1.0 ships, so a stand-in second model is registered here to exercise
 switching. Inference is never touched (no checkpoint is loaded); availability is
 stubbed so the tests pass with or without the Git LFS checkpoint present.
 """
@@ -20,8 +20,8 @@ from app.ml import registry
 from app.repositories.app_settings_repo import get_or_create_settings, save_settings
 from app.services import model_settings_service as mss
 
-_SHIPPED = "ccm-2.0.0"
-_OTHER = "ccm-9.0.0"
+_SHIPPED = "bnb-1.0.0"
+_OTHER = "bnb-9.0.0"
 
 
 @pytest.fixture
@@ -46,7 +46,7 @@ def isolated_selection(monkeypatch):
 @pytest.fixture(autouse=True)
 def second_model(monkeypatch):
     other = replace(
-        registry.CCM_V200, id=_OTHER, name="CCM v9.0", metrics={"threshold": 0.6}
+        registry.BNB_V100, id=_OTHER, name="BnB v9.0", metrics={"threshold": 0.6}
     )
     monkeypatch.setitem(registry._SPECS, _OTHER, other)
     monkeypatch.setattr(registry, "is_available", lambda spec: True)
@@ -73,7 +73,7 @@ def test_selection_overrides_the_configured_default():
 
 
 def test_an_invalid_selection_is_rejected_rather_than_applied():
-    for bad in ("ccm-9.9.9", "ccm-1.1.0", "ccmt-1.0.0"):
+    for bad in ("bnb-9.9.9", "ccm-2.0.1", "ccmt-1.0.0"):
         with pytest.raises(registry.UnknownModelError):
             registry.set_model_selection(bad)
         assert registry.model_selection() is None
@@ -112,7 +112,7 @@ async def test_selection_reaches_the_scanner_and_the_database(client, db_session
 
 
 async def test_unknown_and_retired_models_are_refused(client):
-    for bad in ("ccm-9.9.9", "ccm-1.1.0"):
+    for bad in ("bnb-9.9.9", "ccm-2.0.1"):
         r = await client.put("/api/radio/models/default", json={"model_id": bad})
         assert r.status_code == 400
     assert registry.model_selection() is None
@@ -149,8 +149,8 @@ async def test_an_untouched_database_follows_configuration(db_session):
 
 
 async def test_a_retired_saved_model_is_cleared_on_startup(db_session):
-    """An install that had picked CCM v1.1.0 moves to CCM v2.0 by itself."""
-    await save_settings(db_session, {"radio_burst_binary_model": "ccm-1.1.0"})
+    """An install that had picked CCM v2.0.1 moves to BnB v1.0 by itself."""
+    await save_settings(db_session, {"radio_burst_binary_model": "ccm-2.0.1"})
 
     assert await mss.load_saved_model(db_session) is None
     assert registry.model_selection() is None

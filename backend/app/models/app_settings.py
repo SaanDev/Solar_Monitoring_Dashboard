@@ -27,7 +27,7 @@ class AppSettings(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)  # always 1
 
     # Burst model for the automatic scan; "" = use the configured default. Ids
-    # come from app/ml/registry.py ("ccm-2.0.0"). The column keeps the name it
+    # come from app/ml/registry.py ("bnb-1.0.0"). The column keeps the name it
     # had when only binary classifiers existed, to avoid a migration.
     radio_burst_binary_model: Mapped[str] = mapped_column(
         String(64), nullable=False, default=""

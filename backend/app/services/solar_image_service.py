@@ -1,11 +1,13 @@
 """Latest full-disk solar images.
 
-Uses official near-real-time browse images, which are full-disk, fresh
+Uses official near-real-time quick-look images, which are full-disk, fresh
 (~10-15 min cadence) and require no server-side rendering:
-    SDO/AIA, SDO/HMI : https://sdo.gsfc.nasa.gov/assets/img/latest/
+    SDO/AIA, SDO/HMI : newest of SDO's browse feeds / JSOC's HMI quick-looks
+                       (see app.services.sdo_latest)
     GOES/SUVI        : https://services.swpc.noaa.gov/images/animations/suvi/
-Each image's observation time is taken from the HTTP Last-Modified header,
-so the timestamp stays consistent with the displayed frame.
+Each image's timestamp is its observation time — from the frame's filename or
+JSOC's time manifest for SDO, the HTTP Last-Modified header for SUVI — so it
+stays consistent with the displayed frame.
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,8 +17,8 @@ import asyncio
 import httpx
 
 from app.schemas.solar_image_schema import SolarImageResponse
+from app.services.sdo_latest import latest_sdo_frames
 
-_SDO_BASE = "https://sdo.gsfc.nasa.gov/assets/img/latest"
 _SUVI_BASE = "https://services.swpc.noaa.gov/images/animations/suvi/primary"
 
 
@@ -27,20 +29,12 @@ class _Source:
     instrument: str
     wavelength: str       # filter key, e.g. "171", "continuum", "195"
     label: str            # human label, e.g. "AIA 171 Å"
-    thumb_url: str
-    full_url: str
+    sdo_code: str | None = None  # SDO browse code; frame resolved per request
+    url: str | None = None       # fixed-name image (thumb = full), timed by Last-Modified
 
 
 def _sdo(id_: str, instrument: str, wavelength: str, label: str, code: str) -> _Source:
-    return _Source(
-        id=id_,
-        source="SDO",
-        instrument=instrument,
-        wavelength=wavelength,
-        label=label,
-        thumb_url=f"{_SDO_BASE}/latest_512_{code}.jpg",
-        full_url=f"{_SDO_BASE}/latest_2048_{code}.jpg",
-    )
+    return _Source(id_, "SDO", instrument, wavelength, label, sdo_code=code)
 
 
 # Display order matches the dashboard gallery.
@@ -59,8 +53,7 @@ CATALOG: list[_Source] = [
         instrument="SUVI",
         wavelength="195",
         label="SUVI 195 Å",
-        thumb_url=f"{_SUVI_BASE}/195/latest.png",
-        full_url=f"{_SUVI_BASE}/195/latest.png",
+        url=f"{_SUVI_BASE}/195/latest.png",
     ),
 ]
 
@@ -81,22 +74,44 @@ def _with_cache_bust(url: str, ts: datetime) -> str:
     return f"{url}?ts={int(ts.timestamp())}"
 
 
-async def _build(client: httpx.AsyncClient, src: _Source) -> SolarImageResponse:
-    ts = await _observation_time(client, src.thumb_url)
+def _response(src: _Source, ts: datetime, thumb: str, full: str) -> SolarImageResponse:
     return SolarImageResponse(
         id=src.id,
         source=src.source,
         instrument=src.instrument,
         wavelength=src.label,
         timestamp=ts,
-        thumbnail_url=_with_cache_bust(src.thumb_url, ts),
-        full_url=_with_cache_bust(src.full_url, ts),
+        thumbnail_url=_with_cache_bust(thumb, ts),
+        full_url=_with_cache_bust(full, ts),
     )
 
 
-async def get_latest_solar_images() -> list[SolarImageResponse]:
+async def _build_all(sources: list[_Source]) -> list[SolarImageResponse]:
+    """Responses in catalog order. An SDO channel no feed could supply is left out
+    rather than shown as a stale frame stamped with the current time."""
+    fixed = [s for s in sources if s.url]
     async with httpx.AsyncClient() as client:
-        return await asyncio.gather(*(_build(client, s) for s in CATALOG))
+
+        async def sdo_frames():
+            return await latest_sdo_frames(client) if any(s.sdo_code for s in sources) else {}
+
+        sdo, fixed_times = await asyncio.gather(
+            sdo_frames(),
+            asyncio.gather(*(_observation_time(client, s.url) for s in fixed)),
+        )
+    fixed_ts = {s.id: ts for s, ts in zip(fixed, fixed_times)}
+
+    out: list[SolarImageResponse] = []
+    for src in sources:
+        if src.url:
+            out.append(_response(src, fixed_ts[src.id], src.url, src.url))
+        elif frame := sdo.get(src.sdo_code):
+            out.append(_response(src, frame.time, frame.thumb_url, frame.full_url))
+    return out
+
+
+async def get_latest_solar_images() -> list[SolarImageResponse]:
+    return await _build_all(CATALOG)
 
 
 async def get_solar_images(
@@ -109,5 +124,4 @@ async def get_solar_images(
         and (instrument is None or s.instrument.lower() == instrument.lower())
         and (wavelength is None or s.wavelength.lower() == wavelength.lower())
     ]
-    async with httpx.AsyncClient() as client:
-        return await asyncio.gather(*(_build(client, s) for s in matches))
+    return await _build_all(matches)

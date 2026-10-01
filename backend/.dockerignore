@@ -17,5 +17,8 @@ data/
 # Local env / secrets — compose injects env at runtime via env_file
 .env
 
-# NOTE: ml_model/best.pt is intentionally NOT ignored — it is baked into the
-# image so native burst inference works even without the bind-mounted source.
+# NOTE: the slim ml_model/*.pt checkpoint is intentionally NOT ignored — it is
+# baked into the image so native burst inference works even without the
+# bind-mounted source. An exported bundle's full-size weights (~420 MB) are not
+# needed by the backend.
+ml_model/*/*.pt

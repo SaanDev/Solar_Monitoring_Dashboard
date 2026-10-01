@@ -1,11 +1,11 @@
 """Repack a CALLISTO Trainer checkpoint into the slim form the dashboard ships.
 
-A trainer ``best.pt`` is ~134 MB because it also carries optimizer state, epoch
+A trainer ``best.pt`` is ~250 MB because it also carries optimizer state, epoch
 counters and per-epoch metrics. The dashboard loader only ever reads two keys
 (``app/ml/inference.py``: ``checkpoint["config"]`` and
-``checkpoint["model_state"]``), so keeping just those cuts each file to ~45 MB.
-Worth doing, since the checkpoints ship in the repo via Git LFS and git is the
-only sync between machines.
+``checkpoint["model_state"]``), so keeping just those cuts BnB v1.0 to ~85 MB.
+Necessary, not just tidy: the checkpoints ship in the repo via Git LFS, git is
+the only sync between machines, and GitHub refuses files over 100 MB.
 
 This docstring doubles as ``--help`` output, so it stays ASCII: the Windows
 console is cp1252 and raises on characters outside it.
@@ -15,19 +15,19 @@ Usage
 From the repo root, with a Python that has torch installed (the CALLISTO Trainer
 venv does; the dashboard's local venv may not):
 
-    python scripts/repack_model.py --model ccm-2.0.0
+    python scripts/repack_model.py --model bnb-1.0.0
     python scripts/repack_model.py --all
 
 Or point it at an arbitrary checkpoint (an exported bundle's checkpoint.pt works
 too -- it is the trainer's best.pt):
 
     python scripts/repack_model.py \\
-        --source "C:/path/to/outputs/unified_.../checkpoints/best.pt" \\
-        --dest backend/ml_model/ccm_v2_0.pt
+        --source backend/ml_model/bnb-v1.0/checkpoint.pt \\
+        --dest backend/ml_model/bnb_v1_0.pt
 
-The printed summary (architecture, views, feature set, calibrated threshold,
-class map) is the check that the right run was repacked: verify it against the
-training report before committing the file.
+The printed summary (architecture, metadata branch, tuned threshold, class map)
+is the check that the right run was repacked: verify it against the bundle's
+model_card.json before committing the file.
 
 Environment variables
 ---------------------
@@ -56,7 +56,7 @@ def _trainer_root() -> Path:
 
 # model id -> (trainer run directory, destination filename)
 _KNOWN: dict[str, tuple[str, str]] = {
-    "ccm-2.0.0": ("unified_20260929_114213", "ccm_v2_0.pt"),
+    "bnb-1.0.0": ("binary_20261001_173813", "bnb_v1_0.pt"),
 }
 
 
@@ -73,22 +73,18 @@ def _describe(config: dict[str, Any], state: dict[str, Any]) -> None:
     model_cfg = config.get("model", {}) or {}
     data_cfg = config.get("data", {}) or {}
     prep_cfg = config.get("preprocessing", {}) or {}
-    inference_cfg = config.get("inference", {}) or {}
+    training_cfg = config.get("training", {}) or {}
 
     print("  architecture      :", model_cfg.get("name"))
     print("  in_channels       :", model_cfg.get("in_channels"))
     print("  num_classes       :", model_cfg.get("num_classes", 1))
-    print("  use_physics       :", bool(model_cfg.get("use_physics", False)))
-    print("  views             :", model_cfg.get("views"))
-    print("  feature_set       :", model_cfg.get("feature_set"))
+    print("  use_metadata      :", bool(model_cfg.get("use_metadata", False)))
+    print("  known stations    :", len(model_cfg.get("station_vocab") or {}))
     print("  target_shape      :", data_cfg.get("target_shape"))
     print("  background_method :", prep_cfg.get("background_method"))
     print("  normalization     :", prep_cfg.get("normalization"),
           f"[{prep_cfg.get('db_vmin')}, {prep_cfg.get('db_vmax')}]")
-    print("  burst_threshold   :", inference_cfg.get("burst_threshold"))
-    print("  region_finder     :", inference_cfg.get("region_finder"))
-    priors = inference_cfg.get("type_priors") or {}
-    print("  type prior str.   :", priors.get("strength"))
+    print("  threshold         :", training_cfg.get("threshold"))
     classes = data_cfg.get("classes") or {}
     if classes:
         ordered = sorted(classes.items(), key=lambda kv: int(kv[1]))

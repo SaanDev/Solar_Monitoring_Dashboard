@@ -359,9 +359,9 @@ export function BurstPredictorClient() {
         </p>
         {activeModel && (
           <p className="mt-1 text-[10px] text-slate-600">
-            {activeModel.name}: {activeModel.description} Burst types are the
-            model&rsquo;s estimates, not the official list; its Type III groups
-            (IIIG) are counted as Type III.
+            {activeModel.name}: {activeModel.description}
+            {activeModel.classes.length > 0 &&
+              " Burst types are the model’s estimates, not the official list."}
           </p>
         )}
 
@@ -416,7 +416,7 @@ export function BurstPredictorClient() {
   );
 }
 
-/** Model name plus its calibrated threshold, e.g. "CCM v2.0 · t=0.798". */
+/** Model name plus its decision threshold, e.g. "BnB v1.0 · t=0.563". */
 function modelLabel(m: ModelInfo): string {
   return m.threshold != null ? `${m.name} · t=${Number(m.threshold.toFixed(3))}` : m.name;
 }
@@ -856,21 +856,23 @@ function SpectrumPreview({
 
 /** Where inside the segment the model found each burst region, and its type.
  *
+ * Only a region-based typing model reports regions; a whole-file model such as
+ * BnB v1.0 does not, and then there is nothing to show.
+ *
  * A table rather than boxes drawn on the image: the preview is rendered
  * server-side with axis margins, so overlaying by pixel fraction would not line
  * up with the plotted data area. */
 function TypedRegionTable({ det }: { det: SelectedDet }) {
   const regions = det.regions ?? [];
   if (regions.length === 0) {
-    return (
+    // Region geometry is not stored, so a detection loaded from the background
+    // scan keeps its type but not where that type was found.
+    return det.burstType ? (
       <p className="mt-3 text-[10px] text-slate-600">
-        {det.burstType
-          ? // Region geometry is not stored, so a detection loaded from the
-            // background scan keeps its type but not where that type was found.
-            "Region detail isn't kept for stored detections — re-run the scan for this day to see where the type was found."
-          : "No burst regions for this segment."}
+        Region detail isn&apos;t kept for stored detections — re-run the scan for
+        this day to see where the type was found.
       </p>
-    );
+    ) : null;
   }
   return (
     <div className="mt-3">
@@ -879,7 +881,7 @@ function TypedRegionTable({ det }: { det: SelectedDet }) {
           Burst regions ({regions.length})
         </h3>
         <span className="text-[10px] text-slate-600">
-          Regions the model called a burst — Type IIIG groups count as Type III
+          Regions the model called a burst, and their type
         </span>
       </div>
       <div className="overflow-x-auto rounded border border-surface-border">

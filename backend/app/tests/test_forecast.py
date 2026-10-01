@@ -1,16 +1,23 @@
 """Tests for the forecasting layer: Newell coupling / predicted-Kp math,
 DONKI CME parsing + event mapping, NOAA scales / hemispheric-power parsing,
 predicted-storm detection, and the /api/forecast routes."""
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 import app.api.routes_forecast as routes_forecast
 import app.services.cme_service as cme_service
 import app.services.forecast_service as forecast_service
-from app.collectors.collect_donki import parse_cmes, pick_analysis, pick_enlil
+from app.collectors.collect_donki import (
+    DonkiUnavailableError,
+    fetch_cmes,
+    parse_cmes,
+    pick_analysis,
+    pick_enlil,
+)
 from app.collectors.collect_noaa_forecast import parse_hemi_power, parse_noaa_scales
 from app.main import app
 from app.processing.kp_prediction import (
@@ -31,10 +38,13 @@ UTC = timezone.utc
 
 
 @pytest.fixture(autouse=True)
-def stub_ambient_wind(monkeypatch):
-    """Keep CME enrichment hermetic: the DBM ambient wind is read from the live
-    NOAA solar-wind feed, so pin it to a fixed value instead of hitting the net."""
+def stub_cme_network(monkeypatch):
+    """Keep CME tests hermetic: the DBM ambient wind is read from the live NOAA
+    solar-wind feed, so pin it to a fixed value; and a history window older than
+    the retained catalog triggers an on-demand DONKI fetch, so make that return
+    nothing (tests that exercise the fetch patch their own)."""
     monkeypatch.setattr(cme_service, "recent_ambient_speed", AsyncMock(return_value=420.0))
+    monkeypatch.setattr(cme_service, "fetch_cmes", AsyncMock(return_value=[]))
 
 
 # ── Newell coupling / predicted Kp ───────────────────────────────────────────
@@ -120,7 +130,7 @@ _DONKI_CME = {
     "sourceLocation": "N15W20",
     "activeRegionNum": 14135,
     "note": "Halo CME associated with the X1.2 flare.",
-    "link": "https://kauai.ccmc.gsfc.nasa.gov/DONKI/view/CME/12345/-1",
+    "link": "https://ccmc.gsfc.nasa.gov/DONKI-Editor/view/CME/12345/-1",
     "cmeAnalyses": [
         {  # superseded early fit
             "isMostAccurate": False,
@@ -201,7 +211,7 @@ _DONKI_CME_NO_ENLIL = {
     "sourceLocation": "S05W08",
     "activeRegionNum": 14140,
     "note": "",
-    "link": "https://kauai.ccmc.gsfc.nasa.gov/DONKI/view/CME/9/-1",
+    "link": "https://ccmc.gsfc.nasa.gov/DONKI-Editor/view/CME/9/-1",
     "cmeAnalyses": [
         {
             "isMostAccurate": True,
@@ -222,6 +232,85 @@ def test_cme_to_event_uses_dbm_arrival_when_no_enlil():
     assert e["end_time"] == r["predicted_arrival_dbm"]  # DBM fills in for ENLIL
     assert e["end_time"] is not None
     assert "(DBM)" in e["description"]
+
+
+# ── DONKI fetch ──────────────────────────────────────────────────────────────
+
+_WEEK = (date(2026, 9, 1), date(2026, 9, 7))
+
+
+def _donki_client(respond, log: list | None = None) -> httpx.AsyncClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if log is not None:
+            log.append(request.url)
+        return respond(request)
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+async def test_fetch_cmes_queries_donki_api_and_parses():
+    log: list = []
+    async with _donki_client(lambda _: httpx.Response(200, json=[_DONKI_CME]), log) as c:
+        records = await fetch_cmes(*_WEEK, client=c)
+    assert [r["activity_id"] for r in records] == ["2026-07-01T12:36:00-CME-001"]
+    (url,) = log
+    assert url.host == "ccmc.gsfc.nasa.gov" and url.path == "/DONKI-API/get/CME"
+    assert url.params["startDate"] == "2026-09-01" and url.params["endDate"] == "2026-09-07"
+
+
+@pytest.mark.parametrize("body", [b"", b"[]"])
+async def test_fetch_cmes_empty_window(body):
+    async with _donki_client(lambda _: httpx.Response(200, content=body)) as c:
+        assert await fetch_cmes(*_WEEK, client=c) == []
+
+
+async def test_fetch_cmes_redirect_is_reported_as_moved():
+    # What kauai (and the api.nasa.gov mirror) answer since 2026-09-30.
+    moved = httpx.Response(
+        301, headers={"location": "https://ccmc.gsfc.nasa.gov/news/major-updates"}
+    )
+    async with _donki_client(lambda _: moved) as c:
+        with pytest.raises(DonkiUnavailableError, match="has moved") as exc:
+            await fetch_cmes(*_WEEK, client=c)
+    msg = str(exc.value)
+    assert "HTTP 301 -> https://ccmc.gsfc.nasa.gov/news/major-updates" in msg
+    assert "DONKI_BASE_URL" in msg
+
+
+async def test_fetch_cmes_unreachable_names_url_and_cause():
+    def refuse(request):
+        raise httpx.ConnectError("Name or service not known", request=request)
+
+    async with _donki_client(refuse) as c:
+        with pytest.raises(DonkiUnavailableError, match="unreachable") as exc:
+            await fetch_cmes(*_WEEK, client=c)
+    assert "ConnectError: Name or service not known" in str(exc.value)
+    assert "/DONKI-API/get/CME" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "response, match",
+    [
+        (httpx.Response(503), "HTTP 503"),
+        (httpx.Response(200, html="<html>maintenance</html>"), r"non-JSON \(text/html"),
+        (httpx.Response(200, json={"error": "x"}), "not a CME list"),
+    ],
+)
+async def test_fetch_cmes_bad_answers_raise(response, match):
+    async with _donki_client(lambda _: response) as c:
+        with pytest.raises(DonkiUnavailableError, match=match):
+            await fetch_cmes(*_WEEK, client=c)
+
+
+async def test_cme_collect_records_fetch_failure(db_session, monkeypatch, caplog):
+    err = DonkiUnavailableError("DONKI API has moved: ... set DONKI_BASE_URL")
+    monkeypatch.setattr(cme_service, "fetch_cmes", AsyncMock(side_effect=err))
+    record_error = AsyncMock()
+    monkeypatch.setattr(cme_service, "record_error", record_error)
+
+    assert await cme_service.collect_and_store(db_session) == 0
+    record_error.assert_awaited_once_with(db_session, cme_service.SOURCE_NAME, str(err))
+    assert "WSA-ENLIL arrivals not updated: DONKI API has moved" in caplog.text
 
 
 # ── NOAA scales + hemispheric power parsing ──────────────────────────────────

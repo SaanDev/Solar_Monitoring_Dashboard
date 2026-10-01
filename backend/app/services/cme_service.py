@@ -111,7 +111,9 @@ async def collect_and_store(db: AsyncSession) -> int:
     try:
         records = await fetch_cmes(start.date(), end.date())
     except Exception as exc:  # noqa: BLE001 - network/parse failure is non-fatal
-        logger.warning("DONKI CME fetch failed: %s", exc)
+        logger.warning(
+            "DONKI CME fetch failed; CME catalog and WSA-ENLIL arrivals not updated: %s", exc
+        )
         await record_error(db, SOURCE_NAME, str(exc))
         return 0
 

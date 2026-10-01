@@ -8,6 +8,7 @@ from httpx import ASGITransport, AsyncClient
 import app.api.routes_solar_images as routes
 import app.services.solar_archive_service as sa
 from app.main import app
+from app.services.sdo_latest import Frame
 
 _DATE = "2025-01-15"
 
@@ -96,6 +97,20 @@ async def test_historical_uses_sdo_dated_browse_not_helioviewer(client):
     assert "helioviewer" in by["lascoc2"]["image_url"]
 
 
+async def test_todays_listing_is_cached_briefly(client):
+    # Today's dated folder gains a frame every few minutes; scrubbing to a recent
+    # time today must not be served an hour-old listing.
+    today = datetime.now(timezone.utc).date().isoformat()
+    listing = AsyncMock(return_value="")
+    with patch.object(sa, "_cached_listing", new=listing), patch.object(
+        sa, "_closest_time", new=AsyncMock(return_value=None)
+    ):
+        await client.get(f"/api/solar/archive/images?date={today}&time=00:00")
+        await client.get("/api/solar/archive/images?date=2026-06-30&time=20:00")
+    assert listing.await_args_list[0].args[2] == sa._LISTING_TTL_TODAY
+    assert listing.await_args_list[1].args[2] == sa._LISTING_TTL
+
+
 async def test_historical_overlay_falls_back_to_helioviewer(client):
     # With the active-region overlay on, browse frames can't carry it, so the disk
     # images come from Helioviewer (which supports the HEK overlay) instead.
@@ -107,14 +122,16 @@ async def test_historical_overlay_falls_back_to_helioviewer(client):
     assert "NOAA_SWPC_Observer" in by["aia171"]["image_url"]
 
 
-async def test_latest_mode_shows_browse_frames_with_science_downloads(client):
-    # Latest mode displays the fresh near-real-time browse frame (as the Overview
-    # does) while downloads still resolve to the newest *science* frame.
+async def test_latest_mode_shows_live_frames_with_science_downloads(client):
+    # Latest mode displays the fresh near-real-time frame (as the Overview does)
+    # while downloads still resolve to the newest *science* frame.
     sci = datetime(2026, 6, 29, 20, 30, tzinfo=timezone.utc)     # days-old science
-    browse = datetime(2026, 7, 1, 15, 50, tzinfo=timezone.utc)   # fresh quick-look
+    live = datetime(2026, 7, 1, 15, 50, tzinfo=timezone.utc)     # fresh quick-look
+    browse_171 = "https://sdo.gsfc.nasa.gov/assets/img/browse/2026/07/01/20260701_155000_2048_0171.jpg"
+    frames = {"0171": Frame(live, browse_171.replace("_2048_", "_512_"), browse_171)}
     with patch.object(sa, "_closest_time", new=AsyncMock(return_value=sci)), patch.object(
-        sa, "_browse_time", new=AsyncMock(return_value=browse)
-    ):
+        sa, "latest_sdo_frames", new=AsyncMock(return_value=frames)
+    ), patch.object(sa, "_browse_time", new=AsyncMock(return_value=live)):
         r = await client.get("/api/solar/archive/images?date=2026-07-01&latest=true")
     assert r.status_code == 200
     body = r.json()
@@ -122,11 +139,14 @@ async def test_latest_mode_shows_browse_frames_with_science_downloads(client):
     by_id = {im["id"]: im for im in body["images"]}
 
     aia = by_id["aia171"]
-    assert aia["image_url"].startswith("https://sdo.gsfc.nasa.gov/assets/img/latest/")
+    assert aia["image_url"].startswith(browse_171)              # full-size live frame
     assert "helioviewer" not in aia["image_url"]
-    assert aia["time"].startswith("2026-07-01")                 # fresh browse time
+    assert aia["time"].startswith("2026-07-01")                 # fresh frame time
     assert "date=2026-06-29" in aia["png_download_url"]          # download = science frame
     assert "date=2026-06-29" in aia["fts_download_url"]
+    # A channel with no live frame shows Helioviewer's newest science frame instead.
+    assert "helioviewer" in by_id["aia193"]["image_url"]
+    assert by_id["aia193"]["time"].startswith("2026-06-29")
     # Coronagraph uses the SOHO realtime browse frame.
     assert by_id["lascoc2"]["image_url"].startswith("https://soho.nascom.nasa.gov/data/realtime/c2/")
 

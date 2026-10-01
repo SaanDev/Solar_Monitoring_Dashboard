@@ -127,17 +127,17 @@ class RadioBurstDetectionsResponse(BaseModel):
 
 class ModelInfo(BaseModel):
     """One selectable burst model, as advertised to the UI."""
-    id: str                            # "ccm-2.0.0"
-    name: str                          # "CCM v2.0"
+    id: str                            # "bnb-1.0.0"
+    name: str                          # "BnB v1.0"
     full_name: str
-    kind: str                          # "unified" (detects and types bursts)
+    kind: str                          # "binary" (burst / no burst, no type)
     version: str
     description: str
     # False when the checkpoint is missing or still a Git LFS pointer — the UI
     # greys the option out instead of letting a run fail mid-scan.
     available: bool = True
-    threshold: float | None = None     # calibrated burst threshold
-    classes: list[str] = []            # burst types it reports
+    threshold: float | None = None     # decision threshold
+    classes: list[str] = []            # burst types it reports; [] = it does not type
     metrics: dict[str, float] = {}
     is_default: bool = False
 
@@ -153,7 +153,7 @@ class ModelsResponse(BaseModel):
 
 class ModelSelection(BaseModel):
     """PUT body: which model the automatic scan should run."""
-    model_id: str                      # "ccm-2.0.0"
+    model_id: str                      # "bnb-1.0.0"
 
 
 # ── Burst Predictor (on-demand daily prediction vs official burst list) ───────
@@ -172,7 +172,10 @@ class BurstPredictionRequest(BaseModel):
 
 
 class TypedRegion(BaseModel):
-    """A burst region inside one segment, with its predicted burst type."""
+    """A burst region inside one segment, with its predicted burst type.
+
+    Only a region-based typing model produces these; BnB v1.0 does not.
+    """
     # Null when the file has no AXES table: its header frequencies are
     # placeholders, not MHz.
     freq_min_mhz: float | None = None

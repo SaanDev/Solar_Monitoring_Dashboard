@@ -14,9 +14,9 @@ Settings page's Automatic Burst Detection picker (persisted, falling back to
 model at a time keeps the alert stream (and the scorecard derived from it)
 internally comparable.
 
-The detection record granularity is per file (Burst / No_Burst) plus the burst
-type of its largest burst region; this module adds time-window grouping and
-multi-station corroboration on top.
+The detection record granularity is per file (Burst / No_Burst), plus a burst
+type when the model types bursts (BnB v1.0 does not); this module adds
+time-window grouping and multi-station corroboration on top.
 """
 from __future__ import annotations
 
@@ -180,8 +180,8 @@ def gate_by_own_model(detections: list[dict]) -> list[dict]:
     """Keep detections at or above the alert minimum of the model that stored them.
 
     Rows written by a retired model stay in the table until the backfill
-    re-scores them, and each must be judged by its own model's threshold: CCM
-    v2.0's 0.80 would silently drop every CCM v1.1.0 detection above its 0.51.
+    re-scores them, and each must be judged by its own model's threshold: BnB
+    v1.0's 0.56 would count every CCM v2.0 detection between 0.56 and its 0.80.
     """
     minimums: dict[str | None, float] = {}
     kept = []

@@ -1,8 +1,13 @@
 """Fetch CMEs (with WSA-ENLIL arrival predictions) from NASA DONKI.
 
 DONKI (Space Weather Database Of Notifications, Knowledge, Information) has a
-public web service at kauai.ccmc.gsfc.nasa.gov that needs no API key:
-  /WS/get/CME?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+public API on the main CCMC host that needs no API key:
+  https://ccmc.gsfc.nasa.gov/DONKI-API/get/CME?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+
+It replaced kauai.ccmc.gsfc.nasa.gov/DONKI/WS/get/... on 2026-09-30 with the
+same parameters and JSON (https://ccmc.gsfc.nasa.gov/news/major-updates). The
+old host, and the api.nasa.gov/DONKI mirror that proxied it, now 301 to that
+news page, so redirects are not followed: a 3xx from a JSON API means it moved.
 
 Each CME carries analyst measurements (``cmeAnalyses``; the one flagged
 ``isMostAccurate`` is the operative cone-model fit) and each analysis a list of
@@ -17,6 +22,14 @@ from datetime import date, datetime, timezone
 import httpx
 
 from app.config import settings
+
+# Where CCMC announces endpoint moves; quoted when the API answers with a redirect.
+CCMC_NEWS_URL = "https://ccmc.gsfc.nasa.gov/news/major-updates"
+
+
+class DonkiUnavailableError(RuntimeError):
+    """The DONKI API was unreachable, has moved, or did not answer with a JSON
+    list of CMEs. The message names the URL and the cause, ready to log as-is."""
 
 
 def _dt(raw) -> datetime | None:
@@ -67,7 +80,7 @@ def _predicted_kp(enlil: dict) -> float | None:
 
 
 def parse_cmes(raw: list) -> list[dict]:
-    """Normalize the DONKI /WS/get/CME payload into flat catalog records.
+    """Normalize the DONKI /get/CME payload into flat catalog records.
 
     A record without a parseable ``startTime`` or ``activityID`` is dropped;
     everything else degrades to ``None`` field-by-field (DONKI entries are
@@ -110,13 +123,49 @@ def parse_cmes(raw: list) -> list[dict]:
     return out
 
 
-async def fetch_cmes(start: date, end: date) -> list[dict]:
-    """Catalog records for CMEs first observed in ``[start, end]`` (UTC dates)."""
-    url = f"{settings.donki_base_url}/WS/get/CME"
-    params = {"startDate": start.isoformat(), "endDate": end.isoformat()}
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(url, params=params)
-        r.raise_for_status()
-        # DONKI returns an empty body (not "[]") when the window has no CMEs.
-        data = r.json() if r.content else []
+async def fetch_cmes(
+    start: date, end: date, client: httpx.AsyncClient | None = None
+) -> list[dict]:
+    """Catalog records for CMEs first observed in ``[start, end]`` (UTC dates).
+
+    Raises :class:`DonkiUnavailableError` when the API is unreachable, has moved
+    (any 3xx), returns an HTTP error, or answers with anything but a JSON list.
+    """
+    if client is None:
+        async with httpx.AsyncClient(timeout=30) as owned:
+            return await fetch_cmes(start, end, owned)
+
+    url = httpx.URL(
+        f"{settings.donki_base_url.rstrip('/')}/get/CME",
+        params={"startDate": start.isoformat(), "endDate": end.isoformat()},
+    )
+    try:
+        r = await client.get(url)
+    except httpx.HTTPError as exc:  # DNS, connect, TLS, timeout
+        detail = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+        raise DonkiUnavailableError(f"DONKI API unreachable at {url} ({detail})") from exc
+
+    if 300 <= r.status_code < 400:
+        raise DonkiUnavailableError(
+            f"DONKI API has moved: {url} answered HTTP {r.status_code} -> "
+            f"{r.headers.get('location', '(no location)')}. Check {CCMC_NEWS_URL} "
+            "for the new endpoint and set DONKI_BASE_URL"
+        )
+    if r.is_error:
+        raise DonkiUnavailableError(f"DONKI API returned HTTP {r.status_code} for {url}")
+    # The retired kauai service sent an empty body (not "[]") for a window with
+    # no CMEs; keep accepting that.
+    if not r.content:
+        return []
+    try:
+        data = r.json()
+    except ValueError as exc:
+        ctype = r.headers.get("content-type", "no content-type")
+        raise DonkiUnavailableError(
+            f"DONKI API returned non-JSON ({ctype}) for {url}"
+        ) from exc
+    if not isinstance(data, list):
+        raise DonkiUnavailableError(
+            f"DONKI API returned a JSON {type(data).__name__}, not a CME list, for {url}"
+        )
     return parse_cmes(data)

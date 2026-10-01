@@ -922,37 +922,37 @@ const METHODS: ReferenceEntry[] = [
     title: "Machine-Learning Burst Detection",
     category: "methods",
     short:
-      "A neural-network model that scans daily CALLISTO spectrograms to detect radio bursts and name their type, corroborated across stations.",
+      "A neural-network model that scans daily CALLISTO spectrograms to detect radio bursts, corroborated across stations.",
     aka: [
       "burst predictor", "CNN", "classification", "scorecard", "precision recall",
-      "CCM", "burst type", "Type II", "Type III", "Type IIIG", "RFI",
+      "BnB", "burst / no burst", "ResNet",
     ],
     tags: ["machine learning", "radio", "detection"],
     body: [
       {
         kind: "para",
         text:
-          "The Burst Detector runs the day's CALLISTO spectrograms through CCM v2.0, a trained model inside the dashboard backend that detects bursts and names their type in one pass. It works on regions rather than whole files: each segment is searched for bright connected regions, and every region is shown to a ResNet-18 as three 224x224 views (the region itself, a wide strip of the full band around it, and the same strip against a quiet-part background so long continua stay visible) together with 28 measured features such as frequency drift rate, bandwidth, how thin and how periodic the emission is, and whether its channels stay bright outside the region.",
+          "The Burst Detector runs the day's CALLISTO spectrograms through BnB v1.0, a trained burst / no-burst classifier inside the dashboard backend. It looks at each 15-minute segment as a whole: the spectrum is cleaned, each frequency channel's median over the whole file is subtracted as its background, the result is scaled to decibels and mapped onto a -1 to 8 dB window, and the file is resized to 224x224 for a ResNet-34. A small second branch adds what the image cannot show (the station, the frequency range it records and the date) before the two meet in one burst probability.",
       },
       {
         kind: "para",
         text:
-          "The model calls each region background, RFI, or a burst type: Type II, Type III, a group of Type III bursts (Type IIIG) or Other. The dashboard reports Type IIIG as Type III, adding the two probabilities before the type is chosen. A region is a burst when its burst evidence (one minus the probability of background or RFI) reaches a threshold of 0.798, calibrated so that about 5% of quiet files are flagged; a segment is a burst when any region is, its probability is its strongest region's evidence, and its type is that of its largest burst region.",
+          "A segment is a burst when its probability reaches 0.563, a threshold tuned on the validation split. There the model had a precision of 0.95 and a recall of 0.90, and flagged 3% of quiet files. It does not name a burst's type; use the official burst list or the e-CALLISTO Analyzer for that.",
       },
       {
         kind: "para",
         text:
-          "Treat types as estimates. Type probabilities are corrected toward how often each type really occurs (Type III is by far the commonest), which moves probability only between burst types and never changes whether a region is a burst. On validation regions the model scored macro-F1 0.84; Type III and Type II are its strongest types and Other, with the fewest training examples, its weakest. At the calibrated threshold it found about two-thirds of validation burst files, trading recall for few false alarms.",
+          "The model was trained on 38 stations. On held-out files, stations it never saw found bursts as often as trained ones, but a few with cluttered spectra raise noticeably more false alarms: 13% of quiet files flagged on unseen stations against 7% on trained ones, most of it from a handful of stations.",
       },
       {
         kind: "para",
         text:
-          "To suppress false alarms from local RFI, detections are corroborated across multiple stations before being grouped into events; a 'raw' mode exposes the unfiltered model output. Performance is tracked against the official e-CALLISTO burst list on a trailing scorecard reporting precision (fraction of predicted events that were real) and recall (fraction of official bursts the model caught). Detections stored by the earlier CCM v1.x models are judged by their own thresholds until the background catch-up re-scores them with CCM v2.0.",
+          "To suppress false alarms from local RFI, detections are corroborated across multiple stations before being grouped into events; a 'raw' mode exposes the unfiltered model output. Performance is tracked against the official e-CALLISTO burst list on a trailing scorecard reporting precision (fraction of predicted events that were real) and recall (fraction of official bursts the model caught). Detections stored by the earlier CCM models are judged by their own thresholds until the background catch-up re-scores them with BnB v1.0.",
       },
     ],
     dataSources: [
       "e-CALLISTO spectra",
-      "CCM v2.0 burst detection and typing model",
+      "BnB v1.0 burst detection model",
       "Official burst list",
     ],
     usedIn: ["Burst Detector"],
