@@ -106,7 +106,7 @@ export function BurstPredictorClient() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [jobId, setJobId] = useState<string | null>(null);
   const [selectedDet, setSelectedDet] = useState<SelectedDet | null>(null);
-  // Event-selection mode. false = corroboration criteria (the live-alert filter);
+  // Event-selection mode. false = multi-station confirmation (the live-alert rule);
   // true = raw model output (every Burst-labelled segment). Toggling re-assembles
   // from the already-scored rows server-side, so it never re-scores.
   const [rawMode, setRawMode] = useState<boolean>(false);
@@ -321,7 +321,7 @@ export function BurstPredictorClient() {
 
           <label
             className="flex cursor-pointer select-none items-center gap-2 pb-1.5 text-xs text-slate-400"
-            title="Raw model output shows every segment the model flags as a burst. Event-selection criteria keeps only multi-station corroborated events (the live-alert filter), which can hide bursts when few stations are selected."
+            title="Raw model output shows every segment the model flags as a burst. Event-selection criteria keeps only bursts confirmed by independent stations (the live-alert rule), which can hide bursts when few stations are selected."
           >
             <input
               type="checkbox"
@@ -354,8 +354,8 @@ export function BurstPredictorClient() {
         {/* Mode hint — explains what the Raw model output checkbox changes. */}
         <p className="mt-2 text-[10px] text-slate-600">
           {rawMode
-            ? "Raw mode: every segment the model labels a burst is shown — no multi-station corroboration filter, so nothing is dropped."
-            : "Criteria mode: only multi-station corroborated events are shown (the live-alert filter). Tick “Raw model output” to see every burst the model flags."}
+            ? "Raw mode: every segment the model labels a burst is shown — no multi-station confirmation, so nothing is dropped."
+            : "Criteria mode: only bursts confirmed by independent stations are shown (the live-alert rule) — different sites flagging it together with the Sun up, with every observing station’s reading weighed by its track record. Tick “Raw model output” to see every burst the model flags."}
         </p>
         {activeModel && (
           <p className="mt-1 text-[10px] text-slate-600">
@@ -416,7 +416,7 @@ export function BurstPredictorClient() {
   );
 }
 
-/** Model name plus its decision threshold, e.g. "BnB v1.0 · t=0.563". */
+/** Model name plus its decision threshold, e.g. "BnB v1.1 · t=0.787". */
 function modelLabel(m: ModelInfo): string {
   return m.threshold != null ? `${m.name} · t=${Number(m.threshold.toFixed(3))}` : m.name;
 }
@@ -591,7 +591,7 @@ function PredictedEvents({
         <div className="flex h-32 items-center justify-center px-4 text-center text-xs text-slate-600">
           {result.raw
             ? "The model flagged no bursts for the selected stations."
-            : "No corroborated bursts for the selected stations. Tick “Raw model output” above to see every burst the model flagged."}
+            : "No confirmed bursts for the selected stations. Tick “Raw model output” above to see every burst the model flagged."}
         </div>
       ) : (
         <ul className="max-h-[28rem] space-y-2 overflow-y-auto pr-1">
@@ -605,8 +605,20 @@ function PredictedEvents({
           ))}
         </ul>
       )}
+      {!result.raw && result.unconfirmed_count > 0 && (
+        <p className="mt-2 text-[10px] text-slate-600">
+          {result.unconfirmed_count} burst-labelled file
+          {result.unconfirmed_count === 1 ? " was" : "s were"} not confirmed by other
+          stations and {result.unconfirmed_count === 1 ? "is" : "are"} not shown.
+        </p>
+      )}
     </section>
   );
+}
+
+function oddsText(lr: number | null): string {
+  if (lr == null) return "";
+  return lr >= 1e5 ? `${lr.toExponential(0)}:1` : `${Math.round(lr).toLocaleString()}:1`;
 }
 
 function EventRow({
@@ -634,9 +646,24 @@ function EventRow({
         {ev.dominant_type && (
           <TypeChip type={ev.dominant_type} confidence={typeConfidenceOf(ev)} />
         )}
-        <span className="text-slate-500">
-          {ev.n_stations} st · {ev.n_detections} det
-        </span>
+        {ev.n_sites != null ? (
+          <span
+            className="text-slate-500"
+            title={
+              `Confirmed by ${ev.confirming_stations.join(", ")}` +
+              (ev.also_flagged_stations.length
+                ? `; also flagged by ${ev.also_flagged_stations.join(", ")}`
+                : "") +
+              ` — evidence ${oddsText(ev.likelihood_ratio)} for a burst over chance`
+            }
+          >
+            {ev.n_sites} sites · {ev.n_stations} st
+          </span>
+        ) : (
+          <span className="text-slate-500">
+            {ev.n_stations} st · {ev.n_detections} det
+          </span>
+        )}
         {/* Stations disagreeing on the type is worth surfacing, not hiding. */}
         {Object.keys(ev.type_counts ?? {}).length > 1 && (
           <span
@@ -679,11 +706,24 @@ function EventRow({
                 }
                 className={clsx(
                   "flex w-full items-center gap-2 rounded px-2 py-1 text-left text-[11px]",
-                  selectedFile === d.filename ? "bg-accent-blue/15" : "hover:bg-surface-muted"
+                  selectedFile === d.filename ? "bg-accent-blue/15" : "hover:bg-surface-muted",
+                  d.counted === false && "opacity-60"
                 )}
+                title={
+                  d.counted === true
+                    ? "Confirmed the burst"
+                    : d.counted === false
+                      ? "Also flagged it — little weight (this station’s flags are mostly noise)"
+                      : undefined
+                }
               >
                 <span className="w-20 font-mono text-slate-300">{d.time}</span>
                 <span className="flex-1 truncate text-slate-400">{d.station}</span>
+                {d.counted != null && (
+                  <span className={clsx("text-[10px]", d.counted ? "text-accent-green" : "text-slate-600")}>
+                    {d.counted ? "confirms" : "also flagged"}
+                  </span>
+                )}
                 {d.burst_type && (
                   <TypeChip type={d.burst_type} confidence={d.type_confidence} short />
                 )}
@@ -857,7 +897,7 @@ function SpectrumPreview({
 /** Where inside the segment the model found each burst region, and its type.
  *
  * Only a region-based typing model reports regions; a whole-file model such as
- * BnB v1.0 does not, and then there is nothing to show.
+ * BnB does not, and then there is nothing to show.
  *
  * A table rather than boxes drawn on the image: the preview is rendered
  * server-side with axis margins, so overlaying by pixel fraction would not line

@@ -1,4 +1,4 @@
-"""The BnB v1.0 network: a ResNet over the whole file, fused with file metadata.
+"""The BnB network: a ResNet over the whole file, fused with file metadata.
 
 Ported from the CALLISTO Trainer (``core/models/metadata_model.py`` and the
 backbone half of ``core/models/model_factory.py``). Only the architecture the

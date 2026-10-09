@@ -72,3 +72,39 @@ def fake_cache(monkeypatch):
             store.clear()
 
     monkeypatch.setattr("app.cache.get_client", lambda: _FakeRedis())
+
+
+@pytest.fixture
+def trust_all_stations(monkeypatch):
+    """Take station knowledge out of the multi-station burst confirmation.
+
+    For tests about the burst *pipeline* (scanning, dedup, persistence, types,
+    backfill, the predictor's plumbing) rather than about how stations are
+    weighed: every station has the same clean record (a high-confidence flag is
+    strong evidence, a mid one good evidence, silence mildly against), and no
+    station has a known location — so each is its own site and counts as sun-up
+    whatever the wall-clock time of the test run. ``test_burst_confirmation.py``
+    covers the real station handling.
+    """
+    from app.processing.burst_confirmation import EvidenceTable, StationEvidence
+    from app.processing.callisto_stations import STATION_LOCATIONS
+    from app.services import station_reliability_service as reliability
+
+    monkeypatch.setattr(
+        reliability,
+        "_table_from",
+        lambda rows: EvidenceTable({}, default=StationEvidence(llr=(-0.5, 0.2, 2.0, 3.0))),
+    )
+    monkeypatch.setattr(reliability, "_cache", None)
+    saved = dict(STATION_LOCATIONS)
+    STATION_LOCATIONS.clear()
+    yield
+    STATION_LOCATIONS.update(saved)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_reliability_cache(monkeypatch):
+    """The station-reliability votes are cached in-process; start each test cold."""
+    from app.services import station_reliability_service as reliability
+
+    monkeypatch.setattr(reliability, "_cache", None)

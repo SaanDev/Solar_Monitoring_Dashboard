@@ -7,6 +7,7 @@ from app.models.notifications import NotificationSettings, SentNotification
 from app.models.radio_backfill import RadioBurstBackfillDay
 from app.models.radio_detections import RadioBurstDetection
 from app.models.source_status import SourceStatus
+from app.models.station_reliability import StationReliability
 from app.models.timeseries import (
     HYPERTABLES,
     DstIndex,
@@ -28,6 +29,7 @@ __all__ = [
     "SpaceWeatherEvent",
     "RadioBurstDetection",
     "RadioBurstBackfillDay",
+    "StationReliability",
     "CmeEvent",
     "NotificationSettings",
     "SentNotification",

@@ -44,6 +44,8 @@ import type {
   ModelsResponse,
   BackfillJob,
   BackfillStatusResponse,
+  StationOverride,
+  StationReliabilityResponse,
   Alert,
   ActivityHistogramResponse,
   SpaceWeatherEvent,
@@ -384,9 +386,21 @@ export const api = {
   // Stops after the chunk in flight; everything already scored is kept.
   cancelBurstBackfill: () => postNoBody<BackfillJob>("/api/radio/backfill/cancel"),
 
+  // Which stations may confirm a radio burst (multi-station confirmation).
+  stationReliability: () => get<StationReliabilityResponse>("/api/radio/reliability"),
+  /** Force a station to always / never confirm bursts, or back to auto. */
+  setStationOverride: (station: string, override: StationOverride) =>
+    putJson<StationReliabilityResponse>(
+      `/api/radio/reliability/${encodeURIComponent(station)}`,
+      { override },
+    ),
+  /** Re-measure every station now rather than at the daily pass. */
+  recomputeStationReliability: () =>
+    postNoBody<StationReliabilityResponse>("/api/radio/reliability/recompute"),
+
   // Burst Predictor — run the model over a day and compare with the official list.
-  // `raw` selects the event mode: true = raw model output (no corroboration
-  // filter), false = event-selection criteria. `model` changes the scores, so
+  // `raw` selects the event mode: true = raw model output (no multi-station
+  // confirmation), false = event-selection criteria. `model` changes the scores, so
   // unlike `raw` it needs a fresh run (omit for the server default).
   startBurstPrediction: (date: string, stations: string[], raw = false, model?: string) =>
     postJson<BurstPredictionJob>("/api/radio/predict", {

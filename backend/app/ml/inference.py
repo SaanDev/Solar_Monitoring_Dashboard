@@ -1,4 +1,4 @@
-"""In-process BnB v1.0 burst model — load it once and score FITS bytes.
+"""In-process BnB burst model — load it once and score FITS bytes.
 
 Models are loaded lazily on first use (or eagerly at startup via ``warm_up()``)
 and then kept in memory, one entry per model id, for the lifetime of the backend
@@ -7,7 +7,7 @@ live.
 
 ## How a file is scored
 
-BnB v1.0 was trained on whole files, so scoring mirrors the CALLISTO Trainer's
+BnB was trained on whole files, so scoring mirrors the CALLISTO Trainer's
 binary stage (``CascadePredictor._score_binary``) step for step:
 
 1. the whole spectrum is normalized and resized to 224x224

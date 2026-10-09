@@ -1,4 +1,4 @@
-"""The metadata vector BnB v1.0's metadata branch takes alongside the image.
+"""The metadata vector BnB's metadata branch takes alongside the image.
 
 Ported from the CALLISTO Trainer (``core/metadata_features.py``,
 ``row_to_meta_vector``) with the numerics unchanged:
@@ -12,9 +12,10 @@ Ported from the CALLISTO Trainer (``core/metadata_features.py``,
 * frequencies in MHz / 1000, so they sit near O(1).
 * the date as a point on the yearly cycle plus ``(year - 2010) / 20``.
 
-Index 0 was never used in training, but measured on 7,883 held-out files the
-station input moves a file's probability by about 0.01 on average, so an unseen
-station is scored like any other (see the registry for the measurements).
+Index 0 was never used in training, but measured on 3,000 held-out files the
+station input moves a file's probability by about 0.004 on average (0.01 for
+BnB v1.0), so an unseen station is scored like any other (see the registry for
+the measurements).
 """
 from __future__ import annotations
 

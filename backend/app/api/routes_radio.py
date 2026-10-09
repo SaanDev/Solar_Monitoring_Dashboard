@@ -32,11 +32,15 @@ from app.schemas.radio_schema import (
     BackfillJob,
     BackfillRequest,
     BackfillStatusResponse,
+    StationOverride,
+    StationReliabilityResponse,
 )
 from app.ml import registry
 from app.services import burst_predictor_service as predictor
 from app.services import model_settings_service as model_settings
 from app.services import radio_backfill_service as backfill
+from app.services import station_reliability_service as reliability
+from app.services.radio_burst_service import rebuild_radio_burst_events
 from app.services.burst_scorecard_service import get_official_bursts_range, get_scorecard
 from app.services.ecallisto_service import (
     list_stations,
@@ -248,6 +252,42 @@ async def cancel_backfill() -> BackfillJob:
     return BackfillJob(**job)  # type: ignore[arg-type]  # cancel() implies a job
 
 
+@router.get("/reliability", response_model=StationReliabilityResponse)
+async def station_reliability(db: AsyncSession = Depends(get_db)) -> StationReliabilityResponse:
+    """How much each station's readings weigh in the burst confirmation, and why.
+
+    Each station's track record — how its readings look during real bursts versus
+    by chance, and how much its bursts agree with other sites — is measured daily
+    over the trailing window and blended with a built-in prior; an override can
+    boost a station's flags or ignore it.
+    """
+    return StationReliabilityResponse(**await reliability.describe(db))
+
+
+@router.put("/reliability/{station}", response_model=StationReliabilityResponse)
+async def set_station_override(
+    station: str, payload: StationOverride, db: AsyncSession = Depends(get_db)
+) -> StationReliabilityResponse:
+    """Boost a station's flags (``always``), ignore it (``never``), or ``auto``.
+
+    The last day of burst events is re-derived straight away so the change shows;
+    older history keeps the events it was confirmed with.
+    """
+    await reliability.set_override(db, station, payload.override)
+    await rebuild_radio_burst_events(db)
+    return StationReliabilityResponse(**await reliability.describe(db))
+
+
+@router.post("/reliability/recompute", response_model=StationReliabilityResponse)
+async def recompute_station_reliability(
+    db: AsyncSession = Depends(get_db),
+) -> StationReliabilityResponse:
+    """Re-measure every station now instead of waiting for the daily pass."""
+    await reliability.recompute(db)
+    await rebuild_radio_burst_events(db)
+    return StationReliabilityResponse(**await reliability.describe(db))
+
+
 @router.post("/predict", response_model=BurstPredictionJob)
 async def start_prediction(req: BurstPredictionRequest) -> BurstPredictionJob:
     """Kick off a background model run over a day's e-CALLISTO segments.
@@ -279,7 +319,7 @@ async def prediction_stored(
     date: str = Query(..., description="UTC date YYYY-MM-DD"),
     raw: bool = Query(
         False,
-        description="True = raw model detections (skip corroboration); "
+        description="True = raw model detections (skip confirmation); "
         "False = event-selection criteria (default).",
     ),
     db: AsyncSession = Depends(get_db),
@@ -295,7 +335,8 @@ async def prediction_stored(
     day = _parse_date(date)
     start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
     rows = await detections_for_range(db, start, start + timedelta(days=1))
-    result = await predictor.assemble_result(rows, day, raw=raw)
+    evidence = await reliability.load_evidence(db)
+    result = await predictor.assemble_result(rows, day, raw=raw, evidence=evidence)
     return BurstPredictionResult(**result)
 
 
@@ -318,7 +359,7 @@ async def prediction_status(
     raw: bool | None = Query(
         None,
         description="Override the event-selection mode for assembling the result: "
-        "true = raw model detections (skip corroboration), false = criteria. "
+        "true = raw model detections (skip confirmation), false = criteria. "
         "Defaults to the mode the job was started with. Re-assembles from the "
         "already-scored rows, so toggling never re-scores.",
     ),

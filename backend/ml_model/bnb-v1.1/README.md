@@ -1,6 +1,6 @@
 # CALLISTO binary model
 
-Exported 2026-10-01T21:45:33 by CALLISTO Trainer 0.1.0.
+Exported 2026-10-09T15:35:41 by CALLISTO Trainer 0.1.0.
 
 ## What this predicts
 
@@ -37,13 +37,13 @@ The model is only valid on input prepared exactly this way:
 
 ## Decision threshold
 
-Use `0.5634765625`, tuned on the validation split. Do not assume 0.5.
+Use `0.786865234375`, tuned on the validation split. Do not assume 0.5.
 
 ## Validation metrics at export
 
-- accuracy: 0.9458
-- precision: 0.9471
-- recall: 0.9040
-- f1: 0.9251
-- roc_auc: 0.9770
-- pr_auc: 0.9733
+- accuracy: 0.9594
+- precision: 0.9858
+- recall: 0.9205
+- f1: 0.9521
+- roc_auc: 0.9889
+- pr_auc: 0.9885

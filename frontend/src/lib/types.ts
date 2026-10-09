@@ -472,8 +472,8 @@ export interface BurstCandidate {
 // ─── Burst model registry (selectable models) ────────────────────────────────
 
 export interface ModelInfo {
-  id: string; // "bnb-1.0.0"
-  name: string; // "BnB v1.0"
+  id: string; // "bnb-1.1.0"
+  name: string; // "BnB v1.1"
   full_name: string;
   /** "binary": burst / no burst for a whole segment, without a type. */
   kind: "binary";
@@ -546,6 +546,50 @@ export interface BackfillStatusResponse {
   coverage: BackfillDayCoverage[];
 }
 
+// ─── Station reliability (multi-station burst confirmation) ──────────────────
+
+export type StationOverride = "auto" | "always" | "never";
+
+/** One station's standing in the multi-station confirmation. */
+export interface StationReliabilityItem {
+  station: string;
+  /** Stations within the site radius share a site and count once. */
+  site: string;
+  latitude: number | null;
+  longitude: number | null;
+  /** Agreement with other sites beyond chance (measured, blended with the
+   * built-in prior); null = nothing known yet. */
+  score: number | null;
+  measured_score: number | null;
+  prior_score: number | null;
+  judged: number;
+  bursts: number;
+  files: number;
+  /** Chance rate: share of its observing time flagged at high confidence. */
+  duty: number | null;
+  /** Evidence (nats) each reading carries: silent, low, mid, high confidence. */
+  evidence: [number, number, number, number];
+  override: StationOverride;
+  /** Ignored entirely (override "never"). */
+  excluded: boolean;
+  /** Picks the sure bursts every station's record is learned on. */
+  votes: boolean;
+  computed_at: string | null;
+}
+
+export interface StationReliabilityResponse {
+  model_id: string;
+  min_reliability: number;
+  window_days: number;
+  min_evidence: number;
+  silence_weight: number;
+  high_conf_probability: number;
+  min_sites: number;
+  site_radius_km: number;
+  computed_at: string | null;
+  stations: StationReliabilityItem[];
+}
+
 // ─── Burst Predictor (ML daily prediction vs official burst list) ─────────────
 
 /** A bright region inside one segment, with its predicted burst type. */
@@ -570,6 +614,10 @@ export interface PredictedDetection {
   burst_type: string | null;
   type_confidence: number | null;
   regions: TypedRegion[];
+  /** Confirmed events only: true = this detection's reading supports the
+   * burst (it carries real evidence); false = the station also flagged it but
+   * its flags are mostly noise. Null in raw mode. */
+  counted: boolean | null;
 }
 
 export interface PredictedEvent {
@@ -587,6 +635,13 @@ export interface PredictedEvent {
   dominant_type: string | null;
   type_counts: Record<string, number>;
   matched_official: boolean;
+  /** Multi-station confirmation (criteria mode); null/empty in raw mode. */
+  n_sites: number | null;
+  /** Peak combined evidence (nats) and the burst-vs-chance odds it means. */
+  evidence: number | null;
+  likelihood_ratio: number | null;
+  confirming_stations: string[];
+  also_flagged_stations: string[];
   detections: PredictedDetection[];
 }
 
@@ -600,11 +655,13 @@ export interface OfficialBurstCompare {
 
 export interface BurstPredictionResult {
   date: string;
-  raw: boolean; // true = raw model output (corroboration filter skipped)
+  raw: boolean; // true = raw model output (multi-station confirmation skipped)
   stations: string[];
   total_files: number;
   burst_count: number;
   event_count: number;
+  /** Criteria mode: Burst-labelled files no multi-station event confirms. */
+  unconfirmed_count: number;
   events: PredictedEvent[];
   official_events: OfficialBurstCompare[];
   official_count: number;
@@ -745,7 +802,7 @@ export interface SpaceWeatherEvent {
   /** Observing stations for station-based events (radio bursts); empty otherwise. */
   stations: string[];
   /** Radio bursts only: "Type II" | "Type III" | "Other" from a burst model
-   * that types bursts. Null when it does not — BnB v1.0 never types. */
+   * that types bursts. Null when it does not — BnB never types. */
   burst_type?: string | null;
   related_event_ids: string[];
   source_url: string | null;

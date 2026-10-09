@@ -1,4 +1,4 @@
-"""BnB v1.0's inputs and verdict, without torch or the checkpoint.
+"""BnB v1.1's inputs and verdict, without torch or the checkpoint.
 
 Two kinds of check:
 
@@ -30,8 +30,8 @@ _PREP = {
     "db_vmax": 8.0,
 }
 # The two cases' stations as the checkpoint's vocabulary indexes them.
-_VOCAB = {"ALASKA-COHOE": 2, "BIR": 11}
-_THRESHOLD = registry.BNB_V100.metrics["threshold"]
+_VOCAB = {"ALASKA-COHOE": 2, "BIR": 10}
+_THRESHOLD = registry.BNB_V110.metrics["threshold"]
 
 
 # ── Golden values ────────────────────────────────────────────────────────────
@@ -114,14 +114,14 @@ def test_header_frequencies_are_read_like_training_did():
 
 def test_station_names_match_exactly_as_training_did():
     # The vocabulary was built from trimmed names with no case folding.
-    assert station_index(" BIR ", _VOCAB) == 11
+    assert station_index(" BIR ", _VOCAB) == 10
     assert station_index("bir", _VOCAB) == 0
     assert station_index(None, _VOCAB) == 0
 
 
 def test_missing_date_and_frequencies_are_zeros():
     vector = meta_vector({"station": "BIR", "date": "not a date"}, _VOCAB)
-    assert vector.tolist() == [11.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    assert vector.tolist() == [10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
 
 # ── The verdict ──────────────────────────────────────────────────────────────
@@ -129,7 +129,7 @@ def test_missing_date_and_frequencies_are_zeros():
 
 def _loaded() -> inf.LoadedModel:
     return inf.LoadedModel(
-        spec=registry.BNB_V100, model=None, config={}, device="cpu",
+        spec=registry.BNB_V110, model=None, config={}, device="cpu",
         threshold=_THRESHOLD, preprocessing=_PREP, target_shape=(224, 224),
         station_vocab=_VOCAB,
     )
@@ -141,8 +141,8 @@ def test_a_probability_at_the_threshold_is_a_burst():
     assert record["file_name"] == "BIR_20260615_020000_01.fit.gz"
     assert record["decision_threshold"] == _THRESHOLD
     assert record["confidence"] == _THRESHOLD
-    assert record["model_id"] == "bnb-1.0.0"
-    assert record["model_name"] == "BnB v1.0"
+    assert record["model_id"] == "bnb-1.1.0"
+    assert record["model_name"] == "BnB v1.1"
 
 
 def test_a_probability_below_it_is_no_burst_and_never_typed():
@@ -156,10 +156,10 @@ def test_a_probability_below_it_is_no_burst_and_never_typed():
     "probability, level",
     [
         (0.30, "No alert"),
-        (0.56, "No alert"),               # just under the threshold
+        (0.78, "No alert"),               # just under the threshold
         (_THRESHOLD, "Possible burst"),   # the threshold reads as 0.5
-        (0.85, "Likely burst"),
-        (0.95, "High-confidence burst"),
+        (0.93, "Likely burst"),           # 0.93 rescales to ~0.84
+        (0.97, "High-confidence burst"),
     ],
 )
 def test_alert_levels_are_relative_to_the_threshold(probability, level):

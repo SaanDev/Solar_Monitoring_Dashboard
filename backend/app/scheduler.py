@@ -16,7 +16,11 @@ from app.services.event_service import detect_and_store, rederive_history_if_out
 from app.services.forecast_service import detect_and_store_predicted_storms
 from app.services.notification_service import dispatch_pending
 from app.services.radio_backfill_service import run_auto_catch_up
-from app.services.radio_burst_service import scan_and_detect_radio_bursts
+from app.services.radio_burst_service import (
+    rederive_history_if_outdated as rederive_burst_history_if_outdated,
+    scan_and_detect_radio_bursts,
+)
+from app.services.station_reliability_service import ensure_fresh as ensure_reliability_fresh
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +28,9 @@ scheduler = AsyncIOScheduler(timezone="UTC")
 
 # How often to re-derive events from the freshly ingested time-series.
 _DETECTION_INTERVAL_SECONDS = 600
+# How often to check whether the station reliability is due for re-measuring
+# (it recomputes once its last measurement is ~a day old).
+_RELIABILITY_CHECK_SECONDS = 3600
 
 
 async def _job(src: IngestSource) -> None:
@@ -39,6 +46,11 @@ async def _detection_job() -> None:
 async def _radio_burst_job() -> None:
     async with AsyncSessionLocal() as db:
         await scan_and_detect_radio_bursts(db)
+
+
+async def _reliability_job() -> None:
+    async with AsyncSessionLocal() as db:
+        await ensure_reliability_fresh(db)
 
 
 async def _radio_backfill_job() -> None:
@@ -93,6 +105,16 @@ def start_scheduler() -> None:
             trigger="interval",
             seconds=settings.radio_burst_scan_interval,
             id="radio-burst-scan",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+    if settings.radio_burst_enabled:
+        scheduler.add_job(
+            _reliability_job,
+            trigger="interval",
+            seconds=_RELIABILITY_CHECK_SECONDS,
+            id="radio-station-reliability",
             replace_existing=True,
             max_instances=1,
             coalesce=True,
@@ -153,6 +175,11 @@ async def run_initial_ingest() -> None:
         await collect_cmes(db)
         await detect_and_store_predicted_storms(db)
         if settings.radio_burst_enabled:
+            # Which stations may confirm bursts, then the burst history rebuilt
+            # once if an older confirmation rule derived it — both before the
+            # first live scan, which uses them.
+            await ensure_reliability_fresh(db)
+            await rederive_burst_history_if_outdated(db)
             await scan_and_detect_radio_bursts(db)
     # Then close whatever gap the downtime left. Started last, and outside the
     # session above, because it runs as its own long-lived background task with a

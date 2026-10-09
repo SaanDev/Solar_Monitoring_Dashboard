@@ -1,14 +1,9 @@
 """Desktop-app runtime pieces: in-process cache, UTC-aware datetimes on SQLite,
-<<<<<<< HEAD
-the static frontend mount and the cross-origin write guard (app/main.py)."""
-from datetime import datetime, timedelta, timezone
-=======
 the static frontend mount, the cross-origin write guard (app/main.py) and the
 per-user data folder (app/desktop.py)."""
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
->>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
 
 import pytest
 from fastapi import FastAPI
@@ -16,10 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 import app.cache as cache_module
-<<<<<<< HEAD
-=======
 import app.desktop as desktop
->>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
 from app.cache import MemoryCache, get_client as real_get_client
 from app.config import settings
 from app.main import _DesktopOriginGuard, _FrontendFiles
@@ -164,8 +156,6 @@ def test_origin_guard_allows_app_origin_and_local_clients(guarded_app):
 
 def test_origin_guard_ignores_reads(guarded_app):
     assert guarded_app.get("/api/thing", headers={"Origin": "https://evil.example"}).status_code == 200
-<<<<<<< HEAD
-=======
 
 
 # ── per-user data folder (must match HOME in desktop/src/paths.ts) ────────────
@@ -195,4 +185,3 @@ def test_default_home_on_linux_falls_back_to_local_share(monkeypatch, tmp_path, 
     else:
         monkeypatch.setenv("XDG_DATA_HOME", xdg)
     assert desktop._default_home() == tmp_path / ".local" / "share" / "SolarDashboard"
->>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b

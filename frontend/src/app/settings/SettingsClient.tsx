@@ -6,6 +6,7 @@ import { useApp, type Theme } from "@/components/providers";
 import { NotificationSettingsCard } from "@/components/settings/NotificationSettingsCard";
 import { BurstDetectionModelCard } from "@/components/settings/BurstDetectionModelCard";
 import { BurstBackfillCard } from "@/components/settings/BurstBackfillCard";
+import { StationReliabilityCard } from "@/components/settings/StationReliabilityCard";
 
 const OPTIONS: { key: Theme; label: string; icon: typeof Sun }[] = [
   { key: "light", label: "Light", icon: Sun },
@@ -43,6 +44,8 @@ export function SettingsClient() {
       </section>
 
       <BurstDetectionModelCard />
+
+      <StationReliabilityCard />
 
       <BurstBackfillCard />
 

@@ -2,6 +2,32 @@
 
 A web-based dashboard for monitoring and analyzing space-weather parameters, with a focus on e-CALLISTO solar radio dynamic spectra and event-centered space-weather interpretation.
 
+**Current version: 1.1.0-beta** — see the
+[Releases page](https://github.com/SaanDev/Solar_Monitoring_Dashboard/releases)
+for the desktop installers.
+
+## What's new in 1.1.0-beta
+
+- **Linux desktop app.** A `.deb` for Ubuntu, Debian and derivatives now ships
+  alongside the Windows installer, with start-at-login on both.
+- **New burst detection model.** Radio bursts are detected with BnB v1.1, a
+  whole-file burst / no-burst model (see
+  [Radio-burst ML model](#5-radio-burst-ml-model-native-inference)). It doesn't
+  type bursts, so type fields stay empty for new detections.
+- **Meaningful Active Alerts count.** The Overview card counts only alerts for
+  events in progress or that subsided in the last 6 hours, instead of the whole
+  alert history. Its color follows the most severe one, and a caption breaks it
+  down by type.
+- **Cleaner event history.** A long storm or proton event is stored as one event
+  instead of a new fragment on every detection pass, and events left "in
+  progress" by downtime are closed. On the first start after upgrading, stored
+  flares, proton events and storms are re-derived once from the time-series,
+  which also drops events left behind by data corrected upstream.
+- **Timeline fix.** The GOES X-ray chart in the event inspector fills its panel
+  next to the dynamic spectrum.
+- **Desktop fix.** A development run uses its own Windows app identity, so it no
+  longer replaces the installed app's taskbar icon.
+
 ## Features
 
 - e-CALLISTO solar radio burst dynamic spectra (FITS processing)
@@ -31,7 +57,7 @@ A web-based dashboard for monitoring and analyzing space-weather parameters, wit
 - Docker + Docker Compose
 - [Git LFS](https://git-lfs.com) — the radio-burst ML checkpoint (~81 MB) is
   stored in the repo via LFS. Install it **before** cloning (or run
-  `git lfs install && git lfs pull` after) so `backend/ml_model/bnb_v1_0.pt` is
+  `git lfs install && git lfs pull` after) so `backend/ml_model/bnb_v1_1.pt` is
   fetched as the real file rather than a pointer.
 
 ### 1. Environment
@@ -74,12 +100,13 @@ microservice. One checkpoint ships in the repo via Git LFS:
 
 | Model | File | Task | Notes |
 |---|---|---|---|
-| **BnB v1.0** | `backend/ml_model/bnb_v1_0.pt` | burst / no-burst | Whole-file ResNet-34 with a station / frequency / date metadata branch. Threshold 0.563, tuned on the validation split: precision 0.947, recall 0.904, 3.0% of quiet files flagged. Does not type bursts. |
+| **BnB v1.1** | `backend/ml_model/bnb_v1_1.pt` | burst / no-burst | Whole-file ResNet-34 with a station / frequency / date metadata branch, trained on 2026 recordings. Threshold 0.787, tuned on the validation split: precision 0.986, recall 0.921, 1.0% of quiet files flagged; on the held-out test split precision 0.973, recall 0.855, 1.5% of quiet files flagged. Does not type bursts. |
 
-It replaced CCM v2.0 (a region model that also typed bursts), which is set aside
-until it is retrained, and before it CCM v1.0.0 / v1.1.0 and CCMT v1.0.0. The
-exported bundle BnB v1.0 came from — model card, training config and a standalone
-`predict.py` — is kept alongside in `backend/ml_model/bnb-v1.0/` (its full-size
+It replaced BnB v1.0 (the same network; threshold 0.563), which had replaced
+CCM v2.0 (a region model that also typed bursts, set aside until it is
+retrained), and before it CCM v1.0.0 / v1.1.0 and CCMT v1.0.0. The exported
+bundle BnB v1.1 came from — model card, training config and a standalone
+`predict.py` — is kept alongside in `backend/ml_model/bnb-v1.1/` (its full-size
 weights are git-ignored; `checkpoint.pt` is over GitHub's 100 MB limit, so
 `scripts/repack_model.py` slims it to the file the backend loads). Note that the
 bundle's `predict.py` does not pass the metadata input this model needs, so it
@@ -98,7 +125,7 @@ pip install -e ".[ml]"
 The model scores whole segments, as it was trained: each segment's spectrum is
 cleaned, each channel's median over the whole file is subtracted as background,
 the result is scaled to Plotutil dB, windowed to [-1, 8] dB and resized to
-224×224. A metadata vector — the station's index among the 38 trained stations
+224×224. A metadata vector — the station's index among the 50 trained stations
 (0 for any other), the frequency range and the date — joins the image features
 before one burst probability; the segment is a burst when it reaches the
 threshold stored in the checkpoint. Burst types are not reported: the type fields
@@ -106,12 +133,15 @@ stay empty, and the UI shows type information only for rows a typing model
 stored. The port in `backend/app/ml/` matches the CALLISTO Trainer on synthetic
 golden files (`app/tests/bnb_cases.py`) and on real files.
 
-On held-out files the model was never trained on, stations outside its 38 find
-bursts as well as trained ones but flag more quiet files (13% against 7%), almost
-all from a few cluttered stations (INDIA-OOTY, MRO, MEXART, ...). The station
-input itself barely matters (about 0.01 on the probability), so those stations
-are scored as the Trainer would; the 4-station corroboration rule keeps their
-false alarms out of the alerts.
+On held-out files the model was never trained on, it flags 57% of labelled
+bursts (BnB v1.0: 61%) and 7.6% of quiet files (v1.0: 8.1%). Stations outside its
+50 flag more quiet files (10% against 7%), mostly from a few cluttered stations
+(INDIA-OOTY, MEXICO-LANCE, MEXART, ...). The station input itself barely matters
+(about 0.004 on the probability), so those stations are scored as the Trainer
+would; the multi-station confirmation keeps their
+false alarms out of the alerts: a burst is an event only when reliable stations at
+independent sites agree on it beyond chance (see
+[docs/radio-burst-confirmation.md](docs/radio-burst-confirmation.md)).
 
 `GET /api/radio/models` lists what is available and `PUT /api/radio/models/default`
 sets the scan's model (Settings → Automatic Burst Detection, stored in the
@@ -130,7 +160,7 @@ Settings → Detection Coverage, which also shows per-day coverage and lets a ru
 be aimed at an older range. Runs are resumable and cancellable, and filled-in
 events never send notifications. Coverage is kept *per model*, so a model change
 re-scores the whole automatic window with the new model, newest day first — about
-a few minutes of CPU per archive day with BnB v1.0, plus the downloads — see
+a few minutes of CPU per archive day with BnB v1.1, plus the downloads — see
 [`app/services/radio_backfill_service.py`](backend/app/services/radio_backfill_service.py).
 
 On Apple Silicon Macs, PyTorch automatically uses the MPS backend. Models are
@@ -155,20 +185,6 @@ docker compose up
 
 All services start: PostgreSQL on 5432, Redis on 6379, backend on 8000, frontend on 3000.
 
-<<<<<<< HEAD
-## Desktop app (Windows)
-
-The same dashboard also ships as an installable Windows app: one installer, no
-Docker, Postgres, Redis, Python or Node needed on the target machine. It runs the
-backend on a local SQLite database, serves the UI itself, and keeps collecting
-data and raising alerts from the system tray. Installers are published on the
-[Releases page](https://github.com/SaanDev/Solar_Monitoring_Dashboard/releases)
-and the installed app updates itself.
-
-Build one locally with `.\desktop\scripts\build.ps1`. See
-[docs/desktop.md](docs/desktop.md) for how it works, where it keeps its data, and
-how to cut a release.
-=======
 ## Desktop app (Windows and Linux)
 
 The same dashboard also ships as an installable desktop app for Windows (an
@@ -183,12 +199,12 @@ and the installed app updates itself. On Linux, install with
 Build one locally with `.\desktop\scripts\build.ps1` (Windows) or
 `./desktop/scripts/build.sh` (Linux). See [docs/desktop.md](docs/desktop.md) for
 how it works, where it keeps its data, and how to cut a release.
->>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
 
 ## API
 
 - `GET /api/status` — backend health
-- `GET /api/summary/latest` — latest values for overview cards
+- `GET /api/summary/latest` — latest values for overview cards, including the
+  active-alert count, its highest severity and a count per event type
 - `GET /api/goes/xrs?start=&end=` — GOES XRS flux
 - `GET /api/goes/proton?start=&end=` — GOES proton flux
 - `GET /api/geomagnetic/kp?start=&end=` — Kp index
@@ -199,7 +215,7 @@ how it works, where it keeps its data, and how to cut a release.
 - `POST /api/radio/ecallisto/process` — process a FITS file
 - `GET /api/radio/backfill` — burst-detection coverage per day + catch-up progress
 - `POST /api/radio/backfill` — fill in days missed while offline
-- `GET /api/alerts/latest` — latest alerts
+- `GET /api/alerts/latest` — the full alert history, newest first
 - `GET /api/events?start=&end=` — event timeline
 
 ## Data storage
@@ -212,8 +228,4 @@ Large files (FITS, spectrograms, solar images, LASCO frames) are stored under `D
 - [API design](docs/api-design.md)
 - [Data sources](docs/data-sources.md)
 - [Deployment](docs/deployment.md)
-<<<<<<< HEAD
-- [Desktop app (Windows)](docs/desktop.md)
-=======
 - [Desktop app (Windows and Linux)](docs/desktop.md)
->>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b

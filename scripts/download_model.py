@@ -5,8 +5,8 @@ a clone with Git LFS installed already has it (`git lfs pull`). This script is a
 fallback for environments WITHOUT Git LFS (e.g. a "Download ZIP" that ships only
 LFS pointer files).
 
-One model ships: BnB v1.0 (burst / no-burst), saved as
-backend/ml_model/bnb_v1_0.pt.
+One model ships: BnB v1.1 (burst / no-burst), saved as
+backend/ml_model/bnb_v1_1.pt.
 
 Usage
 -----
@@ -17,12 +17,12 @@ From the repo root:
 Or with an explicit URL / destination:
 
     python scripts/download_model.py \\
-        --url https://example.com/bnb_v1_0.pt \\
-        --dest backend/ml_model/bnb_v1_0.pt
+        --url https://example.com/bnb_v1_1.pt \\
+        --dest backend/ml_model/bnb_v1_1.pt
 
 Environment variable (set in backend/.env; read when --url is omitted)
 ---------------------------------------------------------------------
-ML_MODEL_URL        BnB v1.0  (backend/ml_model/bnb_v1_0.pt)
+ML_MODEL_URL        BnB v1.1  (backend/ml_model/bnb_v1_1.pt)
 
 The script works standalone: it does NOT import from the backend package so it
 can run before dependencies are installed (it only needs stdlib).
@@ -44,7 +44,7 @@ _ENV_FILE = _REPO_ROOT / "backend" / ".env"
 # model id -> (destination filename, URL environment variable). Mirrors the
 # registry in backend/app/ml/registry.py; keep the two in step.
 _KNOWN: dict[str, tuple[str, str]] = {
-    "bnb-1.0.0": ("bnb_v1_0.pt", "ML_MODEL_URL"),
+    "bnb-1.1.0": ("bnb_v1_1.pt", "ML_MODEL_URL"),
 }
 
 
@@ -108,8 +108,8 @@ def main() -> None:
     parser.add_argument(
         "--model",
         choices=sorted(_KNOWN),
-        default="bnb-1.0.0",
-        help="Which model to fetch (default: bnb-1.0.0)",
+        default="bnb-1.1.0",
+        help="Which model to fetch (default: bnb-1.1.0)",
     )
     parser.add_argument("--url", default="", help="Direct download URL for the checkpoint")
     parser.add_argument(

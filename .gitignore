@@ -33,11 +33,11 @@ data/
 *.fits
 *.FITS
 *.fts
-# Note: the ML checkpoint backend/ml_model/bnb_v1_0.pt is intentionally NOT
+# Note: the ML checkpoint backend/ml_model/bnb_v1_1.pt is intentionally NOT
 # ignored — it is committed via Git LFS (see .gitattributes). Other *.pt files
 # under the gitignored data/ and .venv/ trees are already excluded by those rules.
 # An exported model bundle keeps its docs in git but not its full-size weights
-# (its checkpoint.pt is over GitHub's 100 MB limit): the slim bnb_v1_0.pt
+# (its checkpoint.pt is over GitHub's 100 MB limit): the slim bnb_v1_1.pt
 # (scripts/repack_model.py) is what the backend loads.
 backend/ml_model/*/*.pt
 

@@ -1,4 +1,4 @@
-"""Read e-CALLISTO FITS spectra and build BnB v1.0's whole-file input.
+"""Read e-CALLISTO FITS spectra and build BnB's whole-file input.
 
 Ported from the CALLISTO Trainer (``core/fits_reader.py``, ``core/preprocess.py``
 and ``core/crops.py``). The model only means anything on input prepared exactly

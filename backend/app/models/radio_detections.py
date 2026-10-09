@@ -46,7 +46,7 @@ class RadioBurstDetection(Base):
     predicted_label: Mapped[str] = mapped_column(String(16), nullable=False)
     # Human-facing band: "High-confidence burst" | "Likely burst" | ...
     alert_level: Mapped[str] = mapped_column(String(32), nullable=False, default="")
-    # Which model produced this verdict, e.g. "bnb-1.0.0". Rows that predate
+    # Which model produced this verdict, e.g. "bnb-1.1.0". Rows that predate
     # model selection are all CCM v1.0.0 (the migration's default); rows from
     # retired models are re-scored by the backfill (app/ml/registry.py).
     model_id: Mapped[str] = mapped_column(
@@ -54,7 +54,7 @@ class RadioBurstDetection(Base):
     )
     # Burst type: "Type II" | "Type III" | "Other", from a model that types
     # bursts. Null when the file is not a burst or the model does not type —
-    # BnB v1.0 never does; rows the retired CCM v2.0 stored keep their types
+    # BnB never does; rows the retired CCM v2.0 stored keep their types
     # until re-scored. ``type_model_id`` is the model that assigned it.
     burst_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
     type_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)

@@ -6,7 +6,7 @@ scorer, that its identity survives into the database, the events feed and the
 API responses, and that detections left behind by the retired models are still
 judged by their own thresholds until they are re-scored.
 
-BnB v1.0 does not type bursts, but rows CCM v2.0 stored carry a type until they
+BnB v1.1 does not type bursts, but rows CCM v2.0 stored carry a type until they
 are re-scored, and a typing model may return, so the burst-type plumbing is
 still exercised with typed records.
 """
@@ -19,6 +19,7 @@ from httpx import ASGITransport, AsyncClient
 from app.collectors.collect_ecallisto import FitsFile
 from app.config import settings
 from app.main import app
+from app.processing.burst_confirmation import EvidenceTable, StationEvidence, confirm_bursts
 from app.repositories.radio_detection_repo import detections_for_range, upsert_detections
 from app.services import burst_predictor_service as bps
 from app.services import radio_burst_service as rbs
@@ -26,7 +27,10 @@ from app.services.event_service import get_latest_alerts
 
 _D = datetime(2026, 6, 15, tzinfo=timezone.utc).date()
 _CORROBORATING = ["SRI-Lanka", "HUMAIN", "GLASGOW", "BIR"]
-_MODEL = "bnb-1.0.0"
+_MODEL = "bnb-1.1.0"
+
+# Pipeline plumbing, not station judgement: every station votes, location-free.
+pytestmark = pytest.mark.usefixtures("trust_all_stations")
 
 
 @pytest.fixture
@@ -54,7 +58,7 @@ async def _empty_official(day):
 def _burst_record(burst_type: str | None = None, probability: float = 0.95) -> dict:
     """What predict_bytes returns for a burst, shaped like the real record.
 
-    Untyped by default, as BnB v1.0's are; a type adds what a typing model's
+    Untyped by default, as BnB v1.1's are; a type adds what a typing model's
     record carries.
     """
     record = {
@@ -62,7 +66,7 @@ def _burst_record(burst_type: str | None = None, probability: float = 0.95) -> d
         "burst_probability": probability,
         "alert_level": "High-confidence burst",
         "model_id": _MODEL,
-        "model_name": "BnB v1.0",
+        "model_name": "BnB v1.1",
     }
     if burst_type:
         record.update(
@@ -121,7 +125,7 @@ async def test_selected_model_reaches_the_scorer_and_the_result(monkeypatch):
 
     result = await bps.assemble_result(job["rows"], _D, model_id=job["model_id"])
     assert result["model_id"] == _MODEL
-    assert result["model_name"] == "BnB v1.0"
+    assert result["model_name"] == "BnB v1.1"
     # An untyped model leaves the type summary empty rather than inventing one.
     assert result["type_counts"] == {}
     assert result["events"][0]["dominant_type"] is None
@@ -155,11 +159,12 @@ async def test_burst_types_surface_on_events_and_detections(monkeypatch):
 
 
 async def test_criteria_mode_uses_the_models_tuned_threshold(monkeypatch):
-    """A probability below BnB v1.0's 0.56 is not an alert-grade detection."""
+    """A probability below BnB v1.1's 0.79 is not an alert-grade detection —
+    0.70 would have been one under BnB v1.0's 0.56."""
     monkeypatch.setattr(bps, "get_burst_events_for_date", _empty_official)
     start = datetime(2026, 6, 15, 2, 0, tzinfo=timezone.utc)
     strong = [_stored(s, start, 0.93, _MODEL) for s in _CORROBORATING]
-    weak = [_stored(s, start, 0.50, _MODEL) for s in _CORROBORATING]
+    weak = [_stored(s, start, 0.70, _MODEL) for s in _CORROBORATING]
 
     assert (await bps.assemble_result(strong, _D, model_id=_MODEL))["burst_count"] == 4
     assert (await bps.assemble_result(weak, _D, model_id=_MODEL))["burst_count"] == 0
@@ -168,26 +173,30 @@ async def test_criteria_mode_uses_the_models_tuned_threshold(monkeypatch):
 
 
 async def test_a_retired_models_rows_are_gated_by_its_own_threshold(monkeypatch):
-    """A stored day can mix BnB v1.0 with rows a retired model left behind (the
-    backfill re-scores them over time). Judging those by BnB v1.0's 0.56 would
-    count CCM v2.0.1 evidence its own 0.80 rejected."""
+    """A stored day can mix BnB v1.1 with rows a retired model left behind (the
+    backfill re-scores them over time). Judging those by BnB v1.1's 0.79 would
+    discard BnB v1.0 bursts its own 0.56 accepted, and judging by the lower one
+    would count CCM v2.0.1 evidence its own 0.80 rejected."""
     monkeypatch.setattr(bps, "get_burst_events_for_date", _empty_official)
     early = datetime(2026, 6, 15, 1, 0, tzinfo=timezone.utc)
+    mid = datetime(2026, 6, 15, 1, 30, tzinfo=timezone.utc)
     late = datetime(2026, 6, 15, 2, 0, tzinfo=timezone.utc)
     rows = (
-        [_stored(s, early, 0.70, "ccm-2.0.1") for s in _CORROBORATING]
+        [_stored(s, early, 0.70, "bnb-1.0.0") for s in _CORROBORATING]
+        + [_stored(s, mid, 0.79, "ccm-2.0.1") for s in _CORROBORATING]
         + [_stored(s, late, 0.70, _MODEL) for s in _CORROBORATING]
     )
 
     result = await bps.assemble_result(rows, _D)
-    # 0.70 clears BnB v1.0's 0.56; the same value is under CCM v2.0.1's 0.80.
+    # 0.70 clears BnB v1.0's 0.56 but not BnB v1.1's 0.79; 0.79 clears BnB
+    # v1.1's 0.787 but not CCM v2.0.1's 0.798.
     assert result["burst_count"] == 4
 
     # Attribution is by majority, and a retired model keeps its display name.
-    rows.append(_stored("EXTRA", early, 0.70, "ccm-2.0.1"))
+    rows.append(_stored("EXTRA", early, 0.70, "bnb-1.0.0"))
     result = await bps.assemble_result(rows, _D)
-    assert result["model_id"] == "ccm-2.0.1"
-    assert result["model_name"] == "CCM v2.0.1"
+    assert result["model_id"] == "bnb-1.0.0"
+    assert result["model_name"] == "BnB v1.0"
 
 
 async def test_unknown_stored_model_id_still_yields_a_result(monkeypatch):
@@ -205,7 +214,9 @@ async def test_unknown_stored_model_id_still_yields_a_result(monkeypatch):
 
 
 def _recent(minutes_ago: int = 8) -> datetime:
-    return rbs._floor_to_window(datetime.now(timezone.utc) - timedelta(minutes=minutes_ago))
+    """A quarter-hour segment start ``minutes_ago`` back."""
+    t = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+    return t.replace(minute=(t.minute // 15) * 15, second=0, microsecond=0)
 
 
 def _install_scan(monkeypatch, files, record_for):
@@ -239,7 +250,7 @@ async def test_scan_persists_the_model(db_session, monkeypatch):
     # description is where that provenance lives.
     alerts = [a for a in await get_latest_alerts(db_session) if a.type == "radio_burst"]
     assert len(alerts) == 1
-    assert "BnB v1.0" in alerts[0].message
+    assert "BnB v1.1" in alerts[0].message
     assert "Type" not in alerts[0].message
 
 
@@ -296,19 +307,21 @@ async def test_repeat_scan_with_the_same_model_still_dedupes(db_session, monkeyp
 async def test_event_rebuild_gates_each_row_by_its_own_model(db_session, monkeypatch):
     """Rows a retired model stored still raise their events, judged by their
     own threshold, until the backfill re-scores them."""
-    # Isolate the per-model gate from the high-confidence corroboration rule.
+    # Isolate the per-model gate from the confirmation's high-confidence bar.
     monkeypatch.setattr(settings, "radio_burst_high_conf_probability", 0.5)
     old = _recent(minutes_ago=5 * 60)
     recent = _recent(minutes_ago=3 * 60)
+    newer = _recent(minutes_ago=60)
     await upsert_detections(
         db_session,
         [_stored(s, old, 0.7, "ccm-2.0.1") for s in _CORROBORATING]
-        + [_stored(s, recent, 0.7, _MODEL) for s in _CORROBORATING],
+        + [_stored(s, recent, 0.7, "bnb-1.0.0") for s in _CORROBORATING]
+        + [_stored(s, newer, 0.7, _MODEL) for s in _CORROBORATING],
     )
 
     events = await rbs.rebuild_radio_burst_events(db_session)
 
-    # 0.7 clears BnB v1.0's 0.56 but not CCM v2.0.1's 0.80.
+    # 0.7 clears BnB v1.0's 0.56 but neither CCM v2.0.1's 0.80 nor BnB v1.1's 0.79.
     assert [e["start_time"] for e in events] == [recent]
 
 
@@ -347,20 +360,22 @@ async def test_untyped_burst_leaves_the_event_type_null(db_session, monkeypatch,
     assert bursts[0]["burst_type"] is None
 
 
-def test_aggregated_event_carries_the_window_type():
+def test_confirmed_event_carries_the_burst_type():
     start = datetime(2026, 6, 15, 2, 3, tzinfo=timezone.utc)
     detections = [
         {
             "station": s, "start_time": start, "probability": 0.97,
-            "alert_level": "High-confidence burst",
+            "predicted_label": "Burst", "alert_level": "High-confidence burst",
             "burst_type": "Type III", "type_confidence": 0.9,
         }
         for s in _CORROBORATING
     ]
-    events = rbs.aggregate_events(detections, model_name="CCM v2.0")
-    assert len(events) == 1
-    assert events[0]["burst_type"] == "Type III"
-    assert "Type III" in events[0]["description"]
+    evidence = EvidenceTable({}, default=StationEvidence(llr=(-0.5, 0.2, 2.0, 3.0)))
+    bursts = confirm_bursts(detections, evidence, locations={}).events
+    assert len(bursts) == 1
+    event = rbs.burst_event(bursts[0], model_name="CCM v2.0")
+    assert event["burst_type"] == "Type III"
+    assert "Type III" in event["description"]
 
 
 def test_window_type_comes_from_the_most_confident_detection():
@@ -384,31 +399,31 @@ def test_window_type_comes_from_the_most_confident_detection():
 # ── API ───────────────────────────────────────────────────────────────────────
 
 
-async def test_models_endpoint_advertises_bnb_v1(client):
+async def test_models_endpoint_advertises_bnb_v1_1(client):
     resp = await client.get("/api/radio/models")
     assert resp.status_code == 200
     body = resp.json()
 
     assert [m["id"] for m in body["models"]] == [_MODEL]
     model = body["models"][0]
-    assert model["name"] == "BnB v1.0"
+    assert model["name"] == "BnB v1.1"
     assert model["kind"] == "binary"
-    assert model["threshold"] == pytest.approx(0.5634765625)
+    assert model["threshold"] == pytest.approx(0.786865234375)
     # It does not type bursts, so the UI shows no type controls for it.
     assert model["classes"] == []
     assert model["is_default"] is True
     assert body["default_model"] == _MODEL
 
 
-async def test_a_retired_model_in_the_configuration_falls_back_to_bnb_v1(client, monkeypatch):
-    monkeypatch.setattr(settings, "radio_burst_model", "ccm-2.0.1")
+async def test_a_retired_model_in_the_configuration_falls_back_to_bnb_v1_1(client, monkeypatch):
+    monkeypatch.setattr(settings, "radio_burst_model", "bnb-1.0.0")
     body = (await client.get("/api/radio/models")).json()
     assert body["default_model"] == _MODEL
     assert body["default_model_source"] == "config"
 
 
 async def test_predict_rejects_a_retired_or_unknown_model(client):
-    for model in ("ccm-9.9.9", "ccm-1.1.0", "ccm-2.0.0", "ccm-2.0.1", "ccmt-1.0.0"):
+    for model in ("ccm-9.9.9", "ccm-1.1.0", "ccm-2.0.0", "ccm-2.0.1", "ccmt-1.0.0", "bnb-1.0.0"):
         resp = await client.post(
             "/api/radio/predict",
             json={"date": _D.isoformat(), "stations": [], "model": model},

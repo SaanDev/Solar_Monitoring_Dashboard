@@ -22,10 +22,13 @@ from app.repositories.radio_detection_repo import detections_for_range, upsert_d
 from app.services.event_service import event_id_for
 from app.services import radio_backfill_service as bf
 
-# Enough stations, confident enough, to clear the corroboration filter.
+# Enough stations, confident enough, to confirm a burst.
 _STATIONS = ["SRI-Lanka", "HUMAIN", "GLASGOW", "BIR"]
+
+# Catch-up plumbing, not station judgement: every station votes, location-free.
+pytestmark = pytest.mark.usefixtures("trust_all_stations")
 # The active model, which the coverage ledger is kept per.
-_MODEL = "bnb-1.0.0"
+_MODEL = "bnb-1.1.0"
 _GAP_DAY = datetime(2026, 6, 15, tzinfo=timezone.utc).date()
 
 
@@ -154,7 +157,7 @@ async def test_process_day_fills_gap_and_builds_events(db_session, monkeypatch):
     assert row["state"] == STATE_DONE
     assert row["archive_files"] == len(files) == row["covered_files"]
 
-    # Both 15-minute windows are corroborated by 4 stations -> two burst events.
+    # Both 15-minute segments are confirmed by 4 stations -> two burst events.
     events = await query_range(
         db_session,
         datetime.combine(_GAP_DAY, time.min, tzinfo=timezone.utc),

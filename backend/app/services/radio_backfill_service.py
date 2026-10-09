@@ -28,7 +28,8 @@ Three properties matter more than speed here:
   the beginning. Nothing is held in memory that a crash would lose.
 * **Silent.** Filling a week-old gap must not fire a week of Telegram alerts. Events
   the catch-up creates are recorded in the sent-notification ledger up front, so
-  the dispatcher treats them as already delivered (see ``_suppress_notifications``).
+  the dispatcher treats them as already delivered (see
+  ``radio_burst_service.suppress_notifications``).
 * **Out of the live scanner's way.** The catch-up never touches the last
   ``radio_burst_max_age_hours``; that window belongs to the live scan, which is
   what raises real-time alerts. So today's row stays ``partial`` by design.
@@ -56,13 +57,13 @@ from app.models.radio_backfill import (
     STATE_PARTIAL,
     STATE_RUNNING,
 )
-from app.repositories.notification_repo import record_sent, sent_severities
 from app.repositories.radio_backfill_repo import days_in_range, upsert_day
 from app.repositories.radio_detection_repo import filenames_in_range, upsert_detections
 from app.services.radio_burst_service import (
     BACKFILL_EVENT_SOURCE,
     detection_row,
     rebuild_radio_burst_events,
+    suppress_notifications,
 )
 
 logger = logging.getLogger(__name__)
@@ -166,31 +167,6 @@ async def _score_chunk(files: list[FitsFile], model_id: str) -> list[dict]:
     return [r for r in results if r is not None]
 
 
-async def _suppress_notifications(db: AsyncSession, events: list[dict]) -> None:
-    """Mark backfilled events as already notified.
-
-    A gap filled hours or days later must not replay as a burst of alerts, but the
-    dispatcher works off the event feed, which is exactly where these events now
-    live. Rather than teaching it about provenance (which a later live re-derivation
-    would overwrite anyway — see ``BACKFILL_EVENT_SOURCE``), we write the
-    sent-notification ledger up front, at the severity the alert *would* have had.
-    Events already in the ledger are left alone, so a genuine escalation of an
-    event that was announced live still goes out.
-    """
-    if not events:
-        return
-    from app.services.event_service import alert_level_for, event_id_for
-
-    ids = [event_id_for(e) for e in events]
-    already = await sent_severities(db, ids)
-    pending = [
-        (eid, alert_level_for("radio_burst", e.get("severity")))
-        for eid, e in zip(ids, events)
-        if eid not in already
-    ]
-    await record_sent(db, pending)
-
-
 async def process_day(
     db: AsyncSession, day: date_cls, force: bool = False, job: dict | None = None
 ) -> dict:
@@ -236,12 +212,12 @@ async def process_day(
             job["files_failed"] += len(chunk) - len(rows)
 
     # Re-derive the day's events from whatever is stored now — including days where
-    # nothing new was scored, so detections that were never aggregated (events lost,
-    # or written before the corroboration filter) still produce their events.
+    # nothing new was scored, so detections that were never confirmed into events
+    # (events lost, or derived by an older rule) still produce their events.
     events = await rebuild_radio_burst_events(
         db, since=day_start, until=end_bound, source=BACKFILL_EVENT_SOURCE
     )
-    await _suppress_notifications(db, events)
+    await suppress_notifications(db, events)
     if job is not None:
         job["events_written"] += len(events)
 

@@ -8,11 +8,13 @@ from httpx import ASGITransport, AsyncClient
 
 import app.services.burst_scorecard_service as scorecard
 from app.collectors.collect_burst_list import BurstEvent
-from app.config import settings
 from app.main import app
 
 UTC = timezone.utc
 DAY = date(2026, 7, 1)
+
+# The comparison math, not station judgement: every station votes, location-free.
+pytestmark = pytest.mark.usefixtures("trust_all_stations")
 
 
 def _row(station: str, hh: int, mm: int, prob: float, label: str = "Burst") -> dict:
@@ -28,8 +30,8 @@ def _row(station: str, hh: int, mm: int, prob: float, label: str = "Burst") -> d
 
 
 def _corroborated_rows(hh: int = 10) -> list[dict]:
-    """Rows that satisfy the corroboration filter (>=4 stations, >=2 high-conf)."""
-    assert settings.radio_burst_min_stations == 4
+    """Two high-confidence stations agreeing while two more observe (flagging
+    below high confidence): a burst confirmed from hh:05, when >= 3 observe."""
     return [
         _row("ALASKA", hh, 0, 0.95),
         _row("BLEIEN", hh, 0, 0.93),
@@ -68,7 +70,8 @@ def test_day_stats_counts_misses_both_ways():
 
 
 def test_day_stats_uncorroborated_detections_form_no_event():
-    rows = [_row("ALASKA", 10, 0, 0.95), _row("BLEIEN", 10, 0, 0.93)]  # 2 stations < 4
+    # Two stations alone: too few observing to confirm anything.
+    rows = [_row("ALASKA", 10, 0, 0.95), _row("BLEIEN", 10, 0, 0.93)]
     stats = scorecard.day_stats(DAY, rows, [])
     assert stats["burst_files"] == 2
     assert stats["predicted_count"] == 0

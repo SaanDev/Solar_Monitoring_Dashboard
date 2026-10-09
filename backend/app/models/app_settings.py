@@ -29,7 +29,7 @@ class AppSettings(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)  # always 1
 
     # Burst model for the automatic scan; "" = use the configured default. Ids
-    # come from app/ml/registry.py ("bnb-1.0.0"). The column keeps the name it
+    # come from app/ml/registry.py ("bnb-1.1.0"). The column keeps the name it
     # had when only binary classifiers existed, to avoid a migration.
     radio_burst_binary_model: Mapped[str] = mapped_column(
         String(64), nullable=False, default=""
@@ -38,6 +38,12 @@ class AppSettings(Base):
     # Not a user setting: which version of the event-detection logic last
     # re-derived the stored event history (event_service.DERIVATION_VERSION).
     event_derivation_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    # Likewise for radio bursts: which version of the multi-station confirmation
+    # rule last re-derived the stored ``radio_burst`` events
+    # (radio_burst_service.RADIO_DERIVATION_VERSION).
+    radio_burst_derivation_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
 

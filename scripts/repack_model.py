@@ -3,7 +3,7 @@
 A trainer ``best.pt`` is ~250 MB because it also carries optimizer state, epoch
 counters and per-epoch metrics. The dashboard loader only ever reads two keys
 (``app/ml/inference.py``: ``checkpoint["config"]`` and
-``checkpoint["model_state"]``), so keeping just those cuts BnB v1.0 to ~85 MB.
+``checkpoint["model_state"]``), so keeping just those cuts BnB v1.1 to ~85 MB.
 Necessary, not just tidy: the checkpoints ship in the repo via Git LFS, git is
 the only sync between machines, and GitHub refuses files over 100 MB.
 
@@ -15,15 +15,15 @@ Usage
 From the repo root, with a Python that has torch installed (the CALLISTO Trainer
 venv does; the dashboard's local venv may not):
 
-    python scripts/repack_model.py --model bnb-1.0.0
+    python scripts/repack_model.py --model bnb-1.1.0
     python scripts/repack_model.py --all
 
 Or point it at an arbitrary checkpoint (an exported bundle's checkpoint.pt works
 too -- it is the trainer's best.pt):
 
     python scripts/repack_model.py \\
-        --source backend/ml_model/bnb-v1.0/checkpoint.pt \\
-        --dest backend/ml_model/bnb_v1_0.pt
+        --source backend/ml_model/bnb-v1.1/checkpoint.pt \\
+        --dest backend/ml_model/bnb_v1_1.pt
 
 The printed summary (architecture, metadata branch, tuned threshold, class map)
 is the check that the right run was repacked: verify it against the bundle's
@@ -56,7 +56,7 @@ def _trainer_root() -> Path:
 
 # model id -> (trainer run directory, destination filename)
 _KNOWN: dict[str, tuple[str, str]] = {
-    "bnb-1.0.0": ("binary_20261001_173813", "bnb_v1_0.pt"),
+    "bnb-1.1.0": ("binary_20261009_151419", "bnb_v1_1.pt"),
 }
 
 

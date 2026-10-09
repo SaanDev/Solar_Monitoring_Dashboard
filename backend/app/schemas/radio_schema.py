@@ -127,8 +127,8 @@ class RadioBurstDetectionsResponse(BaseModel):
 
 class ModelInfo(BaseModel):
     """One selectable burst model, as advertised to the UI."""
-    id: str                            # "bnb-1.0.0"
-    name: str                          # "BnB v1.0"
+    id: str                            # "bnb-1.1.0"
+    name: str                          # "BnB v1.1"
     full_name: str
     kind: str                          # "binary" (burst / no burst, no type)
     version: str
@@ -153,7 +153,7 @@ class ModelsResponse(BaseModel):
 
 class ModelSelection(BaseModel):
     """PUT body: which model the automatic scan should run."""
-    model_id: str                      # "bnb-1.0.0"
+    model_id: str                      # "bnb-1.1.0"
 
 
 # ── Burst Predictor (on-demand daily prediction vs official burst list) ───────
@@ -162,8 +162,8 @@ class ModelSelection(BaseModel):
 class BurstPredictionRequest(BaseModel):
     date: str                          # UTC date YYYY-MM-DD
     stations: list[str] = []           # empty = all stations recording that day
-    # False = event-selection criteria (multi-station corroboration, the live
-    # alert filter). True = raw model output: every segment the model labels
+    # False = event-selection criteria (multi-station confirmation, the live
+    # alert rule). True = raw model output: every segment the model labels
     # "Burst" becomes an event, so a narrow station selection never hides bursts.
     raw: bool = False
     # Model id; null = the server default. Unlike `raw`, this changes the
@@ -174,7 +174,7 @@ class BurstPredictionRequest(BaseModel):
 class TypedRegion(BaseModel):
     """A burst region inside one segment, with its predicted burst type.
 
-    Only a region-based typing model produces these; BnB v1.0 does not.
+    Only a region-based typing model produces these; BnB does not.
     """
     # Null when the file has no AXES table: its header frequencies are
     # placeholders, not MHz.
@@ -198,6 +198,10 @@ class PredictedDetection(BaseModel):
     burst_type: str | None = None
     type_confidence: float | None = None
     regions: list[TypedRegion] = []
+    # Confirmed events only: does this detection's reading support the burst
+    # (it carries real evidence), or did the station merely also flag it (its
+    # flags are mostly noise). Null in raw mode.
+    counted: bool | None = None
 
 
 class PredictedEvent(BaseModel):
@@ -215,6 +219,12 @@ class PredictedEvent(BaseModel):
     dominant_type: str | None = None
     type_counts: dict[str, int] = {}
     matched_official: bool = False     # overlaps an official burst-list event
+    # Confirmed events (criteria mode) only; null/empty in raw mode.
+    n_sites: int | None = None         # independent sites whose readings support it
+    evidence: float | None = None      # peak combined evidence, nats
+    likelihood_ratio: float | None = None  # exp(evidence): burst vs chance odds
+    confirming_stations: list[str] = []
+    also_flagged_stations: list[str] = []
     detections: list[PredictedDetection] = []
 
 
@@ -228,11 +238,13 @@ class OfficialBurstCompare(BaseModel):
 
 class BurstPredictionResult(BaseModel):
     date: str
-    raw: bool = False                  # True = raw model output (no corroboration)
+    raw: bool = False                  # True = raw model output (no confirmation)
     stations: list[str]                # stations actually scored
     total_files: int                   # segments scored
     burst_count: int                   # files classified Burst
-    event_count: int                   # predicted (clustered) events
+    event_count: int                   # predicted events
+    # Criteria mode: Burst-labelled files that no multi-station event confirms.
+    unconfirmed_count: int = 0
     events: list[PredictedEvent] = []
     official_events: list[OfficialBurstCompare] = []
     official_count: int = 0
@@ -264,7 +276,7 @@ class ScorecardDay(BaseModel):
     scored_files: int = 0
     burst_files: int = 0               # files classified Burst above alert minimum
     official_count: int = 0
-    predicted_count: int = 0           # corroborated predicted events
+    predicted_count: int = 0           # multi-station confirmed events
     matched_official: int = 0          # official events the model matched
     matched_predicted: int = 0         # predicted events matching an official burst
 
@@ -360,3 +372,46 @@ class BackfillRequest(BaseModel):
     start: str | None = None
     end: str | None = None
     force: bool = False
+
+
+# ── Station reliability (multi-station burst confirmation) ───────────────────
+
+
+class StationReliabilityItem(BaseModel):
+    station: str
+    site: str                          # stations within the site radius share one
+    latitude: float | None = None
+    longitude: float | None = None
+    # Agreement with other sites beyond chance (measured + built-in prior);
+    # null = nothing known yet.
+    score: float | None = None
+    measured_score: float | None = None  # last measurement alone (this model)
+    prior_score: float | None = None     # built-in starting value
+    judged: int = 0                    # bursts the measurement could judge
+    bursts: int = 0
+    files: int = 0
+    duty: float | None = None          # chance rate of flagging at high confidence
+    # Evidence (nats) each reading carries: silent, low, mid, high confidence.
+    evidence: list[float] = []
+    override: Literal["auto", "always", "never"] = "auto"
+    excluded: bool = False             # ignored entirely (override "never")
+    votes: bool = False                # picks the sure bursts records are learned on
+    computed_at: datetime | None = None
+
+
+class StationReliabilityResponse(BaseModel):
+    model_id: str
+    min_reliability: float
+    window_days: int
+    min_evidence: float
+    silence_weight: float
+    high_conf_probability: float
+    min_sites: int
+    site_radius_km: float
+    computed_at: datetime | None = None
+    stations: list[StationReliabilityItem] = []
+
+
+class StationOverride(BaseModel):
+    """PUT body: boost a station's flags, ignore it, or back to auto."""
+    override: Literal["auto", "always", "never"]

@@ -2,10 +2,12 @@
 
 Mirrors the ``daily_burst_report.py`` workflow from the Burst Identifier project,
 served through the dashboard: for a chosen UTC date (and optional station subset)
-it scores every e-CALLISTO segment with the chosen model, clusters the burst
-detections into time events (the same single-linkage ``cluster_events`` grouping,
-10-min gap), and compares those predicted events against the published
-e-CALLISTO burst list for that day.
+it scores every e-CALLISTO segment with the chosen model, turns the burst
+detections into events and compares them, for reference, with the published
+e-CALLISTO burst list for that day. Events come from the same multi-station
+confirmation the live alerts use (``app.processing.burst_confirmation``); the
+``raw`` mode instead clusters every Burst-labelled segment (the single-linkage
+``cluster_events`` grouping, 10-min gap) so nothing the model flagged is hidden.
 
 A run names the model it scores with (``model_id``; the active one by default),
 fixed for the job because it changes the scores. The ``raw`` event-selection
@@ -32,8 +34,10 @@ from app.ml.registry import (
     model_display_name,
     resolve_model,
 )
+from app.processing.burst_confirmation import ConfirmedBurst, EvidenceTable, confirm_bursts
 from app.services.burst_inference_client import predict_url
 from app.services.ecallisto_service import get_burst_events_for_date
+from app.services.station_reliability_service import cached_evidence, confirmation_params
 
 logger = logging.getLogger(__name__)
 
@@ -232,23 +236,6 @@ async def _run_job(job_id: str, day: date_cls, stations: list[str]) -> None:
 # ── Result assembly (from the job's in-memory rows + the official list) ────────
 
 
-def _is_corroborated(cluster: list[dict]) -> bool:
-    """Same multi-station corroboration the live alert pipeline applies: the
-    cluster must span >= radio_burst_min_stations distinct stations with at least
-    radio_burst_min_high_conf_stations of them above the high-confidence
-    probability. Keeps predicted *events* to strong, corroborated bursts."""
-    stations = {d["station"] for d in cluster}
-    high_conf = {
-        d["station"]
-        for d in cluster
-        if d["prob"] > settings.radio_burst_high_conf_probability
-    }
-    return (
-        len(stations) >= settings.radio_burst_min_stations
-        and len(high_conf) >= settings.radio_burst_min_high_conf_stations
-    )
-
-
 def _event_type(rows: list[dict]) -> tuple[str | None, dict[str, int]]:
     """An event's burst type plus how its detections voted.
 
@@ -267,7 +254,61 @@ def _event_type(rows: list[dict]) -> tuple[str | None, dict[str, int]]:
     return best["burst_type"], counts
 
 
+def _detection_response(d: dict) -> dict:
+    return {
+        "station": d["station"],
+        "focus": d["focus"],
+        "filename": d["filename"],
+        "time": d["time"],
+        "probability": d["prob"],
+        "alert_level": d["alert"],
+        "burst_type": d.get("burst_type"),
+        "type_confidence": d.get("type_confidence"),
+        "regions": d.get("regions") or [],
+        "counted": d.get("counted"),
+    }
+
+
+def _build_confirmed_event(index: int, burst: ConfirmedBurst, day_start: datetime) -> dict:
+    """A multi-station confirmed burst as a predicted event. Its detections are
+    the ones whose readings support it (``counted``) plus sun-up stations that
+    also flagged it with little or no weight (their flags are mostly noise)."""
+    counted = {id(r) for r in burst.confirming}
+    rows = []
+    for r in burst.confirming + burst.also_flagged:
+        d = _detection_dict(r)
+        d["counted"] = id(r) in counted
+        rows.append(d)
+    rows.sort(key=lambda d: (d["seconds"], d["station"], d["focus"]))
+    peak = max((d for d in rows if d["counted"]), key=lambda d: d["prob"])
+    dominant_type, type_counts = _event_type(rows)
+    start_seconds = int((burst.start - day_start).total_seconds())
+    end_seconds = int((burst.end - day_start).total_seconds())
+    return {
+        "index": index,
+        "start": _seconds_to_hhmm(start_seconds),
+        "end": _seconds_to_hhmm(end_seconds),
+        "start_seconds": start_seconds,
+        "end_seconds": end_seconds,
+        "n_stations": len({d["station"] for d in rows}),
+        "n_detections": len(rows),
+        "stations": sorted({d["station"] for d in rows}),
+        "max_probability": peak["prob"],
+        "alert_level": peak["alert"],
+        "dominant_type": dominant_type,
+        "type_counts": type_counts,
+        "matched_official": False,     # set during comparison
+        "n_sites": len(burst.sites),
+        "evidence": burst.evidence,
+        "likelihood_ratio": burst.likelihood_ratio,
+        "confirming_stations": burst.confirming_stations,
+        "also_flagged_stations": burst.also_flagged_stations,
+        "detections": [_detection_response(d) for d in rows],
+    }
+
+
 def _build_predicted_event(index: int, detections: list[dict]) -> dict:
+    """A raw-mode event: one cluster of Burst-labelled segments, unconfirmed."""
     rows = sorted(detections, key=lambda d: (d["seconds"], d["station"], d["focus"]))
     stations = sorted({d["station"] for d in rows})
     peak = max(rows, key=lambda d: d["prob"])
@@ -290,20 +331,7 @@ def _build_predicted_event(index: int, detections: list[dict]) -> dict:
         "dominant_type": dominant_type,
         "type_counts": type_counts,
         "matched_official": False,     # set during comparison
-        "detections": [
-            {
-                "station": d["station"],
-                "focus": d["focus"],
-                "filename": d["filename"],
-                "time": d["time"],
-                "probability": d["prob"],
-                "alert_level": d["alert"],
-                "burst_type": d.get("burst_type"),
-                "type_confidence": d.get("type_confidence"),
-                "regions": d.get("regions") or [],
-            }
-            for d in rows
-        ],
+        "detections": [_detection_response(d) for d in rows],
     }
 
 
@@ -313,6 +341,7 @@ async def assemble_result(
     stations: list[str] | None = None,
     raw: bool = False,
     model_id: str | None = None,
+    evidence: EvidenceTable | None = None,
 ) -> dict:
     """Build the prediction result from the scored rows + the official burst list.
 
@@ -322,12 +351,14 @@ async def assemble_result(
     (= all stations) keeps every official event.
 
     ``raw`` chooses how scored detections become predicted events:
-      * ``False`` (event-selection criteria, default) — the live-alert filter: a
-        detection must clear the alert probability minimum and a clustered event is
-        kept only when corroborated across enough stations (see ``_is_corroborated``).
+      * ``False`` (event-selection criteria, default) — the live-alert rule: an
+        event is a burst confirmed by independent stations (``confirm_bursts``;
+        ``evidence`` weighs each station's readings, the in-process cache by
+        default, so this stays DB-free). Burst detections no event confirms are
+        counted in ``unconfirmed_count``.
       * ``True`` (raw model output) — every segment the model labelled ``Burst`` is
-        clustered into an event with no corroboration requirement. Use this when a
-        narrow station selection can't meet the multi-station minimum, so genuine
+        clustered into an event with no confirmation requirement. Use this when a
+        narrow station selection can't supply independent sites, so genuine
         bursts would otherwise be hidden.
 
     ``model_id`` names the model that produced ``rows``. When omitted it is derived
@@ -366,12 +397,25 @@ async def assemble_result(
         for r in rows
         if r["predicted_label"] == "Burst" and float(r["probability"]) >= _min_prob_for(r)
     ]
-    events = cluster_events(bursts, EVENT_GAP_MINUTES)
-    # Criteria mode keeps only corroborated events (same as the live alert filter);
-    # raw mode keeps every clustered event so nothing the model flagged is dropped.
-    if not raw:
-        events = [ev for ev in events if _is_corroborated(ev)]
-    predicted = [_build_predicted_event(i + 1, ev) for i, ev in enumerate(events)]
+    unconfirmed_count = 0
+    if raw:
+        # Raw mode keeps every clustered event so nothing the model flagged is dropped.
+        events = cluster_events(bursts, EVENT_GAP_MINUTES)
+        predicted = [_build_predicted_event(i + 1, ev) for i, ev in enumerate(events)]
+    else:
+        # Criteria mode: only multi-station confirmed bursts (the live alert rule).
+        day_start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+        confirmation = confirm_bursts(
+            rows,
+            evidence if evidence is not None else cached_evidence(),
+            confirmation_params(),
+            burst_minimum=lambda m: alert_min_probability_for(m or day_model),
+        )
+        predicted = [
+            _build_confirmed_event(i + 1, b, day_start)
+            for i, b in enumerate(confirmation.events)
+        ]
+        unconfirmed_count = len(confirmation.unconfirmed)
 
     # Official e-CALLISTO burst list for the day, with two-way match flags. Scope
     # to the selected stations when a selection was made (case-insensitive).
@@ -415,6 +459,7 @@ async def assemble_result(
         "total_files": len(rows),
         "burst_count": len(bursts),
         "event_count": len(predicted),
+        "unconfirmed_count": unconfirmed_count,
         "events": predicted,
         "official_events": official,
         "official_count": len(official),

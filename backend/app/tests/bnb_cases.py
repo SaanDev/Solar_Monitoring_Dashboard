@@ -8,8 +8,9 @@ itself; these pin it.
 
 The golden values were computed by the Trainer itself — ``read_fits_spectrum``,
 ``normalize_full_spectrum`` + ``crop_from_normalized`` over the whole file,
-``row_to_meta_vector`` and the bundle's ``checkpoint.pt`` on CPU — from files
-built by :func:`fits_bytes` below. Regenerate them there if a step changes.
+``row_to_meta_vector`` and the BnB v1.1 bundle's ``checkpoint.pt`` on CPU — from
+files built by :func:`fits_bytes` below. Regenerate them there if a step or the
+model changes (the station indexes and probabilities are the checkpoint's).
 """
 from __future__ import annotations
 
@@ -30,7 +31,7 @@ def synthetic_spectrum(burst: bool = True, n_freq: int = 200, n_time: int = 3600
     if not burst:
         return np.clip(data, 0, 255)
     lane = 40 + (cols - 1200) / 16.0  # drifts ~1 channel every 4 s
-    for width, gain, offset in ((22, 45, 0.0), (14, 25, 70.0)):
+    for width, gain, offset in ((22, 70, 0.0), (14, 40, 70.0)):
         band = np.abs(rows - (lane + offset)) < width
         on = band & (cols >= 1200) & (cols < 2200)
         data += np.where(on, gain * (0.7 + 0.3 * np.sin(cols * 0.05 + rows * 0.3)), 0.0)
@@ -68,8 +69,8 @@ _BURST_SAMPLES = [
     0.111111, 0.171074, 0.039265, 1.000000, 0.007648, 0.138886, 0.077840,
     0.039569, 0.045585, 0.051102, 0.125535, 1.000000, 0.154190, 0.053801,
     0.125150, 0.082152, 0.177653, 0.097072, 1.000000, 0.024913, 0.086198,
-    0.168614, 0.077648, 0.086697, 0.975692, 0.092264, 0.063032, 0.178038,
-    0.037369, 0.073742, 0.054185, 0.148633, 0.683063, 0.125150, 0.063406,
+    0.168614, 0.077648, 0.086697, 1.000000, 0.092264, 0.063032, 0.178038,
+    0.037369, 0.073742, 0.054185, 0.148633, 0.983589, 0.125150, 0.063406,
 ]
 _QUIET_SAMPLES = [
     0.111111, 0.025338, 0.025338, 0.053416, 0.153998, 0.111111, 0.183615,
@@ -91,8 +92,8 @@ CASES = [
         axes=True, burst=True,
         metadata={"station": "BIR", "date": "2026-06-15", "freq_min_mhz": 45.0,
                   "freq_max_mhz": 80.0, "freq_axis_source": "axes_table"},
-        vector=[11, 0.0450000018, 0.0799999982, 0.0350000001, 0.282107651, -0.959382772, 0.800000012],
-        input_sum=8843.605435, samples=_BURST_SAMPLES, probability=0.9956043,
+        vector=[10, 0.0450000018, 0.0799999982, 0.0350000001, 0.282107651, -0.959382772, 0.800000012],
+        input_sum=9204.535009, samples=_BURST_SAMPLES, probability=0.8455459,
     ),
     # A station outside the vocabulary (index 0) without an AXES table: the
     # header's placeholder frequencies, and the date from the filename.
@@ -103,7 +104,7 @@ CASES = [
         metadata={"station": "INDIA-OOTY", "date": "2025-12-31", "freq_min_mhz": 1.0,
                   "freq_max_mhz": 200.0, "freq_axis_source": "header"},
         vector=[0, 0.00100000005, 0.200000003, 0.199000001, -0.00430059293, 0.999990761, 0.75],
-        input_sum=8843.605435, samples=_BURST_SAMPLES, probability=0.9924898,
+        input_sum=9204.535009, samples=_BURST_SAMPLES, probability=0.8369502,
     ),
     # No INSTRUME card: the station comes from the filename.
     dict(
@@ -113,7 +114,7 @@ CASES = [
         metadata={"station": "ALASKA-COHOE", "date": "2026-03-01", "freq_min_mhz": 45.0,
                   "freq_max_mhz": 80.0, "freq_axis_source": "axes_table"},
         vector=[2, 0.0450000018, 0.0799999982, 0.0350000001, 0.858401537, 0.512978375, 0.800000012],
-        input_sum=8843.605435, samples=_BURST_SAMPLES, probability=0.9952267,
+        input_sum=9204.535009, samples=_BURST_SAMPLES, probability=0.8454212,
     ),
     # The first station's next segment, quiet.
     dict(
@@ -122,8 +123,8 @@ CASES = [
         axes=True, burst=False,
         metadata={"station": "BIR", "date": "2026-06-15", "freq_min_mhz": 45.0,
                   "freq_max_mhz": 80.0, "freq_axis_source": "axes_table"},
-        vector=[11, 0.0450000018, 0.0799999982, 0.0350000001, 0.282107651, -0.959382772, 0.800000012],
-        input_sum=5575.646210, samples=_QUIET_SAMPLES, probability=0.0548886,
+        vector=[10, 0.0450000018, 0.0799999982, 0.0350000001, 0.282107651, -0.959382772, 0.800000012],
+        input_sum=5575.646210, samples=_QUIET_SAMPLES, probability=0.2197587,
     ),
 ]
 

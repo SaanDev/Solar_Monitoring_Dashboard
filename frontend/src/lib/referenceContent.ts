@@ -922,7 +922,7 @@ const METHODS: ReferenceEntry[] = [
     title: "Machine-Learning Burst Detection",
     category: "methods",
     short:
-      "A neural-network model that scans daily CALLISTO spectrograms to detect radio bursts, corroborated across stations.",
+      "A neural-network model that scans daily CALLISTO spectrograms to detect radio bursts, confirmed across independent stations.",
     aka: [
       "burst predictor", "CNN", "classification", "scorecard", "precision recall",
       "BnB", "burst / no burst", "ResNet",
@@ -932,27 +932,27 @@ const METHODS: ReferenceEntry[] = [
       {
         kind: "para",
         text:
-          "The Burst Detector runs the day's CALLISTO spectrograms through BnB v1.0, a trained burst / no-burst classifier inside the dashboard backend. It looks at each 15-minute segment as a whole: the spectrum is cleaned, each frequency channel's median over the whole file is subtracted as its background, the result is scaled to decibels and mapped onto a -1 to 8 dB window, and the file is resized to 224x224 for a ResNet-34. A small second branch adds what the image cannot show (the station, the frequency range it records and the date) before the two meet in one burst probability.",
+          "The Burst Detector runs the day's CALLISTO spectrograms through BnB v1.1, a trained burst / no-burst classifier inside the dashboard backend. It looks at each 15-minute segment as a whole: the spectrum is cleaned, each frequency channel's median over the whole file is subtracted as its background, the result is scaled to decibels and mapped onto a -1 to 8 dB window, and the file is resized to 224x224 for a ResNet-34. A small second branch adds what the image cannot show (the station, the frequency range it records and the date) before the two meet in one burst probability.",
       },
       {
         kind: "para",
         text:
-          "A segment is a burst when its probability reaches 0.563, a threshold tuned on the validation split. There the model had a precision of 0.95 and a recall of 0.90, and flagged 3% of quiet files. It does not name a burst's type; use the official burst list or the e-CALLISTO Analyzer for that.",
+          "A segment is a burst when its probability reaches 0.787, a threshold tuned on the validation split. On the test files held out from training the model had a precision of 0.97 and a recall of 0.85, and flagged 1.5% of quiet files. It does not name a burst's type; use the official burst list or the e-CALLISTO Analyzer for that.",
       },
       {
         kind: "para",
         text:
-          "The model was trained on 38 stations. On held-out files, stations it never saw found bursts as often as trained ones, but a few with cluttered spectra raise noticeably more false alarms: 13% of quiet files flagged on unseen stations against 7% on trained ones, most of it from a handful of stations.",
+          "The model was trained on 2026 recordings from 50 stations. On held-out files, stations it never saw raise more false alarms: 10% of quiet files flagged on unseen stations against 7% on trained ones, mostly from a handful of stations with cluttered spectra.",
       },
       {
         kind: "para",
         text:
-          "To suppress false alarms from local RFI, detections are corroborated across multiple stations before being grouped into events; a 'raw' mode exposes the unfiltered model output. Performance is tracked against the official e-CALLISTO burst list on a trailing scorecard reporting precision (fraction of predicted events that were real) and recall (fraction of official bursts the model caught). Detections stored by the earlier CCM models are judged by their own thresholds until the background catch-up re-scores them with BnB v1.0.",
+          "To suppress false alarms from local RFI, a burst becomes an event only when independent stations confirm it: reliable stations at different sites (instruments within 30 km count once) must flag it with high confidence, with the Sun up at each, at overlapping times — and that agreement must be unlikely to be chance given how many stations were observing. Stations earn their vote from how often their detections agree with other stations beyond chance, re-measured daily; the Settings page shows the list and can override it. A 'raw' mode exposes the unfiltered model output. For reference, events are also compared with the official e-CALLISTO burst list on a trailing scorecard — precision (share of model events in the list) and recall (share of listed bursts the model caught). The list is a reference, not ground truth: it misses real bursts and includes some seen by a single station. Detections stored by earlier models (BnB v1.0, CCM) are judged by their own thresholds until the background catch-up re-scores them with BnB v1.1.",
       },
     ],
     dataSources: [
       "e-CALLISTO spectra",
-      "BnB v1.0 burst detection model",
+      "BnB v1.1 burst detection model",
       "Official burst list",
     ],
     usedIn: ["Burst Detector"],

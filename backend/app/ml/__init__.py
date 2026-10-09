@@ -1,4 +1,4 @@
-"""Native ML inference for solar radio bursts (BnB v1.0).
+"""Native ML inference for solar radio bursts (BnB v1.1).
 
 Self-contained port of the CALLISTO Trainer's whole-file binary inference — no
 separate microservice needed. PyTorch + torchvision are required only when burst
@@ -6,8 +6,8 @@ detection is enabled; install with:
 
     pip install -e ".[ml]"
 
-The model checkpoint (``bnb_v1_0.pt``, ~81 MB) ships in the repo via Git LFS at
-backend/ml_model/bnb_v1_0.pt. A normal clone fetches it automatically when Git
+The model checkpoint (``bnb_v1_1.pt``, ~81 MB) ships in the repo via Git LFS at
+backend/ml_model/bnb_v1_1.pt. A normal clone fetches it automatically when Git
 LFS is installed:
 
     git lfs install      # one-time, per machine

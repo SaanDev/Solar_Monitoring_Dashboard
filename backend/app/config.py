@@ -11,7 +11,7 @@ _DEFAULT_DATA_DIR = str(_BACKEND_ROOT / "data")
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    version: str = "1.0.0-beta"
+    version: str = "1.1.0-beta"
     log_level: str = "info"
 
     database_url: str = "postgresql+asyncpg://swdash:swdash@localhost:5432/swdash"
@@ -47,16 +47,33 @@ class Settings(BaseSettings):
     # the first-run backlog and keeps alerting focused on recent activity).
     radio_burst_max_age_hours: int = 3
     # Minimum burst probability for a detection to contribute to an alert/event.
-    # 0 (default) = use the model's own tuned decision threshold (BnB v1.0:
-    # 0.563), read from its checkpoint. Set a positive value only to deliberately
+    # 0 (default) = use the model's own tuned decision threshold (BnB v1.1:
+    # 0.787), read from its checkpoint. Set a positive value only to deliberately
     # gate *above* that.
     radio_burst_alert_min_probability: float = 0.0
-    # Corroboration filter for raising a burst ALERT: a 15-min window only becomes
-    # a radio_burst event when at least this many distinct stations detected the
-    # burst, with at least this many of them above the high-confidence probability.
-    radio_burst_min_stations: int = 4
-    radio_burst_min_high_conf_stations: int = 2
+    # Multi-station confirmation (app/processing/burst_confirmation.py, tuning in
+    # docs/radio-burst-confirmation.md). A burst becomes a radio_burst event only
+    # when the readings of every station observing it with the Sun up — each
+    # weighted by that station's track record, stations within SITE_RADIUS_KM
+    # counting once — add up to MIN_EVIDENCE (nats; 4.0 = ~55x likelier a burst
+    # than chance), with at least MIN_SITES sites flagging it at
+    # >= HIGH_CONF_PROBABILITY. 4.0 is "balanced" (~92% of events real, 80% of
+    # important bursts found on the 2026 replay); 5.0 is stricter (~96% / 78%),
+    # 3.5 more sensitive (~90% / 82%). SILENCE_WEIGHT scales how much a reliable
+    # station staying silent counts against a burst.
     radio_burst_high_conf_probability: float = 0.9
+    radio_burst_min_evidence: float = 4.0
+    radio_burst_silence_weight: float = 0.8
+    radio_burst_min_sites: int = 2
+    radio_burst_min_observing_sites: int = 3
+    radio_burst_site_radius_km: float = 30.0
+    radio_burst_sun_min_elevation: float = 0.0
+    # Each station's track record is re-measured daily from this many days of
+    # stored detections. Stations scoring at least MIN_RELIABILITY (agreement with
+    # other sites beyond chance) pick the sure bursts that record is learned on.
+    # Settings can force a station's weight up or ignore it.
+    radio_burst_min_reliability: float = 0.15
+    radio_burst_reliability_days: int = 60
     # Max concurrent scoring requests to the inference service per scan.
     radio_burst_concurrency: int = 4
     # Optional safety cap on files scored in one on-demand "Burst Predictor" run.
@@ -70,7 +87,7 @@ class Settings(BaseSettings):
     # (app/services/radio_backfill_service.py).
     radio_burst_backfill_enabled: bool = True
     # How far back the AUTOMATIC catch-up reaches, in days. A day of archive is
-    # ~5k segments (a few minutes of CPU scoring with BnB v1.0 at ~0.07 s each,
+    # ~5k segments (a few minutes of CPU scoring with BnB v1.1 at ~0.07 s each,
     # plus the downloads, which take longer), so a cold start
     # on a long gap — or a model change, which re-scores the window — is a long
     # job. It is resumable and cancellable, and runs newest day first. Wider gaps
@@ -84,12 +101,12 @@ class Settings(BaseSettings):
     radio_burst_backfill_concurrency: int = 3
 
     # Default model for the automatic scan (and the Burst Detector page's initial
-    # choice). Ids come from app/ml/registry.py; "bnb-1.0.0" is the only one. A
+    # choice). Ids come from app/ml/registry.py; "bnb-1.1.0" is the only one. A
     # model chosen on the Settings page is stored in the database and takes
     # precedence (app/services/model_settings_service.py). Its threshold comes
     # from the checkpoint, where it was tuned, so it is deliberately not
     # configurable here.
-    radio_burst_model: str = "bnb-1.0.0"
+    radio_burst_model: str = "bnb-1.1.0"
 
     # Subdirectories are derived from data_dir (see properties below) so a single
     # DATA_DIR controls all file storage.
@@ -131,11 +148,11 @@ class Settings(BaseSettings):
     notify_lookback_hours: int = 48
 
     # ── Native ML inference (burst model) ─────────────────────────────────────
-    # Path to the BnB v1.0 checkpoint. A relative path is resolved from the
+    # Path to the BnB v1.1 checkpoint. A relative path is resolved from the
     # backend package root. It ships in the repo via Git LFS under
     # backend/ml_model/, so a normal `git clone` + `git lfs pull` brings it down
     # automatically — no manual download needed.
-    ml_model_path: str = "ml_model/bnb_v1_0.pt"
+    ml_model_path: str = "ml_model/bnb_v1_1.pt"
     # Optional direct download URL — only a fallback for environments without
     # Git LFS (e.g. a GitHub "Download ZIP" that ships LFS pointer files). Leave
     # empty to rely on the LFS copy.

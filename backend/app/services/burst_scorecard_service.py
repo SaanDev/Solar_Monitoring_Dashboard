@@ -1,10 +1,11 @@
-"""Burst-predictor scorecard: model performance vs. the official burst list.
+"""Burst-predictor scorecard: the model's events vs. the official burst list.
 
-Aggregates, per UTC day over a trailing window, the *stored* real-time
-detections (``radio_burst_detections``, written by the live scanner) into
-predicted events using the same clustering + corroboration criteria as the
-alert pipeline, and matches them two-way against the published e-CALLISTO
-burst list. Yields the operational quality numbers:
+Turns, per UTC day over a trailing window, the *stored* real-time detections
+(``radio_burst_detections``, written by the live scanner) into events with the
+same multi-station confirmation as the alert pipeline, and matches them two-way
+against the published e-CALLISTO burst list. The list is a **reference**, not
+the target: it catalogues what its curators saw at their chosen stations, so it
+misses real bursts and lists some only one station saw. The numbers are:
 
 * recall    — official bursts the model also flagged (matched / official)
 * precision — model events that correspond to an official burst (matched / predicted)
@@ -27,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.cache import cache_get_json, cache_set_json
 from app.collectors.collect_burst_list import BurstEvent, fetch_burst_list_text, parse_burst_list
 from app.ml.registry import alert_min_probability_for, resolve_model
+from app.processing.burst_confirmation import EvidenceTable, confirm_bursts
 from app.repositories.radio_detection_repo import detections_for_range
 from app.schemas.radio_schema import (
     BurstScorecardResponse,
@@ -34,18 +36,16 @@ from app.schemas.radio_schema import (
     OfficialBurstRangeResponse,
     ScorecardDay,
 )
-from app.services.burst_predictor_service import (
-    EVENT_GAP_MINUTES,
-    _detection_dict,
-    _is_corroborated,
-    _overlaps,
-    cluster_events,
+from app.services.burst_predictor_service import _overlaps
+from app.services.station_reliability_service import (
+    cached_evidence,
+    confirmation_params,
+    load_evidence,
 )
 
 logger = logging.getLogger(__name__)
 
 _TTL = 3600
-_SEGMENT_SECONDS = 15 * 60  # a detection covers a whole ~15-min segment
 # Most recent days whose official list is likely not yet published (they stay
 # visible in the daily series but don't enter the recall/precision totals).
 PENDING_DAYS = 2
@@ -60,34 +60,40 @@ def day_stats(
     rows: list[dict],
     official: list[BurstEvent],
     min_prob: float | None = None,
+    evidence: EvidenceTable | None = None,
 ) -> dict:
     """Pure per-day comparison (unit-testable): stored detection rows +
     official events -> counts and two-way match totals.
 
     ``min_prob`` defaults to the alert minimum of the model that scored each row —
     it has to be per-model, since models have different thresholds and rows a
-    retired model stored stay until the backfill re-scores them.
+    retired model stored stay until the backfill re-scores them. ``evidence``
+    weighs each station's readings (the in-process cache by default).
     """
     minimums: dict[str | None, float] = {}
 
-    def _minimum(row: dict) -> float:
+    def _minimum(model_id: str | None) -> float:
         if min_prob is not None:
             return min_prob
-        model_id = row.get("model_id")
         if model_id not in minimums:
             minimums[model_id] = alert_min_probability_for(model_id)
         return minimums[model_id]
 
-    bursts = [
-        _detection_dict(r)
+    burst_files = sum(
+        1
         for r in rows
-        if r["predicted_label"] == "Burst" and float(r["probability"]) >= _minimum(r)
-    ]
-    clusters = [
-        c for c in cluster_events(bursts, EVENT_GAP_MINUTES) if _is_corroborated(c)
-    ]
+        if r["predicted_label"] == "Burst" and float(r["probability"]) >= _minimum(r.get("model_id"))
+    )
+    day_start = datetime.combine(day, time_cls.min, tzinfo=timezone.utc)
+    confirmed = confirm_bursts(
+        rows,
+        evidence if evidence is not None else cached_evidence(),
+        confirmation_params(),
+        burst_minimum=_minimum,
+    ).events
     windows = [
-        (c[0]["seconds"], c[-1]["seconds"] + _SEGMENT_SECONDS) for c in clusters
+        (int((b.start - day_start).total_seconds()), int((b.end - day_start).total_seconds()))
+        for b in confirmed
     ]
 
     matched_official = 0
@@ -105,7 +111,7 @@ def day_stats(
         "date": day.isoformat(),
         "has_data": len(rows) > 0,
         "scored_files": len(rows),
-        "burst_files": len(bursts),
+        "burst_files": burst_files,
         "official_count": len(official),
         "predicted_count": len(windows),
         "matched_official": matched_official,
@@ -187,12 +193,13 @@ async def get_scorecard(db: AsyncSession, days: int) -> BurstScorecardResponse:
     first = today - timedelta(days=days - 1)
     official = await _official_by_day(first, today)
 
+    evidence = await load_evidence(db)
     daily: list[dict] = []
     for i in range(days):
         day = first + timedelta(days=i)
         start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
         rows = await detections_for_range(db, start, start + timedelta(days=1))
-        stats = day_stats(day, rows, official.get(day, []))
+        stats = day_stats(day, rows, official.get(day, []), evidence=evidence)
         stats["pending"] = (today - day).days < PENDING_DAYS
         daily.append(stats)
 

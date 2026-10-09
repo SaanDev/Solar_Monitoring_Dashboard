@@ -1,13 +1,13 @@
 project:
-  name: callisto_trainer_binary_20261001_173813
+  name: callisto_trainer_binary_20261009_151419
 paths:
   raw_dir_candidates:
-  - datasets\binary\20261001_173813
-  manifest_path: datasets\binary\20261001_173813\manifest.csv
-  processed_dir: datasets\binary\20261001_173813\npz
-  checkpoint_dir: outputs\binary_20261001_173813\checkpoints
-  figures_dir: outputs\binary_20261001_173813\figures
-  reports_dir: outputs\binary_20261001_173813\reports
+  - datasets\binary\20261009_151419
+  manifest_path: datasets\binary\20261009_151419\manifest.csv
+  processed_dir: datasets\binary\20261009_151419\npz
+  checkpoint_dir: outputs\binary_20261009_151419\checkpoints
+  figures_dir: outputs\binary_20261009_151419\figures
+  reports_dir: outputs\binary_20261009_151419\reports
 data:
   classes:
     No_Burst: 0
@@ -77,54 +77,66 @@ model:
     ALASKA-ANCHORAGE: 1
     ALASKA-COHOE: 2
     ALASKA-HAARP: 3
-    ALMATY: 4
-    AUSTRIA-Krumbach: 5
+    ALGERIA-CRAAG: 4
+    ALMATY: 5
     AUSTRIA-MICHELBACH: 6
     AUSTRIA-OE3FLB: 7
     AUSTRIA-UNIGRAZ: 8
-    Arecibo-Observatory: 9
-    Australia-ASSA: 10
-    BIR: 11
-    BRAZIL: 12
-    Croatia-Visnjan: 13
-    EGYPT-Alexandria: 14
-    EGYPT-SpaceAgency: 15
-    FINLAND-RUISSALO: 16
-    FINLAND-Siuntio: 17
-    Finland-Kempele: 18
-    GERMANY-DLR: 19
-    GLASGOW: 20
-    GREENLAND: 21
-    HUMAIN: 22
-    SRI-Lanka: 23
-    SSRT: 24
-    SWISS-CalU: 25
-    SWISS-HB9SCT: 26
-    SWISS-HEITERSWIL: 27
-    SWISS-IRSOL: 28
-    SWISS-Landschlacht: 29
-    SWISS-PHLWA: 30
-    TAIWAN-NCU: 31
-    TRIEST: 32
-    TURKEY: 33
-    UK-GLASGOW: 34
-    UNAM: 35
-    URUGUAY: 36
-    USA-BOSTON: 37
-    UZBEKISTAN: 38
+    Australia-ASSA: 9
+    BIR: 10
+    Croatia-Visnjan: 11
+    EGYPT-Alexandria: 12
+    EGYPT-SpaceAgency: 13
+    FINLAND-RUISSALO: 14
+    FINLAND-Siuntio: 15
+    Finland-Kempele: 16
+    GERMANY-DLR: 17
+    GERMANY-ESSEN: 18
+    GLASGOW: 19
+    GREENLAND: 20
+    HUMAIN: 21
+    HURBANOVO: 22
+    INDIA-GAURI: 23
+    ITALY-Strassolt: 24
+    MRO: 25
+    Malaysia-Banting: 26
+    NZ-WAIRAKEI-DLR: 27
+    PANAMA: 28
+    PARAGUAY: 29
+    POLAND-BALDY: 30
+    POLAND-Grotniki: 31
+    PRT-SMA-MAIA: 32
+    ROMANIA: 33
+    ROSWELL-NM: 34
+    S-AFRICA-POTCHEFSTROOM: 35
+    S-AFRICA-POTCHEFSTROOM-MWA: 36
+    SOUTHAFRICA-SANSA: 37
+    SRI-Lanka: 38
+    SSRT: 39
+    SWISS-CalU: 40
+    SWISS-HB9SCT: 41
+    SWISS-HEITERSWIL: 42
+    SWISS-MUHEN: 43
+    SWISS-PHLWA: 44
+    TAIWAN-NCU: 45
+    TRIEST: 46
+    UK-GLASGOW: 47
+    UNAM: 48
+    URUGUAY: 49
+    UZBEKISTAN: 50
 training:
-  batch_size: 64
+  batch_size: 16
   num_workers: 4
   pin_memory: true
   persistent_workers: true
   prefetch_factor: 2
   epochs: 100
-  learning_rate: 0.0005
+  learning_rate: 1.0e-05
   weight_decay: 0.0001
   patience: 0
   seed: 42
   label_smoothing: 0.05
-  threshold: 0.5634765625
+  threshold: 0.786865234375
   auto_threshold: false
   threshold_metric: f1
   monitor: pr_auc

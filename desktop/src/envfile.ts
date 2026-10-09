@@ -1,7 +1,4 @@
-<<<<<<< HEAD
-=======
 import { dialog, shell } from "electron";
->>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 
@@ -29,13 +26,6 @@ const TEMPLATE = `# Solar Monitoring Dashboard - desktop settings
 # RADIO_BURST_BACKFILL_MAX_DAYS=30
 `;
 
-<<<<<<< HEAD
-/** Open the user's .env in Notepad, creating it from the template first. */
-export function openEnvFile(): void {
-  ensureDir(HOME);
-  if (!fs.existsSync(ENV_FILE)) fs.writeFileSync(ENV_FILE, TEMPLATE.replace(/\n/g, "\r\n"));
-  spawn("notepad.exe", [ENV_FILE], { detached: true, stdio: "ignore" }).unref();
-=======
 /** Open the user's .env in a text editor (Notepad on Windows, the default
  * editor on Linux), creating it from the template first. */
 export function openEnvFile(): void {
@@ -55,5 +45,4 @@ export function openEnvFile(): void {
       detail: `${ENV_FILE}\n\n(${error})`,
     });
   });
->>>>>>> d325f0ffea140b14d8efde51c7c0cf3c0712f39b
 }

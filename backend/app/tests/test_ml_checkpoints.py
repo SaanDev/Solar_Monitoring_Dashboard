@@ -13,7 +13,8 @@ been pulled from Git LFS; it runs in the backend container, which has both.
 """
 import pytest
 
-from app.ml import registry
+from app.config import settings
+from app.ml import inference, registry
 from app.ml.inference import get_loaded, predict_bytes
 from app.tests.bnb_cases import CASES, case_bytes
 
@@ -22,19 +23,24 @@ pytest.importorskip("torch", reason="ML extras not installed")
 
 @pytest.fixture(scope="module")
 def loaded():
-    spec = registry.BNB_V100
+    spec = registry.BNB_V110
     if not registry.is_available(spec):
         pytest.skip(f"{spec.name} checkpoint not present (run: git lfs pull)")
-    model = get_loaded(spec)
-    assert model is not None, f"{spec.name} failed to load — see logs"
-    return model
+    # The golden values are CPU results; a GPU's TF32 convolutions drift ~2e-4.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(settings, "ml_inference_device", "cpu")
+        mp.delitem(inference._MODELS, spec.id, raising=False)
+        model = get_loaded(spec)
+        assert model is not None, f"{spec.name} failed to load — see logs"
+        yield model
+        mp.delitem(inference._MODELS, spec.id, raising=False)
 
 
 def test_checkpoint_loads_with_its_training_settings(loaded):
     assert loaded.config["model"]["name"] == "resnet34"
-    # 38 trained stations; everything else shares slot 0.
-    assert len(loaded.station_vocab) == 38
-    assert loaded.station_vocab["BIR"] == 11
+    # 50 trained stations; everything else shares slot 0.
+    assert len(loaded.station_vocab) == 50
+    assert loaded.station_vocab["BIR"] == 10
     assert loaded.target_shape == (224, 224)
     assert loaded.preprocessing["background_method"] == "plotutil_median_db"
 
@@ -42,11 +48,11 @@ def test_checkpoint_loads_with_its_training_settings(loaded):
 def test_scoring_uses_the_tuned_threshold(loaded):
     # The registry publishes the threshold so alert gating works before a load;
     # it must agree with what the checkpoint actually contains.
-    assert loaded.threshold == pytest.approx(registry.BNB_V100.metrics["threshold"], abs=1e-12)
+    assert loaded.threshold == pytest.approx(registry.BNB_V110.metrics["threshold"], abs=1e-12)
 
 
 def test_models_are_cached_not_reloaded(loaded):
-    assert get_loaded(registry.BNB_V100) is loaded
+    assert get_loaded(registry.BNB_V110) is loaded
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c["filename"] for c in CASES])
@@ -55,5 +61,5 @@ def test_probabilities_match_the_trainer(loaded, case):
     assert record is not None
     assert record["burst_probability"] == pytest.approx(case["probability"], abs=1e-4)
     assert record["predicted_label"] == ("Burst" if case["burst"] else "No_Burst")
-    assert record["model_id"] == "bnb-1.0.0"
+    assert record["model_id"] == "bnb-1.1.0"
     assert "burst_type" not in record

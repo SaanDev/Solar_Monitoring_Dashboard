@@ -93,7 +93,7 @@ function HelpPanel() {
             </li>
             <li>
               <span className="text-accent-green">Radio · Model</span> — this
-              dashboard&apos;s ML detections, only when corroborated by multiple
+              dashboard&apos;s ML detections, only when confirmed by independent
               stations (the same events that raise alerts). Blocks use the{" "}
               <em>same burst-type colors as the official lane</em>, so a burst both
               agree on is the same color in both rows — compare them vertically to

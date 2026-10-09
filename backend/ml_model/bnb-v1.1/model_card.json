@@ -1,16 +1,16 @@
 {
   "bundle_format_version": 1,
-  "exported_at": "2026-10-01T21:45:33",
+  "exported_at": "2026-10-09T15:35:41",
   "exported_by": "CALLISTO Trainer 0.1.0",
   "task": "binary",
-  "source_checkpoint": "outputs\\binary_20261001_173813\\checkpoints\\best.pt",
-  "trained_epoch": 22,
+  "source_checkpoint": "outputs\\binary_20261009_151419\\checkpoints\\best.pt",
+  "trained_epoch": 28,
   "architecture": {
     "name": "resnet34",
     "in_channels": 1,
     "num_classes": 1,
     "uses_metadata": true,
-    "station_vocab_size": 38,
+    "station_vocab_size": 50,
     "uses_physics": false,
     "views": [
       "crop"
@@ -52,50 +52,50 @@
   },
   "metrics": {
     "train": {
-      "accuracy": 0.9344855305466238,
-      "precision": 0.9171151776103337,
-      "recall": 0.908315565031983,
-      "f1": 0.9126941617568292,
-      "roc_auc": 0.977830318453814,
-      "pr_auc": 0.9730434202909234,
-      "false_positive_rate": 0.04967741935483871,
-      "false_negative_rate": 0.09168443496801706,
-      "tn": 1473,
-      "fp": 77,
-      "fn": 86,
-      "tp": 852,
+      "accuracy": 0.9146579804560261,
+      "precision": 0.893312101910828,
+      "recall": 0.8976,
+      "f1": 0.8954509177972865,
+      "roc_auc": 0.9691850549450548,
+      "pr_auc": 0.9630276988802524,
+      "false_positive_rate": 0.07362637362637363,
+      "false_negative_rate": 0.1024,
+      "tn": 843,
+      "fp": 67,
+      "fn": 64,
+      "tp": 561,
       "threshold": 0.5,
-      "specificity": 0.9503225806451613,
-      "balanced_accuracy": 0.9293190728385721,
-      "loss": 0.3283694104749673
+      "specificity": 0.9263736263736264,
+      "balanced_accuracy": 0.9119868131868132,
+      "loss": 0.34485081973992265
     },
     "val": {
-      "accuracy": 0.9457943925233645,
-      "precision": 0.9470899470899471,
-      "recall": 0.9040404040404041,
-      "f1": 0.9250645994832042,
-      "roc_auc": 0.9770404340137278,
-      "pr_auc": 0.9732838637328075,
-      "false_positive_rate": 0.02967359050445104,
-      "false_negative_rate": 0.09595959595959595,
-      "tn": 327,
-      "fp": 10,
-      "fn": 19,
-      "tp": 179,
-      "threshold": 0.5634765625,
-      "specificity": 0.9703264094955489,
-      "balanced_accuracy": 0.9371834067679765,
-      "loss": 0.32876606878833237,
+      "accuracy": 0.9594202898550724,
+      "precision": 0.9858156028368794,
+      "recall": 0.9205298013245033,
+      "f1": 0.952054794520548,
+      "roc_auc": 0.9889397146173279,
+      "pr_auc": 0.9885049934898588,
+      "false_positive_rate": 0.010309278350515464,
+      "false_negative_rate": 0.07947019867549669,
+      "tn": 192,
+      "fp": 2,
+      "fn": 12,
+      "tp": 139,
+      "threshold": 0.786865234375,
+      "specificity": 0.9896907216494846,
+      "balanced_accuracy": 0.955110261486994,
+      "loss": 0.26944540272588313,
       "default_threshold": 0.5
     },
-    "decision_threshold": 0.5634765625
+    "decision_threshold": 0.786865234375
   },
   "scope": {
     "operates_on": "a whole-file spectrum"
   },
   "output": {
     "head": "sigmoid",
-    "decision_threshold": 0.5634765625,
+    "decision_threshold": 0.786865234375,
     "interpretation": "probability >= decision_threshold means Burst. The threshold was tuned on the validation split; do not assume 0.5."
   },
   "metadata_features": {
@@ -112,15 +112,15 @@
   },
   "training_data": {
     "snapshot": "binary",
-    "samples": 3562,
+    "samples": 2202,
     "class_counts": {
-      "No_Burst": 2226,
-      "Burst": 1336
+      "Burst": 900,
+      "No_Burst": 1302
     },
     "split_counts": {
-      "train": 2488,
-      "val": 535,
-      "test": 539
+      "train": 1535,
+      "test": 322,
+      "val": 345
     },
     "event_leakage": 0
   }

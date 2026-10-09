@@ -450,13 +450,13 @@ const RADIO: GuideEntry[] = [
       {
         kind: "para",
         text:
-          "The Burst Detector runs a machine-learning model (BnB v1.0) over e-CALLISTO recordings to find solar radio bursts automatically. Scanning happens as a background job you start and then monitor.",
+          "The Burst Detector runs a machine-learning model (BnB v1.1) over e-CALLISTO recordings to find solar radio bursts automatically. Scanning happens as a background job you start and then monitor.",
       },
       {
         kind: "list",
         items: [
           "Pick a date (defaults to yesterday) and, optionally, which stations to include.",
-          "The Model field shows the model the run uses, BnB v1.0, with its decision threshold. It says whether each segment holds a burst, not which type. If it is shown as unavailable, its checkpoint has not been fetched — run 'git lfs pull'.",
+          "The Model field shows the model the run uses, BnB v1.1, with its decision threshold. It says whether each segment holds a burst, not which type. If it is shown as unavailable, its checkpoint has not been fetched — run 'git lfs pull'.",
           "Click Predict bursts to submit the job; the page polls its progress and shows results when finished.",
           "After a scan, toggle between two views without re-scanning: Criteria mode (default) keeps only detections that meet alert criteria (fewer, higher-confidence bursts), while Raw mode lists every segment the model flagged. Changing the model does require a new run, because that changes the scores.",
           "Each detected segment shows its probability (color-coded by confidence) and a dynamic-spectrum preview; segments seen by multiple stations are highlighted.",
@@ -467,7 +467,7 @@ const RADIO: GuideEntry[] = [
       {
         kind: "para",
         text:
-          "Burst types: BnB v1.0 does not type bursts, so its detections carry no type. Days scored earlier by CCM v2.0 keep that model's estimated types until the background catch-up re-scores them. To find a burst's type, use the official burst list or the e-CALLISTO Analyzer.",
+          "Burst types: BnB v1.1 does not type bursts, so its detections carry no type. Days scored earlier by CCM v2.0 keep that model's estimated types until the background catch-up re-scores them. To find a burst's type, use the official burst list or the e-CALLISTO Analyzer.",
       },
       {
         kind: "para",
@@ -782,7 +782,7 @@ const SETTINGS: GuideEntry[] = [
         kind: "list",
         items: [
           "Appearance: switch the theme between Light, Dark and System; your choice is remembered in this browser.",
-          "Automatic Burst Detection: shows the model the background scan runs over new e-CALLISTO data to detect radio bursts and raise alerts — BnB v1.0 — with its validation figures. It is a server-side setting shared by every viewer. Detections the earlier CCM models stored are re-scored with BnB v1.0 by the background catch-up, newest day first; until then each keeps being judged by its own model's threshold.",
+          "Automatic Burst Detection: shows the model the background scan runs over new e-CALLISTO data to detect radio bursts and raise alerts — BnB v1.1 — with its validation figures. It is a server-side setting shared by every viewer. Detections earlier models stored (BnB v1.0, CCM) are re-scored with BnB v1.1 by the background catch-up, newest day first; until then each keeps being judged by its own model's threshold.",
           "Detection Coverage: burst detection only runs on live data, so any time the dashboard is offline leaves gaps in the burst timeline and the activity histograms. The backend re-scores missed days automatically in the background — the strip shows one cell per day (green = fully scored, amber = still incomplete) and the run's progress. Today is always amber: its most recent hours belong to the live scan. You can start a run yourself, stop one, or aim it at an older date range than the automatic window covers. Filled-in bursts appear everywhere the live ones do but never send notifications, so closing an old gap does not replay stale alerts.",
           "Notifications: manage alert-notification preferences and send a test notification to confirm delivery works.",
         ],

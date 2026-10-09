@@ -4,15 +4,15 @@ Upserts are idempotent on the primary key ``filename`` so a re-scan of the same
 archive file updates its row in place rather than duplicating it — including when
 the re-scan used a different model, which is how switching the scan's model
 (Settings page) refreshes the recent window. The same table backs
-both dedup (``processed_filenames_since``) and event aggregation
-(``burst_positive_in_range``).
+both dedup (``processed_filenames_since``) and the multi-station burst
+confirmation (``detections_for_range``, ``scored_rows_for_model``).
 """
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -144,22 +144,25 @@ async def detections_for_range(
     return [_to_dict(o) for o in res.scalars().all()]
 
 
-async def burst_positive_in_range(
-    db: AsyncSession, start: datetime, end: datetime, min_probability: float
+async def scored_rows_for_model(
+    db: AsyncSession, start: datetime, end: datetime, model_id: str
 ) -> list[dict]:
-    """Burst-positive detections with segment start in ``[start, end]`` and
-    probability ``>= min_probability`` — the input to event aggregation."""
-    stmt = (
-        select(RadioBurstDetection)
-        .where(
-            and_(
-                RadioBurstDetection.start_time >= start,
-                RadioBurstDetection.start_time <= end,
-                RadioBurstDetection.predicted_label == "Burst",
-                RadioBurstDetection.probability >= min_probability,
-            )
-        )
-        .order_by(RadioBurstDetection.start_time.asc())
-    )
+    """Just the columns the station-reliability measurement needs, for every
+    file ``model_id`` scored with segment start in ``[start, end)``.
+
+    Weeks of archive (~5k rows a day), so it selects columns rather than whole
+    ORM objects."""
+    d = RadioBurstDetection
+    stmt = select(
+        d.station, d.start_time, d.end_time, d.probability, d.predicted_label, d.model_id
+    ).where(and_(d.start_time >= start, d.start_time < end, d.model_id == model_id))
     res = await db.execute(stmt)
-    return [_to_dict(o) for o in res.scalars().all()]
+    return [dict(r._mapping) for r in res.all()]
+
+
+async def earliest_detection_start(db: AsyncSession) -> datetime | None:
+    """Segment start of the oldest stored detection (any model)."""
+    value = await db.scalar(select(func.min(RadioBurstDetection.start_time)))
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)

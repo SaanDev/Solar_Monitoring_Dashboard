@@ -1,6 +1,9 @@
-"""Tests for the ML radio-burst scanner: pure 15-minute window aggregation, the
+"""Tests for the ML radio-burst scanner: confirmed bursts as event rows, the
 scan/dedup/persist pass (with the archive + inference service mocked), event/alert
-surfacing, resilience to outages, and the per-file detections endpoint."""
+surfacing, resilience to outages, and the per-file detections endpoint.
+
+Which stations confirm what is ``test_burst_confirmation.py``'s subject; here every
+station is trusted and location-free (``trust_all_stations``)."""
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -8,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.collectors.collect_ecallisto import FitsFile
 from app.main import app
+from app.processing.burst_confirmation import EvidenceTable, StationEvidence, confirm_bursts
 from app.repositories.status_repo import get_all
 from app.services import radio_burst_service as rbs
 from app.services.event_service import get_events, get_latest_alerts
@@ -15,80 +19,71 @@ from app.services.event_service import get_events, get_latest_alerts
 _T0 = datetime(2026, 6, 19, 21, 37, 12, tzinfo=timezone.utc)
 
 
-# ── Pure helpers ─────────────────────────────────────────────────────────────
+pytestmark = pytest.mark.usefixtures("trust_all_stations")
 
 
-def test_floor_to_window_snaps_to_quarter_hour():
-    assert rbs._floor_to_window(_T0) == datetime(2026, 6, 19, 21, 30, tzinfo=timezone.utc)
-    on_boundary = datetime(2026, 6, 19, 21, 45, tzinfo=timezone.utc)
-    assert rbs._floor_to_window(on_boundary) == on_boundary
+def _quarter(dt: datetime) -> datetime:
+    """Floor to the quarter hour, where e-CALLISTO segments start."""
+    return dt.replace(minute=(dt.minute // 15) * 15, second=0, microsecond=0)
 
 
-def _det(station: str, start: datetime, prob: float, level: str) -> dict:
+# ── Confirmed burst -> event row ─────────────────────────────────────────────
+
+
+def _det(station: str, start: datetime, prob: float, level: str, label: str = "Burst") -> dict:
     return {
         "filename": f"{station}_{start:%Y%m%d_%H%M%S}_01.fit.gz",
         "station": station,
         "start_time": start,
         "probability": prob,
+        "predicted_label": label,
         "alert_level": level,
     }
 
 
-def test_aggregate_corroborated_window():
-    # 4 stations, 2 of them p>0.9 -> qualifies; one event listing all four.
+# A clean record: high flags strong, mid good, low next to nothing, silence mildly against.
+_TRUSTED = EvidenceTable({}, default=StationEvidence(llr=(-0.5, 0.2, 2.0, 3.0)))
+
+
+def _event_for(dets: list[dict]) -> dict:
+    bursts = confirm_bursts(dets, _TRUSTED, locations={}).events
+    assert len(bursts) == 1
+    return rbs.burst_event(bursts[0], model_name="BnB v1.1")
+
+
+def test_confirmed_burst_becomes_an_event_row():
     base = datetime(2026, 6, 19, 21, 30, tzinfo=timezone.utc)
-    dets = [
-        _det("SRI-Lanka", base + timedelta(minutes=1), 0.97, "High-confidence burst"),
-        _det("HUMAIN", base + timedelta(minutes=2), 0.92, "High-confidence burst"),
-        _det("GLASGOW", base + timedelta(minutes=3), 0.70, "Likely burst"),
-        _det("BIR", base + timedelta(minutes=4), 0.65, "Likely burst"),
-    ]
-    events = rbs.aggregate_events(dets)
-    assert len(events) == 1
-    ev = events[0]
+    ev = _event_for([
+        _det("STA", base, 0.97, "High-confidence burst"),
+        _det("STB", base, 0.92, "High-confidence burst"),
+        _det("STC", base, 0.95, "High-confidence burst"),
+        _det("STD", base, 0.70, "Likely burst"),          # low confidence: little weight
+        _det("STE", base, 0.04, "No alert", "No_Burst"),  # observing, not flagging
+    ])
     assert ev["type"] == "radio_burst"
     assert ev["start_time"] == base
     assert ev["end_time"] == base + timedelta(minutes=15)
     assert ev["peak_value"] == 0.97                       # the highest probability
     assert ev["severity"] == "High-confidence burst"      # alert level of the peak
-    assert "4 stations" in ev["description"]
-    assert "2 high-confidence" in ev["description"]
-    for s in ("SRI-Lanka", "HUMAIN", "GLASGOW", "BIR"):
-        assert s in ev["description"]
-    # Observers are stored structured (comma-separated, sorted) so the UI can
-    # restrict spectrograms to stations that actually saw the burst.
-    assert ev["stations"] == "BIR,GLASGOW,HUMAIN,SRI-Lanka"
+    assert "confirmed by 3 sites: STA, STB, STC" in ev["description"]
+    assert "also flagged by STD" in ev["description"]
+    assert "BnB v1.1" in ev["description"]
+    # Observers (confirming, then also-flagged) are stored structured so the UI
+    # can restrict spectrograms to stations that actually saw the burst.
+    assert ev["stations"] == "STA,STB,STC,STD"
 
 
-def test_aggregate_requires_corroboration():
+def test_event_spans_only_the_overlap_of_the_confirming_files():
     base = datetime(2026, 6, 19, 21, 30, tzinfo=timezone.utc)
-    # Only 3 stations -> below the 4-station minimum.
-    three = [_det(s, base, 0.95, "High-confidence burst") for s in ("A", "B", "C")]
-    assert rbs.aggregate_events(three) == []
-    # 4 stations but only 1 above p>0.9 -> below the 2 high-confidence minimum.
-    low_conf = [
-        _det("A", base, 0.95, "High-confidence burst"),
-        _det("B", base, 0.70, "Likely burst"),
-        _det("C", base, 0.65, "Likely burst"),
-        _det("D", base, 0.62, "Likely burst"),
-    ]
-    assert rbs.aggregate_events(low_conf) == []
-    # 4 stations + 2 high-confidence -> qualifies.
-    ok = [
-        _det("A", base, 0.95, "High-confidence burst"),
-        _det("B", base, 0.93, "High-confidence burst"),
-        _det("C", base, 0.65, "Likely burst"),
-        _det("D", base, 0.62, "Likely burst"),
-    ]
-    assert len(rbs.aggregate_events(ok)) == 1
-
-
-def test_aggregate_separates_distinct_windows():
-    a = datetime(2026, 6, 19, 21, 30, tzinfo=timezone.utc)
-    b = datetime(2026, 6, 19, 22, 0, tzinfo=timezone.utc)
-    window = lambda t: [_det(s, t, 0.95, "High-confidence burst") for s in ("A", "B", "C", "D")]
-    events = rbs.aggregate_events(window(a) + window(b))
-    assert {e["start_time"] for e in events} == {a, b}
+    ev = _event_for([
+        _det("STA", base, 0.97, "High-confidence burst"),
+        _det("STB", base + timedelta(minutes=7), 0.96, "High-confidence burst"),
+        _det("STC", base + timedelta(minutes=7), 0.93, "High-confidence burst"),
+    ])
+    assert ev["start_time"] == base + timedelta(minutes=7)
+    assert ev["end_time"] == base + timedelta(minutes=15)
+    # The peak file started before the event; the peak is clamped into it.
+    assert ev["peak_time"] == ev["start_time"]
 
 
 # ── Scan pass (archive + inference mocked) ───────────────────────────────────
@@ -98,7 +93,7 @@ def _recent_start() -> datetime:
     """A timestamp ~8 min ago, snapped to its 15-min window so a group of files
     sharing it lands in one window regardless of the wall-clock at test time."""
     now = datetime.now(timezone.utc)
-    return rbs._floor_to_window(now - timedelta(minutes=8))
+    return _quarter(now - timedelta(minutes=8))
 
 
 def _file_at(station: str, start: datetime) -> FitsFile:
@@ -133,14 +128,14 @@ def _install_inference(monkeypatch, burst_stations: set[str], counter: list[int]
 
 async def test_scan_creates_burst_event_and_alert(db_session, monkeypatch):
     start = _recent_start()
-    burst = ["SRI-Lanka", "HUMAIN", "GLASGOW", "BIR"]  # 4 stations (corroborated)
+    burst = ["SRI-Lanka", "HUMAIN", "GLASGOW", "BIR"]  # 4 agreeing stations
     files = [_file_at(s, start) for s in burst] + [_file_at("ALASKA", start)]
     _install_archive(monkeypatch, files)
     calls = [0]
     _install_inference(monkeypatch, burst_stations=set(burst), counter=calls)
 
     written = await rbs.scan_and_detect_radio_bursts(db_session)
-    assert written == 1                       # all share one corroborated window
+    assert written == 1                       # one burst, confirmed by all four
     assert calls[0] == 5                       # every new file scored once
 
     alerts = [a for a in await get_latest_alerts(db_session) if a.type == "radio_burst"]
@@ -271,7 +266,7 @@ async def test_detections_endpoint(client, db_session, monkeypatch):
     assert labels["GLASGOW"] == "No_Burst"
 
 
-# ── Corroboration cleanup + stored-detections endpoint ───────────────────────
+# ── Confirmation cleanup + stored-detections endpoint ────────────────────────
 
 
 async def test_rebuild_drops_non_qualifying_events(db_session):
@@ -279,8 +274,8 @@ async def test_rebuild_drops_non_qualifying_events(db_session):
     from app.repositories.radio_detection_repo import upsert_detections
 
     now = datetime.now(timezone.utc)
-    window = rbs._floor_to_window(now - timedelta(minutes=30))
-    # A radio_burst event left over from before the corroboration filter existed.
+    window = _quarter(now - timedelta(minutes=30))
+    # A radio_burst event left over from an older rule.
     await upsert_events(
         db_session,
         [{
@@ -291,7 +286,7 @@ async def test_rebuild_drops_non_qualifying_events(db_session):
         }],
         source="ml-model",
     )
-    # That window now only has 2 burst stations -> fails the >=4 filter.
+    # Only 2 stations recorded that window: too few observing to confirm anything.
     await upsert_detections(
         db_session,
         [{
@@ -323,7 +318,7 @@ async def test_stored_endpoint_assembles_from_db(client, db_session, monkeypatch
             "probability": 0.97, "predicted_label": "Burst",
             "alert_level": "High-confidence burst",
         }
-        # 4 stations (>=2 high-confidence) so the cluster is corroborated.
+        # 4 agreeing stations, so the burst is confirmed.
         for i, st in enumerate(["SRI-Lanka", "HUMAIN", "GLASGOW", "BIR"])
     ]
     await upsert_detections(db_session, rows)
@@ -339,4 +334,4 @@ async def test_stored_endpoint_assembles_from_db(client, db_session, monkeypatch
     assert body["date"] == "2026-06-15"
     assert body["total_files"] == 4
     assert body["burst_count"] == 4
-    assert body["event_count"] == 1  # the four cluster into one corroborated window
+    assert body["event_count"] == 1  # the four confirm one burst

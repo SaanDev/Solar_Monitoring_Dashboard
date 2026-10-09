@@ -1,10 +1,11 @@
 """Registry of the burst models the dashboard can run.
 
-One model ships: **BnB v1.0**, a whole-file burst / no-burst classifier trained
+One model ships: **BnB v1.1**, a whole-file burst / no-burst classifier trained
 in the CALLISTO Trainer. It answers one question per segment — is there a burst
 in it — and does not name the burst's type.
 
-It replaced CCM v2.0 / v2.0.1, a unified region model that also typed bursts,
+It replaced BnB v1.0 — the same network, retrained on 2026 recordings — which
+had replaced CCM v2.0 / v2.0.1, a unified region model that also typed bursts,
 and before it the CCM v1.0.0 / v1.1.0 binary classifiers and the separate CCMT
 v1.0.0 type model. Their ids live on only in :data:`RETIRED_MODELS`, because
 detections they stored stay in the database until the backfill re-scores them,
@@ -52,10 +53,10 @@ class ModelSpec:
         return self.id.rsplit("-", 1)[-1]
 
 
-BNB_V100 = ModelSpec(
-    id="bnb-1.0.0",
-    name="BnB v1.0",
-    full_name="Burst / No-Burst classifier v1.0",
+BNB_V110 = ModelSpec(
+    id="bnb-1.1.0",
+    name="BnB v1.1",
+    full_name="Burst / No-Burst classifier v1.1",
     kind="binary",
     path_setting="ml_model_path",
     url_setting="ml_model_url",
@@ -68,24 +69,35 @@ BNB_V100 = ModelSpec(
     metrics={
         # Tuned on the validation split; the loader reads the same value from
         # the checkpoint and warns on mismatch.
-        "threshold": 0.5634765625,
-        # File-level at the threshold, validation split (535 files, 198 bursts).
-        "val_precision": 0.9471,
-        "val_recall": 0.9040,
-        "val_f1": 0.9251,
-        "val_false_alarm_rate": 0.0297,
-        # Share of held-out files flagged in the Trainer's NO_BURST folder (~96%
-        # quiet by hand labels), none of them seen in training: 1,410 files from
-        # 11 trained stations and 1,623 from 36 others. The extra on unseen
-        # stations comes from a few cluttered ones (INDIA-OOTY, MRO, MEXART, ...);
-        # without them they flag 6.3%. The station input itself moves a file's
-        # probability by ~0.01, so an unseen station's untrained slot is harmless.
-        "heldout_quiet_flagged_trained_stations": 0.073,
-        "heldout_quiet_flagged_other_stations": 0.132,
+        "threshold": 0.786865234375,
+        # File-level at the threshold, validation split (345 files, 151 bursts).
+        "val_precision": 0.9858,
+        "val_recall": 0.9205,
+        "val_f1": 0.9521,
+        "val_false_alarm_rate": 0.0103,
+        # Test split (322 files, 124 bursts), never seen in training or tuning,
+        # scored through this port (which reproduces the validation counts above
+        # exactly).
+        "test_precision": 0.9725,
+        "test_recall": 0.8548,
+        "test_false_alarm_rate": 0.0152,
+        # Held-out files from the Trainer's Burst List folders, none in v1.1's
+        # training set (measured 2026-10-09): labelled bursts flagged (3,255
+        # Type II/III/IV/V/CTM/J files), and quiet files flagged in the NO_BURST
+        # folder (~96% quiet by hand labels) — 4,912 from the 50 trained
+        # stations, 1,997 from others. BnB v1.0 on the same files: 0.608, 0.069,
+        # 0.111 (some may have been in its training set). The extra on unseen
+        # stations comes from a few cluttered ones (INDIA-OOTY, MEXICO-LANCE,
+        # MEXART, ...). The station input itself moves a file's probability by
+        # ~0.004 (3,000 files; 0.2% verdicts flip), so an unseen station's
+        # untrained slot is harmless.
+        "heldout_bursts_flagged": 0.570,
+        "heldout_quiet_flagged_trained_stations": 0.066,
+        "heldout_quiet_flagged_other_stations": 0.103,
     },
 )
 
-_SPECS: dict[str, ModelSpec] = {spec.id: spec for spec in (BNB_V100,)}
+_SPECS: dict[str, ModelSpec] = {spec.id: spec for spec in (BNB_V110,)}
 
 # Models that used to ship: id -> (name, decision threshold). Kept so detections
 # they stored are still gated and labelled correctly until re-scored.
@@ -94,6 +106,7 @@ RETIRED_MODELS: dict[str, tuple[str, float]] = {
     "ccm-1.1.0": ("CCM v1.1.0", 0.51),
     "ccm-2.0.0": ("CCM v2.0", 0.7975836745463312),
     "ccm-2.0.1": ("CCM v2.0.1", 0.7975836745463312),
+    "bnb-1.0.0": ("BnB v1.0", 0.5634765625),
 }
 
 
@@ -165,7 +178,7 @@ def resolve_model(model_id: str | None = None) -> ModelSpec:
     Precedence is explicit argument > Settings-page selection > env default.
 
     A configured default that is somehow invalid (a typo, or a retired model's
-    id left in an old .env) falls back to BnB v1.0 rather than breaking every
+    id left in an old .env) falls back to BnB v1.1 rather than breaking every
     scan.
     """
     if model_id:
@@ -179,7 +192,7 @@ def resolve_model(model_id: str | None = None) -> ModelSpec:
     try:
         return get_spec((settings.radio_burst_model or "").strip())
     except UnknownModelError:
-        return BNB_V100
+        return BNB_V110
 
 
 # ── Checkpoint location ───────────────────────────────────────────────────────
@@ -236,9 +249,8 @@ def alert_min_probability_for(model_id: str | None) -> float:
     """:func:`alert_min_probability` for whichever model stored a detection row.
 
     A retired model's rows are gated by that model's own threshold — one
-    threshold for every row would count CCM v2.0's 0.6 burst evidence (under its
-    0.80) as a burst by BnB v1.0's 0.56. An empty or unknown id means the active
-    model.
+    threshold for every row would judge BnB v1.0's 0.6 burst (over its 0.56) a
+    miss by BnB v1.1's 0.79. An empty or unknown id means the active model.
     """
     if model_id in RETIRED_MODELS:
         from app.config import settings
